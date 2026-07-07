@@ -62,11 +62,14 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   - Покрыто self-test'ами. Возможное усиление (позже): требовать, чтобы мокапы менялись в том же
     диффе, и поддержать `Design-Approved:` trailer как альтернативу файлу APPROVED.
 
-- **P1-6. Secret scanning.** `gitleaks` в `pre-commit` + в CI. Утечка секретов из AI-кода —
-  топ-риск 2026. Дёшево, высокий эффект.
+- **P1-6. Secret scanning. ✅ СДЕЛАНО.** `hooks/secret-scan.js` — портируемый (без внешних зависимостей)
+  сканер: high-precision паттерны (private keys, AWS/GitHub/Google/Slack/Stripe токены) +
+  консервативная эвристика high-entropy присваиваний. Встроен в git-native `pre-commit` (блок при
+  попытке закоммитить секрет), годится для CI/VERIFY. Инлайн-исключение `secret-scan:allow`. Тесты есть.
 
-- **P1-7. Signed commits.** SSH/GPG-подпись (или Sigstore `gitsign`) + ruleset «require signed».
-  Логично усиливает вашу политику «коммиты выглядят как от автора» — теперь ещё и криптографически.
+- **P1-7. Signed commits. ✅ СДЕЛАНО (helper).** `hooks/setup-signing.js` — opt-in включение
+  SSH-подписи коммитов на уровне репо (детект ключа, `commit.gpgsign`, allowed_signers). «Require
+  signed» как жёсткий гейт — это ruleset (нужен Pro/public, см. P0-0); локально подпись включается.
 
 - **P1-8. Исполняемый VERIFY. ✅ СДЕЛАНО.** `hooks/verify.js` — мульти-стек авто-детект
   (Python/Qt: `ruff`+`pytest`; C#/WPF: `dotnet format`+`build -warnaserror`+`test`;
@@ -77,16 +80,20 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   Возможное усиление (позже): `--changed`/`--base` (верифицировать только тронутые стеки для скорости);
   baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
 
-- **P1-9. CODEOWNERS + Dependabot + пиннинг Actions по SHA.** `.github/CODEOWNERS` (в т.ч. на
-  `.github/workflows/` и `hooks/`), `.github/dependabot.yml`, все сторонние Actions — на полный
-  commit-SHA. Стандарт supply-chain.
+- **P1-9. CODEOWNERS + Dependabot + пиннинг Actions по SHA. ✅ СДЕЛАНО.** `.github/CODEOWNERS`
+  (owner на `*`, `/hooks/`, `/.github/`), `.github/dependabot.yml` (github-actions, weekly),
+  Actions в `ci.yml` запиннены на полный commit-SHA (checkout v7.0.0, setup-node v6.4.0).
+  На Free+private required-reviews по CODEOWNERS — совещательны (см. P0-0). `ci.yml` пушится вручную
+  (скоуп `workflow`), как и в P0-1.
 
 ---
 
 ## P2 — зрелость
 
-- **P2-10. loop-guard для не-Bash tool'ов.** Runaway-серии `Read`/`Write`/`Edit` сейчас не
-  ловятся (в AGENTS.md честно отмечено). Общий per-tool счётчик через тот же `_input.js`.
+- **P2-10. loop-guard для не-Bash tool'ов. ✅ СДЕЛАНО.** `hooks/agent/tool-loop-guard.js` — блок
+  дегенеративных серий не-Bash tool'ов: считает ТОЧНЫЕ повторы (tool+target) подряд, любой другой
+  target сбрасывает streak (нулевой FP на нормальном редактировании). Порог
+  `HARNESS_TOOLLOOP_THRESHOLD` (12). Тесты есть.
 - **P2-11. Release-автоматизация.** `release-please` (PR-based, ревью-шаг — подходит вашему
   gated-подходу) или `semantic-release` (полностью авто). + SBOM и artifact attestations (SLSA)
   в release-workflow.

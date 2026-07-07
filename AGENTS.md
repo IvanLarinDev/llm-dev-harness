@@ -242,6 +242,7 @@ git-операции — **независимо от того, какой аге
 | Коммит не в `main`/`master` | `pre-commit` → блок | `HARNESS_ALLOW_MAIN=1` (релиз/hotfix) или `--no-verify` |
 | Conventional-commits + без соавторства | `commit-msg` читает **финальный файл сообщения** (ловит `-m`, `-F`, heredoc, `$EDITOR`) | `git commit --no-verify` |
 | Нет прямого пуша в `main`/`master` (теги и ветки — можно) | `pre-push` → блок только на `refs/heads/main|master` | `HARNESS_ALLOW_MAIN=1 git push ...` |
+| Нет секретов в коммите | `pre-commit` → `secret-scan.js` по staged-контенту | инлайн `secret-scan:allow` |
 
 **Слой 2 — agent-adapter (`hooks/agent/*`), опциональный, per-runtime.**
 Ловит то, чего git не видит: гигиену tool-loop'а и напоминания. Это не enforcement, а
@@ -258,7 +259,8 @@ git-операции — **независимо от того, какой аге
 | Push/force/reset/tag/delete/release | permission modes раннера → подтверждение пользователя | внешний |
 | Трекинг шагов | `TodoWrite` / task-list — обновлять по мере loop | note |
 | Незакрытые шаги не «забываются» | `stop-reminder.js` (Stop) — про VERIFY/COMMIT/REPORT | note |
-| **Защита от runaway-loop** | `loop-guard.js` — блок дегенеративных серий команд (exit 2) | блок |
+| **Защита от runaway-loop (Bash)** | `loop-guard.js` — блок дегенеративных серий команд (exit 2) | блок |
+| **Защита от runaway-loop (не-Bash)** | `tool-loop-guard.js` — блок N× точных повторов tool+target (Read/Write/Edit) | блок |
 
 **Контракт exit-кодов агент-слоя (для любого раннера):** `exit 0` = пропустить,
 `exit 2` = заблокировать pending tool-call, stdout `{"additionalContext":"…"}` = не-блокирующая

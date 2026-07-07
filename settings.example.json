@@ -23,7 +23,14 @@
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           { "type": "command", "command": "node hooks/agent/branch-guard.js" },
-          { "type": "command", "command": "node hooks/agent/design-guard.js" }
+          { "type": "command", "command": "node hooks/agent/design-guard.js" },
+          { "type": "command", "command": "node hooks/agent/tool-loop-guard.js" }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "node hooks/agent/tool-loop-guard.js" }
         ]
       }
     ],

@@ -215,6 +215,41 @@ git(ctmp, ["commit", "-q", "-m", "totally not conventional"]);
 ok(lintCommits(ctmp, ["--base", rootSha]) === 1, "lint-commits flags a non-conventional commit in range");
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
+// ---------- secret-scan (P1-6) ----------
+console.log("\nsecret-scan (P1-6):");
+const SECRET_SCAN = path.join(__dirname, "secret-scan.js");
+// Fixtures are built by concatenation so THIS test file contains no literal secret
+// (otherwise the pre-commit secret-scan would block committing it).
+function scan(content) {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "harness-secret-"));
+  fs.writeFileSync(path.join(d, "f.txt"), content);
+  let code;
+  try { execFileSync("node", [SECRET_SCAN, "--root", d, "--files", "f.txt"], { stdio: "pipe" }); code = 0; }
+  catch (e) { code = e.status || 1; }
+  try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+  return code;
+}
+ok(scan("hello world\nconst x = 1;\n") === 0, "clean file passes");
+ok(scan("aws = " + "AKIA" + "ABCDEFGHIJKLMNOP") === 1, "detects AWS access key id");
+ok(scan("-----BEGIN " + "OPENSSH PRIVATE KEY-----") === 1, "detects private key block");
+ok(scan("gh" + "p_" + "A".repeat(36)) === 1, "detects GitHub token");
+ok(scan("pass" + "word = \"" + "A1b2C3d4E5f6G7h8I9j0K1l2\"") === 1, "detects high-entropy secret assignment");
+ok(scan("api_key = \"" + "aaaaaaaaaaaaaaaaaaaaaaaa\"") === 0, "low-entropy placeholder is not flagged");
+ok(scan("aws = " + "AKIA" + "ABCDEFGHIJKLMNOP" + "  secret-scan:allow") === 0, "inline allow marker suppresses a finding");
+
+// ---------- tool-loop-guard (P2-10) ----------
+console.log("\ntool-loop-guard (P2-10):");
+const TOOL_LOOP = path.join(__dirname, "agent", "tool-loop-guard.js");
+const TL = { HARNESS_SESSION_ID: "toolloop-" + Date.now() };
+let tlLast = 0;
+for (let i = 0; i < 12; i++) tlLast = runHook(TOOL_LOOP, { tool_name: "Read", tool_input: { file_path: "/same.txt" } }, TL);
+ok(tlLast === 2, "blocks 12x identical Read of the same file");
+const TL2 = { HARNESS_SESSION_ID: "toolloop2-" + Date.now() };
+for (let i = 0; i < 11; i++) runHook(TOOL_LOOP, { tool_name: "Edit", tool_input: { file_path: "/a" } }, TL2);
+ok(runHook(TOOL_LOOP, { tool_name: "Edit", tool_input: { file_path: "/b" } }, TL2) === 0, "different target resets the streak");
+ok(runHook(TOOL_LOOP, { tool_name: "Read", tool_input: {} }, TL2) === 0, "no target -> not guarded");
+ok(runHook(TOOL_LOOP, { tool_name: "Bash", tool_input: { command: "ls" } }, TL2) === 0, "shell tool is out of scope (loop-guard covers it)");
+
 // ---------- hygiene: no NUL bytes in any source file ----------
 console.log("\nsource hygiene:");
 function walk(dir) {
