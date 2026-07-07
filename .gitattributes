@@ -3,6 +3,7 @@
 hooks/git/commit-msg   text eol=lf
 hooks/git/pre-commit   text eol=lf
 hooks/git/pre-push     text eol=lf
+hooks/*.js             text eol=lf
 hooks/**/*.js          text eol=lf
 *.sh                   text eol=lf
 
