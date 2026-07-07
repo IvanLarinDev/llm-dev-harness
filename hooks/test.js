@@ -250,6 +250,56 @@ ok(runHook(TOOL_LOOP, { tool_name: "Edit", tool_input: { file_path: "/b" } }, TL
 ok(runHook(TOOL_LOOP, { tool_name: "Read", tool_input: {} }, TL2) === 0, "no target -> not guarded");
 ok(runHook(TOOL_LOOP, { tool_name: "Bash", tool_input: { command: "ls" } }, TL2) === 0, "shell tool is out of scope (loop-guard covers it)");
 
+// ---------- release.js (P2-11) ----------
+console.log("\nrelease.js (P2-11):");
+const RELEASE = path.join(__dirname, "release.js");
+function release(root, from) {
+  try { return JSON.parse(execFileSync("node", [RELEASE, "--root", root, "--from", from, "--json"], { encoding: "utf8", stdio: "pipe" })); }
+  catch { return {}; }
+}
+const rtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-"));
+git(rtmp, ["init", "-q", "-b", "main"]); git(rtmp, ["config", "user.email", "t@t.t"]); git(rtmp, ["config", "user.name", "t"]);
+fs.writeFileSync(path.join(rtmp, "f.txt"), "0\n"); git(rtmp, ["add", "f.txt"]); git(rtmp, ["commit", "-q", "-m", "chore: init"]);
+git(rtmp, ["tag", "v1.2.3"]);
+fs.appendFileSync(path.join(rtmp, "f.txt"), "1\n"); git(rtmp, ["add", "f.txt"]); git(rtmp, ["commit", "-q", "-m", "fix: a bug"]);
+ok(release(rtmp, "v1.2.3").next === "v1.2.4", "fix -> PATCH bump");
+fs.appendFileSync(path.join(rtmp, "f.txt"), "2\n"); git(rtmp, ["add", "f.txt"]); git(rtmp, ["commit", "-q", "-m", "feat: a feature"]);
+ok(release(rtmp, "v1.2.3").next === "v1.3.0", "feat -> MINOR bump");
+fs.appendFileSync(path.join(rtmp, "f.txt"), "3\n"); git(rtmp, ["add", "f.txt"]); git(rtmp, ["commit", "-q", "-m", "feat!: breaking"]);
+ok(release(rtmp, "v1.2.3").next === "v2.0.0", "breaking (!) -> MAJOR bump");
+try { fs.rmSync(rtmp, { recursive: true, force: true }); } catch {}
+
+// ---------- doctor.js (P2-12) ----------
+console.log("\ndoctor.js (P2-12):");
+const DOCTOR = path.join(__dirname, "doctor.js");
+function doctorExit(root) { try { execFileSync("node", [DOCTOR, "--root", root], { encoding: "utf8", stdio: "pipe" }); return 0; } catch (e) { return e.status || 1; } }
+ok(doctorExit(path.join(__dirname, "..")) === 0, "doctor passes on the harness repo");
+const dtmp2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-"));
+ok(doctorExit(dtmp2) === 1, "doctor fails outside a harness repo (no repo/hooks)");
+try { fs.rmSync(dtmp2, { recursive: true, force: true }); } catch {}
+
+// ---------- quality-gate.js (P2-13) ----------
+console.log("\nquality-gate.js (P2-13):");
+const QG = path.join(__dirname, "quality-gate.js");
+function qg(root, files) { try { execFileSync("node", [QG, "--root", root, "--files", files.join(",")], { stdio: "pipe" }); return 0; } catch (e) { return e.status || 1; } }
+const qtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-qg-"));
+fs.writeFileSync(path.join(qtmp, "clean.js"), "const x = 1;\n");
+fs.writeFileSync(path.join(qtmp, "conflict.js"), "a\n" + "<".repeat(7) + " HEAD\nb\n");
+fs.writeFileSync(path.join(qtmp, "big.js"), "x\n".repeat(900));
+ok(qg(qtmp, ["clean.js"]) === 0, "clean file passes");
+ok(qg(qtmp, ["conflict.js"]) === 1, "merge-conflict markers FAIL");
+ok(qg(qtmp, ["big.js"]) === 1, "oversized file FAILs");
+try { fs.rmSync(qtmp, { recursive: true, force: true }); } catch {}
+
+// ---------- commit.js (P2-14) ----------
+console.log("\ncommit.js (P2-14):");
+const COMMIT = path.join(__dirname, "commit.js");
+function commitPrint(args) { try { return { code: 0, out: execFileSync("node", [COMMIT, ...args, "--print"], { encoding: "utf8", stdio: "pipe" }).trim() }; } catch (e) { return { code: e.status || 1, out: "" }; } }
+const cp = commitPrint(["--type", "feat", "--scope", "core", "--subject", "add thing"]);
+ok(cp.code === 0 && cp.out === "feat(core): add thing", "builds a valid conventional header");
+ok(commitPrint(["--type", "feat", "--subject", ""]).code === 1, "rejects an empty subject");
+ok(commitPrint(["--type", "nope", "--subject", "x"]).code === 1, "rejects an invalid type");
+
 // ---------- hygiene: no NUL bytes in any source file ----------
 console.log("\nsource hygiene:");
 function walk(dir) {

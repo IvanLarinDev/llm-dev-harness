@@ -96,14 +96,21 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   дегенеративных серий не-Bash tool'ов: считает ТОЧНЫЕ повторы (tool+target) подряд, любой другой
   target сбрасывает streak (нулевой FP на нормальном редактировании). Порог
   `HARNESS_TOOLLOOP_THRESHOLD` (12). Тесты есть.
-- **P2-11. Release-автоматизация.** `release-please` (PR-based, ревью-шаг — подходит вашему
-  gated-подходу) или `semantic-release` (полностью авто). + SBOM и artifact attestations (SLSA)
-  в release-workflow.
-- **P2-12. `harness doctor`.** Проверка окружения: node в PATH git-bash, exec-бит хуков, EOL=LF,
-  core.hooksPath. Ловит те же грабли, что мы уже поймали (CRLF, trailing space).
-- **P2-13. Quality-gate для AI-кода.** Порог покрытия/сложности (CodeScene-подход): «относиться к
-  AI-коду как к недоверенному вводу, пока не проверен».
-- **P2-14. Интерактивный commit-хелпер** (commitizen-подобный) — опционально, для людей.
+- **P2-11. Release-автоматизация. ✅ СДЕЛАНО (локальная часть).** `hooks/release.js` — портируемо
+  (node+git, без зависимостей) автоматизирует R1–R2: next SemVer из conventional-коммитов с
+  последнего тега, черновик CHANGELOG, `--write-changelog`, `--tag` (annotated, БЕЗ push — push это
+  gated R3). `--dry-run`/`--json`. Тесты (fix→patch, feat→minor, `!`→major). CI-публикация
+  (release.yml + SLSA/SBOM) — опциональный workflow, добавляется вручную (скоуп `workflow`).
+- **P2-12. `harness doctor`. ✅ СДЕЛАНО.** `hooks/doctor.js` — проверка окружения: node/git,
+  `core.hooksPath`, наличие хуков + LF-shebang + отсутствие NUL, exec-бит (posix), валидность
+  `harness.config.json`, git-identity. Ловит ровно те грабли, что мы поймали (CRLF, NUL). Тесты есть.
+- **P2-13. Quality-gate для AI-кода. ✅ СДЕЛАНО (лёгкая версия).** `hooks/quality-gate.js` —
+  low-FP гейт на изменённых файлах: маркеры merge-конфликта и переросшие файлы → FAIL; минифицированные
+  строки и >5 TODO → WARN. Порог в `harness.config.json` → `quality`. Тесты есть. Возможное усиление:
+  реальное покрытие/сложность из тест-раннеров (per-language).
+- **P2-14. Интерактивный commit-хелпер. ✅ СДЕЛАНО.** `hooks/commit.js` — строит и валидирует
+  conventional-сообщение (интерактивно или флагами `--type/--scope/--subject/--body/--breaking`),
+  затем коммитит; `--print` для превью. Тесты есть.
 
 ---
 

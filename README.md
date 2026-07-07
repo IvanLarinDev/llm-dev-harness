@@ -45,6 +45,10 @@ node hooks/design-gate.js --base main # DESIGN-гейт: UI-изменения �
 node hooks/lint-commits.js --base main # conventional-commits + no-coauthor по коммитам ветки
 node hooks/secret-scan.js --all        # поиск секретов (private keys, токены, high-entropy)
 node hooks/setup-signing.js            # (opt-in) включить SSH-подпись коммитов в этом репо
+node hooks/doctor.js                   # проверка окружения (hooksPath, LF/NUL, config, identity)
+node hooks/quality-gate.js --base main # AI-code гигиена: конфликт-маркеры, гигантские файлы
+node hooks/commit.js                   # интерактивный conventional-commit (или --type/--subject)
+node hooks/release.js                  # dry-run: next SemVer + CHANGELOG (--tag создаёт тег, без push)
 ```
 
 ## Безопасность / supply-chain
