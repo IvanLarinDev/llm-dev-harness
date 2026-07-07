@@ -1,0 +1,102 @@
+#!/usr/bin/env node
+// test.js — self-test suite for the dev-loop harness. Cross-platform (no bash).
+// Runs commit-lint unit tests plus a full git-native integration test in a throwaway
+// repo under os.tmpdir(): pre-commit / commit-msg / pre-push, escape hatch, and the
+// runtime-agnostic loop-guard. This is the repo's VERIFY step:  node hooks/test.js
+//
+// Exit 0 = all green, exit 1 = at least one failure.
+
+const { execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { lint } = require(path.join(__dirname, "lib", "commit-lint.js"));
+
+let pass = 0, fail = 0;
+function ok(cond, msg) {
+  if (cond) { pass++; console.log("  ✓ " + msg); }
+  else { fail++; console.log("  ✗ " + msg); }
+}
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+}
+function tryGit(cwd, args, env = {}) {
+  try {
+    execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, ...env }, stdio: "pipe" });
+    return 0;
+  } catch (e) { return e.status || 1; }
+}
+function runHook(hookPath, payloadObj, env = {}) {
+  try {
+    execFileSync("node", [hookPath], {
+      input: JSON.stringify(payloadObj), encoding: "utf8",
+      env: { ...process.env, ...env }, stdio: ["pipe", "pipe", "pipe"],
+    });
+    return 0;
+  } catch (e) { return e.status || 1; }
+}
+
+// ---------- unit: commit-lint ----------
+console.log("commit-lint (unit):");
+ok(lint("feat: add x").ok, "feat: add x accepted");
+ok(lint("fix(parser): handle EOF").ok, "scoped fix accepted");
+ok(lint("feat(api)!: drop v1").ok, "breaking ! accepted");
+ok(lint("Merge branch 'x'").ok, "merge header accepted");
+ok(!lint("updated stuff").ok, "non-conventional rejected");
+ok(!lint("FEAT: x").ok, "uppercase type rejected");
+ok(!lint("feat: x\n\nCo-Authored-By: A <a@b.c>").ok, "co-author trailer rejected");
+ok(!lint("fix: x\n\n🤖 Generated with Y").ok, "robot/generated rejected");
+ok(lint("feat: x\n\n# Co-Authored-By: commented out").ok, "commented trailer ignored");
+
+// ---------- integration: git-native hooks ----------
+const HOOKS_GIT = path.join(__dirname, "git");
+const LOOP_GUARD = path.join(__dirname, "agent", "loop-guard.js");
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-selftest-"));
+const repo = path.join(tmp, "repo");
+fs.mkdirSync(repo, { recursive: true });
+
+git(repo, ["init", "-q", "-b", "main"]);
+git(repo, ["config", "user.email", "selftest@harness.local"]);
+git(repo, ["config", "user.name", "selftest"]);
+git(repo, ["config", "core.hooksPath", HOOKS_GIT]);
+fs.writeFileSync(path.join(repo, "f.txt"), "a\n");
+git(repo, ["add", "f.txt"]);
+
+console.log("\ngit-native hooks (integration):");
+ok(tryGit(repo, ["commit", "-m", "feat: init"]) !== 0, "pre-commit blocks commit on main");
+ok(tryGit(repo, ["commit", "-m", "chore(init): bootstrap"], { HARNESS_ALLOW_MAIN: "1" }) === 0,
+   "HARNESS_ALLOW_MAIN allows main commit");
+
+git(repo, ["checkout", "-q", "-b", "feat/x"]);
+fs.appendFileSync(path.join(repo, "f.txt"), "b\n"); git(repo, ["add", "f.txt"]);
+ok(tryGit(repo, ["commit", "-m", "updated stuff"]) !== 0, "commit-msg blocks non-conventional header");
+ok(tryGit(repo, ["commit", "-m", "feat: real", "-m", "Co-Authored-By: A <a@b.c>"]) !== 0,
+   "commit-msg blocks co-author trailer");
+ok(tryGit(repo, ["commit", "-m", "feat(core): real change"]) === 0, "good conventional commit passes");
+
+const bare = path.join(tmp, "remote.git");
+git(repo, ["init", "-q", "--bare", bare]);
+git(repo, ["remote", "add", "origin", bare]);
+ok(tryGit(repo, ["push", "-q", "origin", "feat/x"]) === 0, "pre-push allows feature branch");
+git(repo, ["tag", "-a", "v0.0.1", "-m", "rel"]);
+ok(tryGit(repo, ["push", "-q", "origin", "v0.0.1"]) === 0, "pre-push allows tag push");
+git(repo, ["checkout", "-q", "main"]);
+ok(tryGit(repo, ["push", "origin", "main"]) !== 0, "pre-push blocks direct push to main");
+ok(tryGit(repo, ["push", "-q", "origin", "main"], { HARNESS_ALLOW_MAIN: "1" }) === 0,
+   "HARNESS_ALLOW_MAIN allows main push");
+
+// ---------- agent-adapter: loop-guard ----------
+console.log("\nloop-guard (agent-adapter):");
+const S = { HARNESS_SESSION_ID: "selftest-" + Date.now() };
+ok(runHook(LOOP_GUARD, { tool_name: "Bash", tool_input: { command: "cd /x && echo garbage 183<tool" } }, S) === 2,
+   "blocks tool-markup corruption");
+ok(runHook(LOOP_GUARD, { tool_name: "Bash", tool_input: { command: "echo a echo a echo a echo a echo a" } }, S) === 2,
+   "blocks low-entropy command");
+ok(runHook(LOOP_GUARD, { toolName: "shell", input: { command: "npm run build" } }, S) === 0,
+   "allows a real command (alt field names)");
+
+// ---------- cleanup ----------
+try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+
+console.log(`\n${fail ? "❌ FAIL" : "✅ PASS"}: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

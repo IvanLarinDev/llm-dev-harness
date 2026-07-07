@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Reference wiring for the AGENT-ADAPTER layer (loop hygiene git cannot see).",
+    "This example uses the Claude Code hooks schema. Any runtime that can run a",
+    "command before a tool call and honor its exit code can wire the same scripts:",
+    "  exit 2 = block the pending tool call, exit 0 = allow,",
+    "  stdout {\"additionalContext\":\"...\"} = non-blocking note.",
+    "The ENFORCEMENT layer (commit-msg / pre-commit / pre-push) is NOT wired here —",
+    "it is git-native; install it once with `node hooks/install.js`.",
+    "Copy the `hooks` block into .claude/settings.json (project) to activate."
+  ],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node hooks/agent/loop-guard.js" },
+          { "type": "command", "command": "node hooks/agent/branch-guard.js" }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node hooks/agent/branch-guard.js" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node hooks/agent/stop-reminder.js" }
+        ]
+      }
+    ]
+  }
+}

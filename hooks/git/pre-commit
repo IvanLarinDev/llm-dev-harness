@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+// pre-commit — GIT-NATIVE hook (universal). Enforces AGENTS.md: коммиты в feature-ветку,
+// не в main/master. Fires for any agent or human.
+//
+// Escape hatch for the RELEASE / HOTFIX flow (which legitimately commits on main,
+// e.g. CHANGELOG bump):  set HARNESS_ALLOW_MAIN=1 for that single command.
+//   HARNESS_ALLOW_MAIN=1 git commit -m "chore(release): v1.3.0"
+//
+// Exit 0 = accept, exit 1 = reject. Internal error / not-a-repo → exit 0.
+
+const { execSync } = require("child_process");
+
+const PROTECTED = new Set(["main", "master"]);
+
+function currentBranch() {
+  // symbolic-ref works even on an unborn branch (before the first/root commit),
+  // where `rev-parse --abbrev-ref HEAD` fails — so the root commit on main is caught too.
+  for (const cmd of ["git symbolic-ref --short HEAD", "git rev-parse --abbrev-ref HEAD"]) {
+    try {
+      const b = execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      if (b && b !== "HEAD") return b;
+    } catch {}
+  }
+  return "";
+}
+
+const branch = currentBranch();
+const allow = process.env.HARNESS_ALLOW_MAIN === "1";
+
+if (PROTECTED.has(branch) && !allow) {
+  console.error(
+    `🛑 pre-commit (git-native): коммит на защищённой ветке «${branch}» запрещён.\n` +
+      `   Создай feature-ветку:  git checkout -b feat/...  (или fix/..., docs/...)\n` +
+      `   Релиз/hotfix, которому реально нужен коммит на ${branch}:\n` +
+      `     HARNESS_ALLOW_MAIN=1 git commit ...   (или git commit --no-verify)`
+  );
+  process.exit(1);
+}
+process.exit(0);

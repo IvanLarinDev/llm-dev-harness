@@ -1,0 +1,35 @@
+#!/usr/bin/env node
+// commit-msg — GIT-NATIVE hook (universal: fires for ANY agent or human).
+// Git calls it as:  commit-msg <path-to-COMMIT_EDITMSG>
+// Reads the FINAL message file, so -m, -F, heredoc and $EDITOR are all covered
+// (this is what fixes the "-F bypasses the check" hole in the old agent-only hook).
+//
+// Exit 0 = accept, exit 1 = reject the commit.
+// Any internal error → exit 0 (never wedge the user's git).
+
+const fs = require("fs");
+const path = require("path");
+
+let lint;
+try {
+  ({ lint } = require(path.join(__dirname, "..", "lib", "commit-lint.js")));
+} catch {
+  process.exit(0); // lib missing → don't block commits
+}
+
+try {
+  const msgFile = process.argv[2];
+  if (!msgFile) process.exit(0);
+  const raw = fs.readFileSync(msgFile, "utf8");
+  const { ok, errors } = lint(raw);
+  if (ok) process.exit(0);
+
+  console.error("🛑 commit-msg (git-native): сообщение коммита отклонено.\n");
+  for (const e of errors) console.error("   • " + e.message + "\n");
+  console.error(
+    "   Чинить: перепиши сообщение. Обойти в аварийной ситуации: git commit --no-verify\n"
+  );
+  process.exit(1);
+} catch {
+  process.exit(0);
+}
