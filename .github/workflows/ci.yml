@@ -1,0 +1,44 @@
+name: verify
+# CI mirror of the local harness (BACKLOG P0-1). Runs the SAME checks as the
+# git-native / VERIFY layer, but server-side where `git commit --no-verify` cannot
+# skip them. On GitHub Free + private this workflow RUNS and reports status, but it
+# cannot be made a *required* check (that needs Pro/Team or a public repo — see P0-0).
+#
+# NOTE: actions are pinned to major-version tags for now; pin to full commit SHAs
+# per supply-chain best practice (BACKLOG P1-9).
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Executable VERIFY: auto-detects stacks and runs lint/build/test fail-fast.
+      # For this repo that runs the harness self-test suite (node hooks/test.js).
+      - name: VERIFY (verify.js)
+        run: node hooks/verify.js
+
+      # Conventional commits + no co-authorship across the PR's commits.
+      - name: Conventional commits
+        if: github.event_name == 'pull_request'
+        run: node hooks/lint-commits.js --base ${{ github.event.pull_request.base.sha }}
+
+      # DESIGN-gate: UI changes require an approved mockup set (>=4).
+      - name: DESIGN-gate
+        if: github.event_name == 'pull_request'
+        run: node hooks/design-gate.js --base ${{ github.event.pull_request.base.sha }}
