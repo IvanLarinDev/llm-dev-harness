@@ -51,6 +51,7 @@ ok(lint("feat: x\n\n# Co-Authored-By: commented out").ok, "commented trailer ign
 // ---------- integration: git-native hooks ----------
 const HOOKS_GIT = path.join(__dirname, "git");
 const LOOP_GUARD = path.join(__dirname, "agent", "loop-guard.js");
+const BYPASS_GUARD = path.join(__dirname, "agent", "bypass-guard.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-selftest-"));
 const repo = path.join(tmp, "repo");
 fs.mkdirSync(repo, { recursive: true });
@@ -97,6 +98,23 @@ ok(runHook(LOOP_GUARD, { tool_name: "Bash", tool_input: { command: "echo a echo 
    "blocks low-entropy command");
 ok(runHook(LOOP_GUARD, { toolName: "shell", input: { command: "npm run build" } }, S) === 0,
    "allows a real command (alt field names)");
+
+// ---------- agent-adapter: bypass-guard ----------
+console.log("\nbypass-guard (agent-adapter):");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: 'git commit -m "feat: x" --no-verify' } }) === 2,
+   "blocks git commit --no-verify");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: 'git commit -n -m "feat: x"' } }) === 2,
+   "blocks git commit -n");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: "git push origin main --no-verify" } }) === 2,
+   "blocks git push --no-verify");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: "git config core.hooksPath /dev/null" } }) === 2,
+   "blocks core.hooksPath tampering");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: 'git commit -m "docs: add -n / --no-verify support notes"' } }) === 0,
+   "does NOT false-positive on -n inside a commit message");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: 'git commit -m "feat(core): real change"' } }) === 0,
+   "allows a normal commit");
+ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, { HARNESS_ACK_BYPASS: "1" }) === 0,
+   "HARNESS_ACK_BYPASS allows an acknowledged bypass");
 
 // ---------- cleanup ----------
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
