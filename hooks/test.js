@@ -152,6 +152,20 @@ ok(!/design-guard/.test(w2), "design-guard silent on non-UI edit");
 
 try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
+// ---------- hygiene: no NUL bytes in any source file ----------
+console.log("\nsource hygiene:");
+function walk(dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p));
+    else if (/\.(js|json|md)$/.test(e.name) || ["commit-msg", "pre-commit", "pre-push"].includes(e.name)) out.push(p);
+  }
+  return out;
+}
+const nulFiles = walk(__dirname).filter((f) => fs.readFileSync(f).includes(0));
+ok(nulFiles.length === 0, "no NUL bytes in hook sources" + (nulFiles.length ? " (found: " + nulFiles.join(", ") + ")" : ""));
+
 // ---------- cleanup ----------
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 
