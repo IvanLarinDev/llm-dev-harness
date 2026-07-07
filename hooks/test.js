@@ -66,6 +66,9 @@ console.log("\ngit-native hooks (integration):");
 ok(tryGit(repo, ["commit", "-m", "feat: init"]) !== 0, "pre-commit blocks commit on main");
 ok(tryGit(repo, ["commit", "-m", "chore(init): bootstrap"], { HARNESS_ALLOW_MAIN: "1" }) === 0,
    "HARNESS_ALLOW_MAIN allows main commit");
+fs.writeFileSync(path.join(repo, "g.txt"), "g\n"); git(repo, ["add", "g.txt"]);
+ok(tryGit(repo, ["commit", "-m", "chore(init): second"], { HARNESS_ALLOW_MAIN: "1 " }) === 0,
+   "escape hatch tolerates trailing space (Windows `set VAR=1 &`)");
 
 git(repo, ["checkout", "-q", "-b", "feat/x"]);
 fs.appendFileSync(path.join(repo, "f.txt"), "b\n"); git(repo, ["add", "f.txt"]);

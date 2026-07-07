@@ -24,8 +24,14 @@ function currentBranch() {
   return "";
 }
 
+// Tolerant of Windows `set VAR=1 & cmd` (yields "1 " with a trailing space) and of
+// 1/true/yes/on in any case — so the escape hatch is not a footgun.
+function envAllow(name) {
+  return ["1", "true", "yes", "on"].includes(String(process.env[name] || "").trim().toLowerCase());
+}
+
 const branch = currentBranch();
-const allow = process.env.HARNESS_ALLOW_MAIN === "1";
+const allow = envAllow("HARNESS_ALLOW_MAIN");
 
 if (PROTECTED.has(branch) && !allow) {
   console.error(
