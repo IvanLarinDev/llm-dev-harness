@@ -152,6 +152,47 @@ ok(!/design-guard/.test(w2), "design-guard silent on non-UI edit");
 
 try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
+// ---------- verify runner (P1-8) ----------
+console.log("\nverify runner (P1-8):");
+const VERIFY = path.join(__dirname, "verify.js");
+function verifyExit(root) {
+  try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe" }); return 0; }
+  catch (e) { return e.status || 1; }
+}
+function verifyList(root) {
+  try { return JSON.parse(execFileSync("node", [VERIFY, "--root", root, "--list", "--json"], { encoding: "utf8", stdio: "pipe" })); }
+  catch { return { plan: [] }; }
+}
+// detection
+const vtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verify-"));
+fs.writeFileSync(path.join(vtmp, "Cargo.toml"), "[package]\n");
+fs.mkdirSync(path.join(vtmp, "app"));
+fs.writeFileSync(path.join(vtmp, "app", "App.csproj"), "<Project/>");
+fs.writeFileSync(path.join(vtmp, "pyproject.toml"), "[project]\n");
+const ids = verifyList(vtmp).plan.map((p) => p.stack);
+ok(ids.includes("rust"), "verify auto-detects rust (Cargo.toml)");
+ok(ids.includes("dotnet"), "verify auto-detects dotnet (*.csproj)");
+ok(ids.includes("python"), "verify auto-detects python (pyproject.toml)");
+// execution + fail-fast (trivial step scripts, no toolchain needed)
+const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
+fs.writeFileSync(path.join(etmp, "m.txt"), "x");
+fs.writeFileSync(path.join(etmp, "stepA.js"), "process.exit(0)");
+fs.writeFileSync(path.join(etmp, "stepB.js"), "require('fs').writeFileSync('ran_b','1');process.exit(2)");
+fs.writeFileSync(path.join(etmp, "stepC.js"), "require('fs').writeFileSync('ran_c','1')");
+const cfgFF = { verify: { failFast: true, stacks: [{ id: "t", markers: ["m.txt"], steps: [
+  { name: "a", run: "node stepA.js" }, { name: "b", run: "node stepB.js" }, { name: "c", run: "node stepC.js" }] }] } };
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify(cfgFF));
+ok(verifyExit(etmp) === 1, "verify fails when a required step fails");
+ok(fs.existsSync(path.join(etmp, "ran_b")), "failing step actually ran");
+ok(!fs.existsSync(path.join(etmp, "ran_c")), "fail-fast: later step skipped after failure");
+// all-pass
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "a", run: "node stepA.js" }] }] } }));
+ok(verifyExit(etmp) === 0, "verify passes when all steps pass");
+// optional failing step does not fail overall
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "opt", run: "node stepB.js", optional: true }] }] } }));
+ok(verifyExit(etmp) === 0, "optional failing step is a warning, not a failure");
+try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
+
 // ---------- hygiene: no NUL bytes in any source file ----------
 console.log("\nsource hygiene:");
 function walk(dir) {

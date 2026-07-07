@@ -52,6 +52,13 @@
 - Если в проекте нет тест-раннера — явно сказать об этом в отчёте и предложить минимальный.
 
 ### Этап 4 — VERIFY (до любого коммита)
+**Исполняемый прогон:** `node hooks/verify.js` — авто-детект стеков по маркер-файлам
+(Python/Qt → `ruff`+`pytest`; C#/WPF → `dotnet format`+`build -warnaserror`+`test`;
+Rust/Tauri → `cargo fmt`+`clippy -D warnings`+`test`, Tauri = node-фронт + rust-бэкенд;
+Node → `npm lint/build/test`) и прогон lint→build→test **fail-fast**, с warnings-as-errors
+по умолчанию. Стеки/шаги переопределяются в `harness.config.json` → `verify`.
+`node hooks/verify.js --list` показывает план без запуска. Эта же команда — основа CI (P0-1).
+
 Прогнать **по порядку**, остановиться на первом провале и чинить:
 1. Тесты.
 2. Lint (если настроен).

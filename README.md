@@ -39,8 +39,25 @@ node hooks/install.js     # git config core.hooksPath hooks/git
 
 ```bash
 node hooks/test.js                    # unit + integration self-tests (временный git-репо)
+node hooks/verify.js                  # исполняемый VERIFY: авто-детект стеков → lint/build/test
+node hooks/verify.js --list           # показать план без запуска
 node hooks/design-gate.js --base main # DESIGN-гейт: UI-изменения требуют ≥4 одобренных мокапа
 ```
+
+## VERIFY (мульти-стек)
+
+`hooks/verify.js` делает шаг VERIFY исполняемым. Он определяет стеки по маркер-файлам и гоняет
+lint→build→test **fail-fast** с warnings-as-errors по умолчанию:
+
+| Стек | Маркер | Шаги по умолчанию |
+|------|--------|-------------------|
+| Python/Qt | `pyproject.toml`/`requirements.txt`/`setup.py` | `ruff check` · `ruff format --check` · `pytest -q` |
+| C#/WPF | `*.sln`/`*.csproj` | `dotnet format --verify-no-changes` · `dotnet build -warnaserror` · `dotnet test` |
+| Rust/Tauri | `Cargo.toml` | `cargo fmt --check` · `cargo clippy -- -D warnings` · `cargo test` |
+| Node (фронт Tauri и пр.) | `package.json` | `npm run lint/build/test --if-present` |
+
+Переопределение — в `harness.config.json` → `verify.stacks` (если задать, авто-детект отключается).
+Монорепо поддерживается: шаги запускаются в каталоге каждого найденного маркера.
 
 ## GUI: DESIGN-стадия (≥4 мокапа)
 
