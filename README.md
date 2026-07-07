@@ -38,8 +38,22 @@ node hooks/install.js     # git config core.hooksPath hooks/git
 ## Проверка
 
 ```bash
-node hooks/test.js        # unit + integration self-tests (создаёт временный git-репо)
+node hooks/test.js                    # unit + integration self-tests (временный git-репо)
+node hooks/design-gate.js --base main # DESIGN-гейт: UI-изменения требуют ≥4 одобренных мокапа
 ```
+
+## GUI: DESIGN-стадия (≥4 мокапа)
+
+Для UI-работы (`*.ui`, `*.qml`, каталоги `ui/`/`views/`/`widgets/` — см. `harness.config.json`)
+харнесс требует **≥4 стилистически разных мокапа + approval до кода**:
+
+```bash
+node hooks/new-mockups.js <feature>   # создаст design/mockups/<feature>/ с 4 HTML-мокапами
+# довести макеты → выбрать направление → создать пустой design/mockups/<feature>/APPROVED
+```
+
+`hooks/design-gate.js` (в VERIFY/CI) блокирует UI-изменения без одобренного набора; подробности —
+в `design/mockups/README.md`.
 
 ## Конфигурация (env)
 

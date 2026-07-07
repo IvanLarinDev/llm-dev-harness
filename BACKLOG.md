@@ -48,14 +48,15 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
 
 ## P1 — качество и твои требования
 
-- **P1-5. GUI design-gate (твоё требование: 4 мокапа).** Новая стадия **DESIGN** в loop между
-  PLAN и IMPLEMENT, обязательная для GUI-работы:
-  - для нового GUI — **≥4 стилистически разных мокапа** + явный approval до кода;
-  - для изменения GUI — мокап(ы) нового состояния (и, где нужно, before/after).
-  - Хранение: `design/mockups/<feature>/` (можно генерировать HTML/SVG-варианты и рендерить).
-  - Soft-гейт в CI: если PR трогает UI-пути (`*.ui`, `*.qml`, каталоги виджетов) и нет ≥4 мокапов
-    в `design/mockups/**` или `Design-Approved: <ссылка>` в теле PR → fail.
-  - Привязка к стеку (PyQt/Qt): гейт срабатывает на `.ui`/`.qml`/виджет-модулях.
+- **P1-5. GUI design-gate (твоё требование: 4 мокапа). ✅ СДЕЛАНО.** Стадия **DESIGN** (2.5) в loop
+  между PLAN и IMPLEMENT, обязательная для GUI. Реализация:
+  - `harness.config.json` — UI-globs (`*.ui`/`*.qml`/`ui/`/`views/`/`widgets/`…), `min=4`, каталог мокапов.
+  - `hooks/design-gate.js` — **жёсткий** гейт (exit 1) для VERIFY/CI: UI-изменения без каталога
+    `design/mockups/<feature>/` с ≥4 мокапами и файлом `APPROVED` → блок.
+  - `hooks/agent/design-guard.js` — warn при правке UI-файла (agent-adapter).
+  - `hooks/new-mockups.js` — генерит 4 стилистически разных HTML-мокапа под фичу.
+  - Покрыто self-test'ами. Возможное усиление (позже): требовать, чтобы мокапы менялись в том же
+    диффе, и поддержать `Design-Approved:` trailer как альтернативу файлу APPROVED.
 
 - **P1-6. Secret scanning.** `gitleaks` в `pre-commit` + в CI. Утечка секретов из AI-кода —
   топ-риск 2026. Дёшево, высокий эффект.
