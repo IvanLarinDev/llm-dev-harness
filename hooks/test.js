@@ -52,6 +52,9 @@ ok(lint("feat: x\n\n# Co-Authored-By: commented out").ok, "commented trailer ign
 const HOOKS_GIT = path.join(__dirname, "git");
 const LOOP_GUARD = path.join(__dirname, "agent", "loop-guard.js");
 const BYPASS_GUARD = path.join(__dirname, "agent", "bypass-guard.js");
+const DESIGN_GATE = path.join(__dirname, "design-gate.js");
+const DESIGN_GUARD = path.join(__dirname, "agent", "design-guard.js");
+const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-selftest-"));
 const repo = path.join(tmp, "repo");
 fs.mkdirSync(repo, { recursive: true });
@@ -115,6 +118,39 @@ ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: 'git commit
    "allows a normal commit");
 ok(runHook(BYPASS_GUARD, { tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, { HARNESS_ACK_BYPASS: "1" }) === 0,
    "HARNESS_ACK_BYPASS allows an acknowledged bypass");
+
+// ---------- DESIGN-gate (P1-5) ----------
+console.log("\ndesign-gate (P1-5):");
+function gate(root, files) {
+  try {
+    execFileSync("node", [DESIGN_GATE, "--root", root, "--files", files.join(",")], { encoding: "utf8", stdio: "pipe" });
+    return 0;
+  } catch (e) { return e.status || 1; }
+}
+const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-"));
+ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "gate blocks UI change without approved mockups");
+ok(gate(dtmp, ["src/core/logic.py"]) === 0, "gate ignores non-UI change");
+// scaffolder produces 4 mockups
+execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
+const fdir = path.join(dtmp, "design", "mockups", "login");
+const htmls = fs.readdirSync(fdir).filter((f) => f.endsWith(".html"));
+ok(htmls.length === 4, "new-mockups scaffolds 4 HTML mockups");
+ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "gate still blocks until APPROVED exists");
+fs.writeFileSync(path.join(fdir, "APPROVED"), "");
+ok(gate(dtmp, ["src/ui/main_window.ui"]) === 0, "gate passes with >=4 mockups + APPROVED");
+ok(gate(dtmp, ["design/mockups/login/01-minimal-light.html"]) === 0, "changes only under mockups dir don't trigger gate");
+
+// design-guard agent warn
+function guardStderr(payload) {
+  try { execFileSync("node", [DESIGN_GUARD], { input: JSON.stringify(payload), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }); return ""; }
+  catch (e) { return String(e.stderr || ""); }
+}
+const w = execFileSync("node", [DESIGN_GUARD], { input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "src/ui/panel.qml" } }), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+ok(/design-guard/.test(w), "design-guard warns on UI-file edit");
+const w2 = execFileSync("node", [DESIGN_GUARD], { input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "src/core/logic.py" } }), encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+ok(!/design-guard/.test(w2), "design-guard silent on non-UI edit");
+
+try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- cleanup ----------
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}

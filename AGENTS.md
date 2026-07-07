@@ -9,6 +9,7 @@
 ```
 1. EXPLORE          — изучить кодбазу, найти паттерны, оценить риски
 2. PLAN             — сформулировать план → ⏸ APPROVAL пользователя
+2.5 DESIGN (GUI)    — для UI-работы: ≥4 разных мокапа → ⏸ APPROVAL → APPROVED-маркер
 3. IMPLEMENT+TEST   — код + тесты (edge cases как тесты), не одно без другого
 4. VERIFY           — тесты → lint → build + анализ логов → git diff self-review
    ├─ ошибки/новые warnings/silent-fallback → вернуться к 3 (внутренний цикл)
@@ -34,6 +35,17 @@
   (`EnterPlanMode` → `ExitPlanMode`). Внутри plan mode — explore + проектирование,
   вне его — реализация только после approval.
 - План должен содержать: что меняем, почему, как тестируем, какие риски/edge cases.
+
+### Этап 2.5 — DESIGN (обязательно для GUI-работы)
+Любая работа, затрагивающая UI (`harness.config.json` → `ui.globs`: `*.ui`, `*.qml`, каталоги
+`ui/`, `views/`, `widgets/` и т.п.), проходит стадию дизайна **до написания GUI-кода**:
+- **Новый GUI** — подготовить **≥4 стилистически разных мокапа** (`node hooks/new-mockups.js <feature>`),
+  показать пользователю, выбрать направление.
+- **Изменение GUI** — мокап нового состояния (для крупных правок — тоже несколько вариантов).
+- После approval — создать пустой файл `design/mockups/<feature>/APPROVED`.
+- Гейт исполняемый: `hooks/design-gate.js` в VERIFY/CI **блокирует** (exit 1) UI-изменения без
+  одобренного набора мокапов; `hooks/agent/design-guard.js` предупреждает агента заранее при
+  правке UI-файла. Порог/пути/каталог настраиваются в `harness.config.json`.
 
 ### Этап 3 — IMPLEMENT + TEST
 - Код и тесты пишутся **вместе**. Edge cases оформляются как тесты, а не «подумал и забыл».
@@ -235,6 +247,7 @@ git-операции — **независимо от того, какой аге
 | План до реализации | plan mode (`EnterPlanMode`/`ExitPlanMode`) | внешний (раннер) |
 | Ранняя подсказка про ветку/сообщение до git | `branch-guard.js` (warn-only, exit 0) | note |
 | **Агент не обходит harness** (`--no-verify`, `git commit -n`, правка `core.hooksPath`) | `bypass-guard.js` — блок (exit 2), обход только через `HARNESS_ACK_BYPASS=1` | блок |
+| DESIGN-стадия для GUI (≥4 мокапа) | `design-gate.js` — блок в VERIFY/CI (exit 1); `design-guard.js` — ранняя подсказка при правке UI-файла | блок + note |
 | Push/force/reset/tag/delete/release | permission modes раннера → подтверждение пользователя | внешний |
 | Трекинг шагов | `TodoWrite` / task-list — обновлять по мере loop | note |
 | Незакрытые шаги не «забываются» | `stop-reminder.js` (Stop) — про VERIFY/COMMIT/REPORT | note |
