@@ -43,7 +43,19 @@ node hooks/verify.js                  # исполняемый VERIFY: авто-
 node hooks/verify.js --list           # показать план без запуска
 node hooks/design-gate.js --base main # DESIGN-гейт: UI-изменения требуют ≥4 одобренных мокапа
 node hooks/lint-commits.js --base main # conventional-commits + no-coauthor по коммитам ветки
+node hooks/secret-scan.js --all        # поиск секретов (private keys, токены, high-entropy)
+node hooks/setup-signing.js            # (opt-in) включить SSH-подпись коммитов в этом репо
 ```
+
+## Безопасность / supply-chain
+
+- **secret-scan** встроен в git-native `pre-commit` — коммит с секретом (AWS/GitHub/Google/Slack/
+  Stripe токен, private key, high-entropy значение) блокируется. Ложное срабатывание — метка
+  `secret-scan:allow` в строке.
+- **Signed commits**: `node hooks/setup-signing.js` включает SSH-подпись (усиливает политику
+  «коммиты как от автора»). Жёсткое требование подписи — через ruleset (нужен Pro/public).
+- **CODEOWNERS** (`.github/CODEOWNERS`) + **Dependabot** (`.github/dependabot.yml`), Actions в
+  `ci.yml` запиннены на commit-SHA. На Free+private ревью по CODEOWNERS совещательны.
 
 ## CI (серверное зеркало)
 

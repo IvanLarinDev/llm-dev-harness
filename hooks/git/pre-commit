@@ -8,9 +8,20 @@
 //
 // Exit 0 = accept, exit 1 = reject. Internal error / not-a-repo → exit 0.
 
-const { execSync } = require("child_process");
+const { execSync, spawnSync } = require("child_process");
+const path = require("path");
 
 const PROTECTED = new Set(["main", "master"]);
+
+// Secret scan on staged content (BACKLOG P1-6). Blocks committing secrets. Fail-open
+// if the scanner is missing or errors (secret-scan.js exits 1 only on a real finding).
+function secretScan() {
+  try {
+    const scanner = path.join(__dirname, "..", "secret-scan.js");
+    const r = spawnSync(process.execPath, [scanner, "--staged"], { stdio: "inherit" });
+    return r.status === 1; // true = secrets found → block
+  } catch { return false; }
+}
 
 function currentBranch() {
   // symbolic-ref works even on an unborn branch (before the first/root commit),
@@ -29,6 +40,8 @@ function currentBranch() {
 function envAllow(name) {
   return ["1", "true", "yes", "on"].includes(String(process.env[name] || "").trim().toLowerCase());
 }
+
+if (secretScan()) process.exit(1); // secrets in staged changes → block
 
 const branch = currentBranch();
 const allow = envAllow("HARNESS_ALLOW_MAIN");

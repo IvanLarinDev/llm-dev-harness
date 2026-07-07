@@ -1,0 +1,11 @@
+# Dependabot (BACKLOG P1-9). Keeps GitHub Actions pinned-SHAs up to date with PRs.
+# Add npm/cargo/nuget/pip ecosystems here as real project stacks are added.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"          # keep Dependabot PRs conventional-commit compliant
+    open-pull-requests-limit: 5

@@ -1,0 +1,7 @@
+# Code owners (BACKLOG P1-9). Auto-requests review from the owner on PRs.
+# On GitHub Free + private this is advisory (required reviews need Pro/Team or public).
+
+*                    @IvanLarinDev
+/hooks/              @IvanLarinDev
+/.github/            @IvanLarinDev
+/harness.config.json @IvanLarinDev
