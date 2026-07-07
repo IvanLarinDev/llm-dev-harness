@@ -64,10 +64,14 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
 - **P1-7. Signed commits.** SSH/GPG-подпись (или Sigstore `gitsign`) + ruleset «require signed».
   Логично усиливает вашу политику «коммиты выглядят как от автора» — теперь ещё и криптографически.
 
-- **P1-8. Исполняемый VERIFY.** Сейчас VERIFY — проза «прогони тесты/lint/build». Нужен
-  `harness.config`/npm-scripts, задающие `verify`/`lint`/`build`/`test` per-project, чтобы шаг 4
-  был исполняемым, а не на доверии. Для Qt/Python: `ruff` + `pytest` + сборка. Это же переиспользует
-  CI из P0-1.
+- **P1-8. Исполняемый VERIFY. ✅ СДЕЛАНО.** `hooks/verify.js` — мульти-стек авто-детект
+  (Python/Qt: `ruff`+`pytest`; C#/WPF: `dotnet format`+`build -warnaserror`+`test`;
+  Rust/Tauri: `cargo fmt`+`clippy -D warnings`+`test`; Node: `npm lint/build/test`), fail-fast,
+  warnings-as-errors по умолчанию, монорепо (шаги в каталоге маркера), `--list`/`--stack`/`--json`.
+  Переопределение через `harness.config.json` → `verify`. Покрыто self-test'ами; сам харнесс
+  прогоняет свой `node test.js` через verify. Это же — команда для CI (P0-1).
+  Возможное усиление (позже): `--changed`/`--base` (верифицировать только тронутые стеки для скорости);
+  baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
 
 - **P1-9. CODEOWNERS + Dependabot + пиннинг Actions по SHA.** `.github/CODEOWNERS` (в т.ч. на
   `.github/workflows/` и `hooks/`), `.github/dependabot.yml`, все сторонние Actions — на полный
