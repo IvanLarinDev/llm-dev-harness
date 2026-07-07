@@ -18,14 +18,18 @@
 GitHub Rulesets + required status checks + required PR. Сейчас у харнесса есть только слой 1
 (локальный) и слой 2 (agent-adapter). Серверного слоя нет.
 
-- **P0-0. Решить вопрос с планом/приватностью.** Варианты: (a) GitHub Pro (~$4/мес) → rulesets
-  на приватном; (b) сделать репо публичным → rulesets бесплатно; (c) остаться Free+private →
-  serverное принуждение невозможно, CI-проверки будут только видимыми, не блокирующими merge.
-  Это блокер для P0-1…P0-3.
+- **P0-0. План/приватность. ✅ РЕШЕНО: Free + private, без серверного принуждения.**
+  Следствие: rulesets/required-checks недоступны, защита `main` остаётся **локальной/совещательной**
+  (git-native pre-push + PR-дисциплина + agent bypass-guard). CI (P0-1) запускается и показывает
+  статус, но не может блокировать merge. Пересмотреть при переходе на Pro/Team или публичный репо.
 
-- **P0-1. CI-зеркало проверок** *(перенос из прошлого предложения)*. `.github/workflows/ci.yml`:
-  прогон `node hooks/test.js` + commit-lint по всем коммитам PR + (для проектов) lint/build/test.
-  Тот же контроль, что локально, но его нельзя обойти `--no-verify`. → делаем required check.
+- **P0-1. CI-зеркало проверок. ⏳ АВТОРИЗОВАНО, ждёт пуша workflow.** Готовы: `.github/workflows/ci.yml`
+  (прогон `node hooks/verify.js` + `lint-commits.js` + `design-gate.js` на push/PR) и
+  `hooks/lint-commits.js` — серверный бэкстоп против `--no-verify` (перепроверяет каждый коммит PR).
+  `lint-commits.js` и доки уже в `main`. **Файл workflow не запушен из этой сессии**: у gh-токена нет
+  скоупа `workflow`, а SSH к GitHub из окружения заблокирован (порты 22 и 443). Добавить workflow:
+  `gh auth refresh -s workflow -h github.com` → закоммитить `.github/workflows/ci.yml` → push;
+  либо добавить файл через веб-UI GitHub. На Free+private он **не станет required** (см. P0-0).
 
 - **P0-2. Ruleset на `main`** *(перенос из прошлого предложения — «branch protection»)*.
   Хранить как versioned JSON + инсталлятор `gh api`. Правила: require PR, require CI-check из P0-1,

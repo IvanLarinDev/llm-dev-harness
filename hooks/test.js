@@ -193,6 +193,28 @@ fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify
 ok(verifyExit(etmp) === 0, "optional failing step is a warning, not a failure");
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
 
+// ---------- lint-commits (CI backstop, P0-1) ----------
+console.log("\nlint-commits (P0-1):");
+const LINT_COMMITS = path.join(__dirname, "lint-commits.js");
+function lintCommits(root, args) {
+  try { execFileSync("node", [LINT_COMMITS, ...args], { cwd: root, encoding: "utf8", stdio: "pipe" }); return 0; }
+  catch (e) { return e.status || 1; }
+}
+const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-lintcommits-"));
+git(ctmp, ["init", "-q", "-b", "main"]);
+git(ctmp, ["config", "user.email", "t@t.t"]);
+git(ctmp, ["config", "user.name", "t"]);
+fs.writeFileSync(path.join(ctmp, "f.txt"), "a\n"); git(ctmp, ["add", "f.txt"]);
+git(ctmp, ["commit", "-q", "-m", "feat: root"]);
+const rootSha = git(ctmp, ["rev-parse", "HEAD"]).trim();
+fs.appendFileSync(path.join(ctmp, "f.txt"), "b\n"); git(ctmp, ["add", "f.txt"]);
+git(ctmp, ["commit", "-q", "-m", "chore(x): second"]);
+ok(lintCommits(ctmp, ["--base", rootSha]) === 0, "lint-commits passes on conventional commits");
+fs.appendFileSync(path.join(ctmp, "f.txt"), "c\n"); git(ctmp, ["add", "f.txt"]);
+git(ctmp, ["commit", "-q", "-m", "totally not conventional"]);
+ok(lintCommits(ctmp, ["--base", rootSha]) === 1, "lint-commits flags a non-conventional commit in range");
+try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
+
 // ---------- hygiene: no NUL bytes in any source file ----------
 console.log("\nsource hygiene:");
 function walk(dir) {
