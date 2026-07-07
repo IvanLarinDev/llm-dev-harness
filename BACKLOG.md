@@ -80,11 +80,13 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   Возможное усиление (позже): `--changed`/`--base` (верифицировать только тронутые стеки для скорости);
   baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
 
-- **P1-9. CODEOWNERS + Dependabot + пиннинг Actions по SHA. ✅ СДЕЛАНО.** `.github/CODEOWNERS`
-  (owner на `*`, `/hooks/`, `/.github/`), `.github/dependabot.yml` (github-actions, weekly),
-  Actions в `ci.yml` запиннены на полный commit-SHA (checkout v7.0.0, setup-node v6.4.0).
-  На Free+private required-reviews по CODEOWNERS — совещательны (см. P0-0). `ci.yml` пушится вручную
-  (скоуп `workflow`), как и в P0-1.
+- **P1-9. CODEOWNERS + Dependabot. ✅ СДЕЛАНО (SHA-пиннинг — опционально).** `.github/CODEOWNERS`
+  (owner на `*`, `/hooks/`, `/.github/`) и `.github/dependabot.yml` (github-actions, weekly) — в `main`
+  и **уже работают**: Dependabot сразу открыл PR на апдейт экшенов (checkout→v7, setup-node→v6).
+  `ci.yml` (добавлен пользователем, PR #6) сейчас на `@v4`-тегах. Строгий SHA-пиннинг опционален:
+  запинить на commit-SHA (checkout `9c091bb…`=v7.0.0, setup-node `48b55a…`=v6.4.0) и дать Dependabot
+  их поддерживать, либо просто мёржить его версионные PR. Пуш workflow — только из твоей сессии
+  (скоуп `workflow`). На Free+private review по CODEOWNERS — совещательны (см. P0-0).
 
 ---
 
