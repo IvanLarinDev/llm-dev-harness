@@ -20,7 +20,8 @@
 | `pre-push` | Нет прямого пуша в `main`/`master` (теги и ветки — можно) | `HARNESS_ALLOW_MAIN=1 git push …` |
 
 **Слой 2 — agent-adapter (`hooks/agent/`), опциональный.** Гигиена tool-loop'а, которую git
-не видит: `loop-guard.js` (защита от runaway-цикла), `branch-guard.js` (ранние подсказки,
+не видит: `loop-guard.js` (защита от runaway-цикла), `bypass-guard.js` (блок попыток агента
+обойти harness — `--no-verify`, `core.hooksPath`), `branch-guard.js` (ранние подсказки,
 warn-only), `stop-reminder.js`. Вход — нормализованный JSON (`_input.js` понимает разные
 имена полей), поэтому подключается к любому раннеру через exit-код: `2` = блок, `0` = пропуск.
 Пример подключения для Claude Code — в [`settings.example.json`](./settings.example.json).
@@ -45,5 +46,6 @@ node hooks/test.js        # unit + integration self-tests (создаёт вре
 | Переменная | Назначение | По умолчанию |
 |------------|-----------|--------------|
 | `HARNESS_ALLOW_MAIN=1` | Разрешить коммит/пуш на `main` (релиз/hotfix/bootstrap) | — |
+| `HARNESS_ACK_BYPASS=1` | Осознанно разрешить обход хуков агентом (`--no-verify` и т.п.) | — |
 | `HARNESS_LOOP_THRESHOLD` | Порог блокировки loop-guard | `5` |
 | `HARNESS_SESSION_ID` / `HARNESS_PROJECT_DIR` | Если раннер не выставляет свои | автоопределение |

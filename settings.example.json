@@ -14,6 +14,7 @@
       {
         "matcher": "Bash",
         "hooks": [
+          { "type": "command", "command": "node hooks/agent/bypass-guard.js" },
           { "type": "command", "command": "node hooks/agent/loop-guard.js" },
           { "type": "command", "command": "node hooks/agent/branch-guard.js" }
         ]
