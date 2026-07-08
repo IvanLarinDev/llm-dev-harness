@@ -521,6 +521,19 @@ ok(/another\.txt/.test(stopOut) && /"decision"\s*:\s*"block"/.test(stopOut),
 stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: stopRepo });
 ok(stopOut.trim() === "", "stop_hook_active=true -> молчит (защита от вечного block-цикла)");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
+const stopRepo2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-explained-"));
+execFileSync("git", ["init", "-q"], { cwd: stopRepo2 });
+fs.mkdirSync(path.join(stopRepo2, "hooks"), { recursive: true });
+fs.writeFileSync(path.join(stopRepo2, "hooks", "verify.js"), "x");
+fs.writeFileSync(path.join(stopRepo2, ".gitignore"), "x");
+const transcript = path.join(os.tmpdir(), "harness-stop-transcript-" + process.pid + ".jsonl");
+fs.writeFileSync(transcript, JSON.stringify({
+  type: "assistant",
+  message: { role: "assistant", content: "VERIFY проверено, commit создан. Оставшиеся uncommitted bootstrap/harness/local файлы оставлены намеренно и не относятся к правке." },
+}) + "\n");
+stopOut = hookOutput(STOP, { transcript_path: transcript }, { HARNESS_PROJECT_DIR: stopRepo2 });
+ok(stopOut.trim() === "", "dirty только harness/local + отчёт объясняет intentional uncommitted -> Stop молчит");
+try { fs.rmSync(stopRepo2, { recursive: true, force: true }); fs.rmSync(transcript, { force: true }); } catch {}
 
 // ---------- installer (install.js) ----------
 console.log("\ninstaller:");
