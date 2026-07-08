@@ -1,11 +1,16 @@
-# Git hooks MUST use LF — a CRLF shebang (`#!/usr/bin/env node\r`) breaks execution
-# on macOS/Linux ("node\r: not found"). Force LF regardless of platform / autocrlf.
-hooks/git/commit-msg   text eol=lf
-hooks/git/pre-commit   text eol=lf
-hooks/git/pre-push     text eol=lf
-hooks/*.js             text eol=lf
-hooks/**/*.js          text eol=lf
-*.sh                   text eol=lf
+# Git hooks и скрипты ДОЛЖНЫ быть LF — CRLF в shebang (`#!/usr/bin/env node\r`)
+# ломает запуск на macOS/Linux ("node\r: not found"). Форсим LF независимо от autocrlf.
+hooks/*.js    text eol=lf
+hooks/**/*.js text eol=lf
+*.sh          text eol=lf
+
+# Конфиги — тоже LF: иначе на Windows (autocrlf=true) рабочая копия становится CRLF,
+# и `node hooks/doctor.js`, читающий рабочее дерево, даёт ложный FAIL (в индексе и на
+# Linux-CI всё равно LF). Пинним форматы явно.
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
 
 # Default: normalize text, let git decide line endings on checkout for the rest.
 * text=auto
