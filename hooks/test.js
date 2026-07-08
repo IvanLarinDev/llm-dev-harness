@@ -545,6 +545,12 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+fs.rmSync(path.join(bootRepo, ".github"), { recursive: true, force: true });
+fs.rmSync(path.join(bootRepo, "hooks", "apply-ruleset.js"), { force: true });
+execFileSync("git", ["add", "-A"], { cwd: bootRepo });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /\.github\/rulesets\/main\.json/.test(r.msg) && /hooks\/apply-ruleset\.js/.test(r.msg) && r.level === "FAIL"),
+  "doctor: missing tracked server-enforcement files -> FAIL bootstrap-проверки");
 try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
 
 // ---------- stop-reminder ----------

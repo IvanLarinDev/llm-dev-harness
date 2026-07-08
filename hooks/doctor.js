@@ -84,6 +84,7 @@ const requiredHarnessFiles = [
   "hooks/design-gate.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
+  "hooks/apply-ruleset.js",
   "hooks/_lib.js",
   "hooks/branch-guard.js",
   "hooks/no-coauthor.js",
@@ -96,6 +97,7 @@ const requiredHarnessFiles = [
   ".gitleaks.toml",
   "AGENTS.md",
   "settings.example.json",
+  ".github/rulesets/main.json",
 ];
 const missingHarness = [];
 const untrackedHarness = [];
