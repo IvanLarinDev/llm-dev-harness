@@ -75,6 +75,18 @@ function rulesetRequiredChecks(rel) {
   const rsc = (ruleset.rules || []).find((r) => r.type === "required_status_checks");
   return (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context).filter(Boolean);
 }
+function checkRulesetPrReview(rel) {
+  let ruleset = {};
+  try { ruleset = JSON.parse(readText(rel)); } catch { return; }
+  const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
+  const p = (pr && pr.parameters) || {};
+  if (Number(p.required_approving_review_count || 0) < 1)
+    fail("ruleset: pull_request must require at least 1 approving review");
+  else ok("ruleset: pull_request requires approving review");
+  p.require_code_owner_review === true
+    ? ok("ruleset: code-owner review required")
+    : fail("ruleset: code-owner review is not required");
+}
 function checkVerifyJobContract(workflowPath, required) {
   if (!required.includes("verify")) return;
   const body = workflowJobBody(workflowPath, "verify");
@@ -88,6 +100,22 @@ function checkVerifyJobContract(workflowPath, required) {
   const missing = checks.filter((c) => !c.re.test(body)).map((c) => c.name);
   if (missing.length) fail(`CI job verify does not run required harness step(s): ${missing.join(", ")}`);
   else ok("CI job verify runs doctor, verify.js, design-gate --strict and secret scan");
+}
+function checkWorkflowSupplyChain(workflowPath) {
+  const text = readText(workflowPath);
+  const unpinned = [];
+  for (const m of text.matchAll(/uses:\s*([^\s#]+)/g)) {
+    const spec = m[1];
+    if (!/@[0-9a-f]{40}$/i.test(spec)) unpinned.push(spec);
+  }
+  if (unpinned.length) fail(`CI action(s) not pinned to full SHA: ${unpinned.join(", ")}`);
+  else ok("CI actions are pinned to full commit SHAs");
+
+  if (/ecc-agentshield@/.test(text)) {
+    /AGENTSHIELD_INTEGRITY:\s*["']sha512-/.test(text) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*["']true["']/.test(text)
+      ? ok("CI AgentShield npm package has integrity pin and install scripts disabled")
+      : fail("CI AgentShield npm package must pin dist.integrity and set NPM_CONFIG_IGNORE_SCRIPTS=true");
+  }
 }
 
 // node / git
@@ -238,6 +266,8 @@ if (fs.existsSync(path.join(ROOT, workflowPath)) && fs.existsSync(path.join(ROOT
     ok("ruleset required checks match CI workflow job ids");
     checkVerifyJobContract(workflowPath, required);
   }
+  checkRulesetPrReview(rulesetPath);
+  checkWorkflowSupplyChain(workflowPath);
 }
 
 // report

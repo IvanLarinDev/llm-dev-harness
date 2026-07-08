@@ -7,8 +7,8 @@ name: verify
 # On GitHub Free + private this workflow RUNS and reports status but cannot be *required*
 # (rulesets need Pro/Team or a public repo — see BACKLOG P0-0).
 #
-# NOTE: actions are pinned to major-version tags; pin to full commit SHAs per
-# supply-chain best practice (BACKLOG P1-9). Dependabot keeps them current.
+# Actions are pinned to full commit SHAs. The trailing comment keeps Dependabot's
+# github-actions updater able to identify the source action and desired major.
 
 on:
   # push только на main (пост-merge контроль); ветки проверяются через PR —
@@ -26,11 +26,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # actions/setup-node@v6
         with:
           node-version: "22"
 
@@ -41,7 +41,7 @@ jobs:
       # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
       # GITHUB_TOKEN обязателен с gitleaks-action@v2 для сканирования PR (иначе шаг падает).
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
@@ -49,7 +49,7 @@ jobs:
       # Conventional Commits across the PR's commits — cocogitto (`cog check`).
       - name: Conventional commits (cocogitto)
         if: github.event_name == 'pull_request'
-        uses: cocogitto/cocogitto-action@v3
+        uses: cocogitto/cocogitto-action@c7a74f5406bab86da17da0f0e460a69f8219a68c # cocogitto/cocogitto-action@v3
         with:
           check: false
 
@@ -74,7 +74,13 @@ jobs:
       # Снять continue-on-error и добавить в ruleset вторым required-check — позже.
       - name: AgentShield (agent-config security scan, advisory)
         continue-on-error: true
-        run: npx --yes ecc-agentshield@1.4.0 scan --path .
+        env:
+          AGENTSHIELD_VERSION: "1.4.0"
+          AGENTSHIELD_INTEGRITY: "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          node -e "const {execFileSync}=require('child_process'); const got=execFileSync('npm',['view','ecc-agentshield@'+process.env.AGENTSHIELD_VERSION,'dist.integrity'],{encoding:'utf8'}).trim(); if(got!==process.env.AGENTSHIELD_INTEGRITY){ console.error('ecc-agentshield integrity mismatch: '+got); process.exit(1); }"
+          npx --yes ecc-agentshield@$AGENTSHIELD_VERSION scan --path .
 
       # DESIGN-gate: UI changes require an approved mockup set touched in the same diff.
       - name: DESIGN-gate

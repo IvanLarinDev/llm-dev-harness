@@ -100,19 +100,26 @@ ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "ver
 ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "verify" && c.integration_id === 15368),
   "ruleset пинит check verify на GitHub Actions (integration_id) — статус нельзя подделать через API");
 const prr = (ruleset.rules || []).find((r) => r.type === "pull_request");
-ok(!!prr && prr.parameters.require_code_owner_review === false,
-  "ruleset не требует code-owner review (иначе deadlock соло-мейнтейнера)");
+ok(!!prr && prr.parameters.required_approving_review_count >= 1 && prr.parameters.require_code_owner_review === true,
+  "ruleset требует approving review + code-owner review для self-verifying harness");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
 ok(/doctor\.js/.test(ci) && /design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет doctor.js + verify.js + design-gate.js");
-ok(/cocogitto-action@v3[\s\S]*check:\s*false[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
+ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &&
+   /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
+   /uses:\s*gitleaks\/gitleaks-action@[0-9a-f]{40}\s*# gitleaks\/gitleaks-action@v\d/.test(ci) &&
+   /uses:\s*cocogitto\/cocogitto-action@[0-9a-f]{40}\s*# cocogitto\/cocogitto-action@v\d/.test(ci),
+  "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
+ok(/AGENTSHIELD_INTEGRITY:\s*"sha512-/.test(ci) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*"true"/.test(ci),
+  "CI: AgentShield npm package has integrity pin and install scripts disabled");
+ok(/cocogitto-action@[0-9a-f]{40}[\s\S]*check:\s*false[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
   "CI: conventional commit check uses explicit PR range, not latest tag (works before first release tag)");
 const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
 const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
 ok(requiredContexts.length > 0 && requiredContexts.every((ctx) => jobIds.includes(ctx)),
   "CI/ruleset contract: required status check contexts match workflow job ids");
 ok(/design-gate\.js --strict --base/.test(ci), "CI запускает design-gate в strict mode");
-ok(/ecc-agentshield@\d/.test(ci) && /continue-on-error:\s*true/.test(ci),
+ok(/AGENTSHIELD_VERSION:\s*"1\.4\.0"/.test(ci) && /continue-on-error:\s*true/.test(ci),
   "CI: security-скан ecc-agentshield с прибитой версией, пока совещательный (continue-on-error)");
 
 // ---------- no-coauthor policy ----------
