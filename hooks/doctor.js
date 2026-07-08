@@ -43,11 +43,41 @@ function workflowJobIds(rel) {
   }
   return ids;
 }
+function workflowJobBody(rel, id) {
+  const text = readText(rel);
+  const lines = text.split(/\r?\n/);
+  let inJobs = false, inJob = false;
+  const body = [];
+  const startRe = new RegExp("^  " + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":\\s*(?:#.*)?$");
+  for (const line of lines) {
+    if (/^jobs:\s*$/.test(line)) { inJobs = true; continue; }
+    if (!inJobs) continue;
+    if (/^\S/.test(line)) break;
+    if (!inJob && startRe.test(line)) { inJob = true; body.push(line); continue; }
+    if (inJob && /^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(line)) break;
+    if (inJob) body.push(line);
+  }
+  return body.join("\n");
+}
 function rulesetRequiredChecks(rel) {
   let ruleset = {};
   try { ruleset = JSON.parse(readText(rel)); } catch { return []; }
   const rsc = (ruleset.rules || []).find((r) => r.type === "required_status_checks");
   return (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context).filter(Boolean);
+}
+function checkVerifyJobContract(workflowPath, required) {
+  if (!required.includes("verify")) return;
+  const body = workflowJobBody(workflowPath, "verify");
+  if (!body) { fail("CI job verify is required by ruleset but its workflow body was not found"); return; }
+  const checks = [
+    { name: "doctor", re: /node\s+hooks\/doctor\.js\b/ },
+    { name: "verify", re: /node\s+hooks\/verify\.js\b/ },
+    { name: "design-gate strict", re: /node\s+hooks\/design-gate\.js\b[^\n]*--strict\b/ },
+    { name: "secret scan", re: /gitleaks/i },
+  ];
+  const missing = checks.filter((c) => !c.re.test(body)).map((c) => c.name);
+  if (missing.length) fail(`CI job verify does not run required harness step(s): ${missing.join(", ")}`);
+  else ok("CI job verify runs doctor, verify.js, design-gate --strict and secret scan");
 }
 
 // node / git
@@ -182,7 +212,10 @@ if (fs.existsSync(path.join(ROOT, workflowPath)) && fs.existsSync(path.join(ROOT
   const required = rulesetRequiredChecks(rulesetPath);
   const missing = required.filter((ctx) => !jobs.includes(ctx));
   if (missing.length) fail(`ruleset required check(s) not published by CI workflow: ${missing.join(", ")} (jobs: ${jobs.join(", ") || "none"})`);
-  else if (required.length) ok("ruleset required checks match CI workflow job ids");
+  else if (required.length) {
+    ok("ruleset required checks match CI workflow job ids");
+    checkVerifyJobContract(workflowPath, required);
+  }
 }
 
 // report

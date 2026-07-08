@@ -34,6 +34,10 @@ jobs:
         with:
           node-version: "22"
 
+      # Doctor catches bootstrap drift before the required check can go green by name only.
+      - name: Doctor (harness contract)
+        run: node hooks/doctor.js
+
       # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
       # GITHUB_TOKEN обязателен с gitleaks-action@v2 для сканирования PR (иначе шаг падает).
       - name: Secret scan (gitleaks)

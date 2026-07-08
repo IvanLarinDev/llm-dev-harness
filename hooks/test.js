@@ -104,7 +104,7 @@ ok(!!prr && prr.parameters.require_code_owner_review === false,
   "ruleset не требует code-owner review (иначе deadlock соло-мейнтейнера)");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
-ok(/design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет verify.js + design-gate.js");
+ok(/doctor\.js/.test(ci) && /design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет doctor.js + verify.js + design-gate.js");
 ok(/cocogitto-action@v3[\s\S]*check:\s*false[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
   "CI: conventional commit check uses explicit PR range, not latest tag (works before first release tag)");
 const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
@@ -562,6 +562,10 @@ fs.writeFileSync(path.join(dbgtmp, "bad.js"), "function f(){ debugger; return 1;
 fs.writeFileSync(path.join(dbgtmp, "softy.js"), "console.log('hi');\n");
 fs.writeFileSync(path.join(dbgtmp, "bp.js"), "breakpoint();\n");
 fs.writeFileSync(path.join(dbgtmp, "bad.py"), "import pdb; pdb.set_trace()\n");
+fs.mkdirSync(path.join(dbgtmp, "hooks"), { recursive: true });
+fs.writeFileSync(path.join(dbgtmp, "hooks", "bad-hook.js"), "function f(){ debugger; return 1; }\n");
+fs.writeFileSync(path.join(dbgtmp, "hooks", "fixture.js"), "const fixture = \"debugger;\";\n");
+fs.writeFileSync(path.join(dbgtmp, "hooks", "comment.js"), "// debugger;\nconst x = 1;\n");
 // verify с --files: аудит сканирует именно эти файлы (без git), стеков в dbgtmp нет.
 function dbgExit(files, cfg) {
   fs.writeFileSync(path.join(dbgtmp, "harness.config.json"), JSON.stringify(cfg || {}));
@@ -575,6 +579,10 @@ ok(dbgExit("softy.js", {}) === 0, "debug-аудит: console.log при soft=fal
 ok(dbgExit("softy.js", { debugAudit: { soft: true } }) === 0, "debug-аудит: console.log при soft=true -> заметка, но не падение");
 ok(dbgExit("bad.js", { debugAudit: { exclude: ["bad.js"] } }) === 0, "debug-аудит: exclude-глоб пропускает файл с hard-маркером");
 ok(dbgExit("bad.js", { debugAudit: { enabled: false } }) === 0, "debug-аудит: enabled=false отключает аудит");
+ok(dbgExit("hooks/bad-hook.js", {}) === 1, "debug-аудит: hooks/** больше не исключён из hard-аудита");
+ok(dbgExit("hooks/fixture.js", {}) === 0, "debug-аудит: hard-маркер внутри строкового fixture не даёт self-FP");
+ok(dbgExit("hooks/comment.js", {}) === 0, "debug-аудит: hard-маркер внутри комментария не даёт self-FP");
+ok(verifyExitArgs(dbgtmp, ["--strict-audit"]) === 1, "debug-аудит: --strict-audit валит VERIFY, если diff scope недоступен");
 try { fs.rmSync(dbgtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- doctor ----------
@@ -596,7 +604,7 @@ ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WA
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
-execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" });
+try { execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" }); } catch {}
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:/.test(r.msg) && r.level === "FAIL"),
   "doctor: untracked harness-файлы -> FAIL с bootstrap-сообщением");
@@ -611,8 +619,13 @@ ok((dres.results || []).some((r) => /ruleset required check\(s\) not published/.
   "doctor: ruleset requires verify but workflow job is build -> FAIL");
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  verify:\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
 dres = doctor(bootRepo);
-ok((dres.results || []).some((r) => /ruleset required checks match CI workflow job ids/.test(r.msg) && r.level === "PASS"),
-  "doctor: ruleset required check matches workflow job id -> PASS");
+ok((dres.results || []).some((r) => /does not run required harness step/.test(r.msg) && /doctor/.test(r.msg) && /design-gate strict/.test(r.msg) && /secret scan/.test(r.msg) && r.level === "FAIL"),
+  "doctor: job id verify без полного harness-контракта -> FAIL");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
+  "name: verify\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - uses: gitleaks/gitleaks-action@v2\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
+  "doctor: required verify job с полным harness-контрактом -> PASS");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /AGENTS\.md: CRLF\/CR line endings/.test(r.msg) && r.level === "FAIL"),
@@ -730,6 +743,7 @@ ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "невалидный setting
 const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
 ok(Array.isArray(ng.notes) && ng.notes.some((n) => /git-репозиторий/.test(n)), "не-git target → нота про git init");
+ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "install: activation/doctor failure делает JSON ok=false");
 try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
 
 // ---------- гигиена: NUL-байты ----------

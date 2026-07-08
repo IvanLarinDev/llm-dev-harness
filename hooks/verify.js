@@ -9,7 +9,7 @@
 //   Node (npm lint/build/test).
 //
 // Usage:
-//   node hooks/verify.js [--root <dir>] [--stack <id>] [--changed [--base <ref>]] [--list] [--json]
+//   node hooks/verify.js [--root <dir>] [--stack <id>] [--changed [--base <ref>]] [--list] [--json] [--strict-audit]
 //     --list     detect + print the plan, do not run
 //     --stack    run only the named stack
 //     --root     repo root (default: cwd)
@@ -17,6 +17,7 @@
 //     --base     git ref to diff against for --changed (default: main; fallback master/origin/HEAD)
 //     --files    explicit comma-separated changed files (tests/CI; bypasses git)
 //     --check-harness-syntax  internal lightweight JS syntax check for harness files
+//     --strict-audit  fail VERIFY if the debug-audit cannot compute its changed-file scope
 //   --changed fail-safe: if the diff can't be computed, verify ALL stacks (loud warn),
 //   never silently skip verification; empty diff = nothing to verify.
 //
@@ -78,10 +79,33 @@ function loadDebugAudit(root) {
       base: d.base || "main",
       soft: d.soft === true,
       exclude: Array.isArray(d.exclude) ? d.exclude : [],
+      strict: d.strict === true,
     };
   } catch {
-    return { enabled: true, base: "main", soft: false, exclude: [] };
+    return { enabled: true, base: "main", soft: false, exclude: [], strict: false };
   }
+}
+
+function maskQuotedSegments(line) {
+  let out = "", quote = null, esc = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (esc) { esc = false; out += " "; continue; }
+      if (ch === "\\") { esc = true; out += " "; continue; }
+      if (ch === quote) { quote = null; out += ch; continue; }
+      out += " ";
+      continue;
+    }
+    if (ch === "\"" || ch === "'" || ch === "`") { quote = ch; out += ch; continue; }
+    out += ch;
+  }
+  return out;
+}
+function stripCommentTail(line, ext) {
+  if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".rs", ".cs"].includes(ext)) return line.replace(/\/\/.*$/, "");
+  if (ext === ".py") return line.replace(/#.*$/, "");
+  return line;
 }
 
 // Один файл → массив находок. Бинарь/крупный/нечитаемый → пропуск (не ошибка).
@@ -100,7 +124,8 @@ function scanFileForDebug(abs, rel, soft) {
   const hits = [];
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    for (const m of markers) if (m.re.test(lines[i])) hits.push({ rel, line: i + 1, what: m.what, soft: softSet.has(m) });
+    const line = stripCommentTail(maskQuotedSegments(lines[i]), ext);
+    for (const m of markers) if (m.re.test(line)) hits.push({ rel, line: i + 1, what: m.what, soft: softSet.has(m) });
   }
   return hits;
 }
@@ -160,7 +185,7 @@ const HARNESS_CHANGED = [
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null, checkHarnessSyntax: false };
+  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null, checkHarnessSyntax: false, strictAudit: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--stack") a.stack = argv[++i];
@@ -170,6 +195,7 @@ function parseArgs(argv) {
     else if (argv[i] === "--base") a.base = argv[++i];
     else if (argv[i] === "--files") a.files = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === "--check-harness-syntax") a.checkHarnessSyntax = true;
+    else if (argv[i] === "--strict-audit") a.strictAudit = true;
   }
   return a;
 }
@@ -390,6 +416,7 @@ function cleanupStepOutput(dir) {
   let auditFailed = null;
   if (audit.skipped) {
     if (da.enabled) console.log(`\n· debug-аудит пропущен: ${audit.skipped}`);
+    if (da.enabled && (a.strictAudit || da.strict)) auditFailed = `debug-аудит strict: ${audit.skipped}`;
   } else {
     for (const h of audit.soft) console.log(`  ⚠ debug-строка (soft): ${h.rel}:${h.line} — ${h.what}`);
     if (audit.hard.length) {

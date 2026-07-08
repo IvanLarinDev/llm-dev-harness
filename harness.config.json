@@ -20,12 +20,13 @@
       "approvalFile": "APPROVED"
     }
   },
-  "_debugAudit_note": "verify.js сканирует ТОЛЬКО изменённые в diff файлы на забытые debug-строки. hard-маркеры (debugger/breakpoint()/pdb.set_trace()/dbg!()) валят VERIFY; soft (console.log/print) — заметка, включается soft=true. exclude — глобы, которые аудит пропускает: тут это сам харнесс (hooks/** содержит и определения маркеров, и легитимный console.log инструментов).",
+  "_debugAudit_note": "verify.js сканирует ТОЛЬКО изменённые в diff файлы на забытые debug-строки. hard-маркеры (debugger/breakpoint()/pdb.set_trace()/dbg!()) валят VERIFY; soft (console.log/print) — заметка, включается soft=true. exclude — глобы, которые аудит пропускает.",
   "debugAudit": {
     "enabled": true,
     "base": "main",
     "soft": false,
-    "exclude": ["hooks/**"]
+    "exclude": [],
+    "strict": true
   },
   "_verify_note": "Omit verify.stacks to enable auto-detect (python/dotnet/rust/node). Here we pin the harness's own self-test as the VERIFY step.",
   "verify": {
