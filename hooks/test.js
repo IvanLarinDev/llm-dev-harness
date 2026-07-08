@@ -87,6 +87,11 @@ const cog = readRepo("cog.toml");
 ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "cog.toml на месте (bump + changelog)");
 ok(/from_latest_tag\s*=\s*true/.test(cog) && /ignore_merge_commits\s*=\s*true/.test(cog) && /tag_prefix\s*=\s*"v"/.test(cog),
   "cog.toml release-safe: latest v* tag + merge commits ignored");
+ok(/branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog),
+  "cog.toml release-safe: release/** branch whitelist is allowed");
+ok(/template\s*=\s*"remote"/.test(cog) && /owner\s*=\s*"[^"]+"/.test(cog) && /repository\s*=\s*"[^"]+"/.test(cog),
+  "cog.toml release-safe: remote changelog template has owner/repository");
+ok(/^---\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
 const gl = readRepo(".gitleaks.toml");
 ok(/useDefault\s*=\s*true/.test(gl), "gitleaks расширяет дефолтный ruleset");
 let ruleset = {};
@@ -653,6 +658,22 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /verify\.stacks.*harness self-test/.test(r.msg) && r.level === "FAIL"),
   "doctor: verify.stacks не может убрать обязательный harness self-test");
+const badCog = fs.readFileSync(path.join(bootRepo, "cog.toml"), "utf8")
+  .replace(/,\s*"release\/\*\*"/, "")
+  .replace(/\ntemplate\s*=\s*"remote"/, "")
+  .replace(/\nowner\s*=\s*"[^"]+"/, "")
+  .replace(/\nrepository\s*=\s*"[^"]+"/, "");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), badCog);
+fs.rmSync(path.join(bootRepo, "CHANGELOG.md"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branch_whitelist.*release\/\*\*/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.template/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.owner/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.repository/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /CHANGELOG\.md is required/.test(r.msg) && r.level === "FAIL"),
+  "doctor: release-blocking cog.toml/CHANGELOG gaps -> FAIL");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml"));
+fs.writeFileSync(path.join(bootRepo, "CHANGELOG.md"), "# Changelog\n\n---\n");
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "self-test", run: "node test.js" }] }] } }, null, 2) + "\n");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);

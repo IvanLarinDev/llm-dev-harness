@@ -42,7 +42,7 @@ const FILES = [
   "hooks/_lib.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
-  "lefthook.yml", "cog.toml", ".gitleaks.toml", "settings.example.json",
+  "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",
   ".gitattributes", "AGENTS.md", ".github/rulesets/main.json",
 ];
 const CI_FILES = [".github/workflows/ci.yml", ".github/CODEOWNERS", ".github/dependabot.yml"];
