@@ -81,6 +81,7 @@ ok(/branch-guard:[\s\S]*node hooks\/branch-guard\.js/.test(lh), "lefthook branch
 ok(fs.existsSync(BRANCH_GUARD), "branch-guard.js на месте");
 ok(/pre-push:/.test(lh) && /verify\.js/.test(lh), "lefthook pre-push -> verify.js");
 ok(/pre-push:[\s\S]*design-gate\.js/.test(lh), "lefthook pre-push -> design-gate.js");
+ok(/design-gate\.js --base origin\/main/.test(lh), "lefthook design-gate uses fresh remote base origin/main");
 const cog = readRepo("cog.toml");
 ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "cog.toml на месте (bump + changelog)");
 ok(/from_latest_tag\s*=\s*true/.test(cog) && /ignore_merge_commits\s*=\s*true/.test(cog) && /tag_prefix\s*=\s*"v"/.test(cog),
@@ -359,6 +360,43 @@ ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "блок: UI-изменение
 ok((gateResult(dtmp, ["src/Dropwheel/UI/Foo.xaml"]).uiChanged || []).includes("src/Dropwheel/UI/Foo.xaml"),
   "design-gate: UI-глобы матчятся case-insensitive (**/ui/** ловит /UI/)");
 ok(gate(dtmp, ["src/core/logic.py"]) === 0, "пропуск: не-UI изменение");
+const staleMain = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-stale-main-"));
+function sgit(args) {
+  return execFileSync("git", args, { cwd: staleMain, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+function swrite(rel, text) {
+  const p = path.join(staleMain, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+}
+sgit(["init", "-q", "-b", "main"]);
+sgit(["config", "user.name", "Harness Test"]);
+sgit(["config", "user.email", "harness@example.test"]);
+swrite("README.md", "base\n");
+sgit(["add", "."]);
+sgit(["commit", "-q", "-m", "chore: base"]);
+const baseCommit = sgit(["rev-parse", "HEAD"]);
+sgit(["branch", "feature/readme"]);
+swrite("src/ui/app.js", "console.log('ui');\n");
+for (let i = 1; i <= 4; i++) swrite(`design/mockups/open/${String(i).padStart(2, "0")}.html`, "<!doctype html>\n");
+swrite("design/mockups/open/APPROVED", "approved\n");
+sgit(["add", "."]);
+sgit(["commit", "-q", "-m", "feat(ui): add upstream ui"]);
+const remoteMain = sgit(["rev-parse", "HEAD"]);
+sgit(["update-ref", "refs/remotes/origin/main", remoteMain]);
+sgit(["update-ref", "refs/heads/main", baseCommit]);
+sgit(["checkout", "-q", "-f", "feature/readme"]);
+sgit(["merge", "-q", "--no-ff", "-m", "merge origin/main", "origin/main"]);
+fs.appendFileSync(path.join(staleMain, "README.md"), "feature\n");
+sgit(["add", "README.md"]);
+sgit(["commit", "-q", "-m", "docs(readme): update"]);
+let staleGate = {};
+try {
+  staleGate = JSON.parse(execFileSync("node", [DESIGN_GATE, "--root", staleMain, "--json"], { encoding: "utf8", stdio: "pipe" }));
+} catch (e) { try { staleGate = JSON.parse(String(e.stdout || "{}")); } catch {} }
+ok(staleGate.base === "origin/main" && Array.isArray(staleGate.uiChanged) && staleGate.uiChanged.length === 0,
+  "design-gate default prefers origin/main, so stale local main does not add upstream UI noise");
+try { fs.rmSync(staleMain, { recursive: true, force: true }); } catch {}
 execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
 const fdir = path.join(dtmp, "design", "mockups", "login");
 ok(fs.readdirSync(fdir).filter((f) => f.endsWith(".html")).length === 4, "new-mockups создаёт 4 HTML-мокапа");

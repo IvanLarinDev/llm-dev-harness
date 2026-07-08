@@ -162,7 +162,11 @@ function interpreterProtectedHint(rawCmd, protectedList) {
 // Общий источник для design-gate.js (гейт) и verify.js (--changed фильтр стеков).
 function changedFiles(base, root, explicitFiles) {
   if (explicitFiles) return { files: explicitFiles };
-  const bases = [...new Set([base, "main", "master", "origin/HEAD"].filter(Boolean))];
+  const remoteFirst = /^origin\//.test(String(base || ""));
+  const fallbacks = remoteFirst
+    ? [base, "origin/HEAD", "main", "master"]
+    : [base, "main", "master", "origin/main", "origin/HEAD"];
+  const bases = [...new Set(fallbacks.filter(Boolean))];
   for (const b of bases) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {

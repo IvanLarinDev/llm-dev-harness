@@ -94,7 +94,7 @@ worktree не воспроизведёт локальные untracked файлы
 ```bash
 node hooks/test.js                     # self-test suite харнесса
 node hooks/verify.js [--list]          # исполняемый VERIFY (авто-детект стеков)
-node hooks/design-gate.js --base main  # DESIGN-гейт по diff ветки
+node hooks/design-gate.js --base origin/main # DESIGN-гейт по diff ветки
 node hooks/doctor.js                   # окружение
 node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
 ```

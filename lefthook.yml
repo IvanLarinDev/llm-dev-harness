@@ -40,4 +40,4 @@ pre-push:
     verify:
       run: node hooks/verify.js
     design-gate:
-      run: node hooks/design-gate.js --base main
+      run: node hooks/design-gate.js --base origin/main
