@@ -15,9 +15,9 @@ const results = [];
 function ok(msg) { results.push({ level: "PASS", msg }); }
 function warn(msg) { results.push({ level: "WARN", msg }); }
 function fail(msg) { results.push({ level: "FAIL", msg }); }
-function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }).trim(); }
 function gitSafe(args) { try { return git(args); } catch { return null; } }
-function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"] }); return true; } catch { return false; } }
+function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
 
 // node / git
 ok("node " + process.version);

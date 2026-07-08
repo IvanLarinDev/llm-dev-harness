@@ -36,7 +36,7 @@ const crypto = require("crypto");
 const { execSync } = require("child_process");
 const { parse } = require(path.join(__dirname, "_input.js"));
 const { globToRe, loadConfig, normRel, isProtectedPath, isProtectedShellWrite,
-  isLintConfigShellWrite, isLintConfigPath } = require(path.join(__dirname, "..", "_lib.js"));
+  isLintConfigShellWrite, isLintConfigPath, interpreterProtectedHint } = require(path.join(__dirname, "..", "_lib.js"));
 
 const TTL_MS = 2 * 60 * 60 * 1000;
 const SEEN_MAX = 200;
@@ -91,8 +91,15 @@ function readState(p) {
     return { hist: s.hist || [], streak: s.streak || 0, seen: s.seen || [] };
   } catch { return { hist: [], streak: 0, seen: [] }; }
 }
+// Атомарная запись: temp-файл в том же каталоге (tmpdir) + rename. Иначе
+// параллельные PreToolUse-хуки могли оставить оборванный JSON или затереть
+// историю на полузаписи (гонка read-modify-write). rename атомарен в пределах ФС.
 function writeState(p, s) {
-  try { fs.writeFileSync(p, JSON.stringify({ ...s, ts: Date.now() })); } catch {}
+  const tmp = p + "." + process.pid + ".tmp";
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ ...s, ts: Date.now() }));
+    fs.renameSync(tmp, p);
+  } catch { try { fs.unlinkSync(tmp); } catch {} }
 }
 function markSeen(st, rel) {
   if (!st.seen.includes(rel)) {
@@ -103,7 +110,7 @@ function markSeen(st, rel) {
 
 function currentBranch(cwd) {
   try {
-    const b = execSync("git symbolic-ref --short HEAD", { cwd, stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+    const b = execSync("git symbolic-ref --short HEAD", { cwd, stdio: ["ignore", "pipe", "ignore"], timeout: 2000, killSignal: "SIGKILL" }).toString().trim();
     return b === "HEAD" ? "" : b;
   } catch { return ""; }
 }
@@ -231,6 +238,17 @@ function run(ctx, env = process.env) {
         }
       }
 
+      // 1c) запись в файл харнесса через инлайн-eval интерпретатора (node -e/
+      // python -c/bash -c…). Write-verb-детекция это не ловит (глагол/путь в
+      // строке, scrubQuotes их обнулил), поэтому проверяем СЫРУЮ команду и только
+      // напоминаем — жёстко блокировать нельзя (путь в -e может быть безобиден).
+      if (checkEnabled("protected", env)) {
+        const ip = interpreterProtectedHint(command, cfg.protected);
+        if (ip) notes.push(`⚠️ guard: похоже на запись в файл харнесса (${ip}) через инлайн-eval интерпретатора ` +
+          `(node -e / python -c / bash -c …). Такой обход не ловится жёстким блоком — не меняй файлы харнесса так. ` +
+          `Если это не файл харнесса, игнорируй.`);
+      }
+
       // 2) сбой стриминга / мусор
       if (checkEnabled("corruption", env) && CORRUPTION_RE.test(scrubbed)) {
         writeState(p, { hist: [], streak: 0, seen: st.seen });
@@ -338,8 +356,10 @@ function run(ctx, env = process.env) {
     }
 
     return { exitCode: 0, stdout: "", stderr: "" };
-  } catch {
-    return { exitCode: 0, stdout: "", stderr: "" }; // fail-open: хук не должен вешать сессию
+  } catch (e) {
+    // fail-open: хук не должен вешать сессию. НО делаем поломку видимой в stderr —
+    // иначе исключение в детекторе тихо отключило бы всю защиту для этого вызова.
+    return { exitCode: 0, stdout: "", stderr: "⚠️ guard: внутренняя ошибка проверки, пропускаю (fail-open): " + (e && e.message) + "\n" };
   }
 }
 

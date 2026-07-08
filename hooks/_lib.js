@@ -133,6 +133,26 @@ function isLintConfigPath(rel, lintConfigs) {
   return lintConfigs.some((n) => n.toLowerCase() === base);
 }
 
+// ---------- запись в защищённый путь через инлайн-eval интерпретатора ----------
+// `node -e "fs.writeFileSync('hooks/x')"`, `python -c "open('lefthook.yml','w')"`,
+// `bash -c "rm -rf hooks/"` обходят write-verb-детекцию: глагол/путь спрятаны в
+// строке, а scrubQuotes её обнуляет. Работаем по СЫРОЙ команде. Это НОТА, не блок:
+// в -e путь может быть безобидной строкой, жёстко блокировать нельзя, но напомнить
+// про обход стоит. Триггерим только при совпадении трёх условий: интерпретатор с
+// eval-флагом + индикатор записи + литерал защищённого пути (минимум ложных).
+const INTERP_EVAL_RE = /\b(?:node|nodejs|deno|bun|python|python3|py|perl|ruby|php|pwsh|powershell|bash|sh|zsh)\b[^\n]*?(?:\s-e\b|\s--eval\b|\s-c\b|\seval\b|\s-Command\b|\s-EncodedCommand\b)/i;
+const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|fs\.write|\.write\s*\(|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
+function interpreterProtectedHint(rawCmd, protectedList) {
+  const s = String(rawCmd);
+  if (!INTERP_EVAL_RE.test(s) || !INTERP_WRITE_RE.test(s)) return null;
+  const low = s.replace(/\\/g, "/").toLowerCase();
+  for (const p of protectedList) {
+    const pref = p.toLowerCase().replace(/\/$/, "").replace(/[.]/g, "\\.");
+    if (new RegExp("(?:^|[\\s'\"(/=:])" + pref + "(?:/|\\b)").test(low)) return p;
+  }
+  return null;
+}
+
 // ---------- changed files (branch diff) ----------
 // Изменённые файлы ветки относительно базы. Возвращает {files, base} при успешном
 // diff (пусть даже ПУСТОМ) или {error} если ни одна база не доступна — это РАЗНЫЕ
@@ -146,7 +166,7 @@ function changedFiles(base, root, explicitFiles) {
   for (const b of bases) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {
-        const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+        const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" });
         return { files: out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), base: b };
       } catch {}
     }
@@ -158,5 +178,6 @@ module.exports = {
   DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS, DEFAULT_PROTECTED, DEFAULT_LINT_CONFIGS,
   globToRe, loadConfig, normRel, isProtectedPath,
   isProtectedShellWrite, isLintConfigShellWrite, isLintConfigPath,
+  interpreterProtectedHint,
   changedFiles,
 };
