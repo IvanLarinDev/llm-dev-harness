@@ -85,6 +85,7 @@ const requiredHarnessFiles = [
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/_lib.js",
+  "hooks/branch-guard.js",
   "hooks/agent/guard.js",
   "hooks/agent/_input.js",
   "hooks/agent/stop-reminder.js",

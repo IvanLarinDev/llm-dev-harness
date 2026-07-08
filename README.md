@@ -95,5 +95,18 @@ node hooks/doctor.js                   # окружение
 node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
 ```
 
+Windows-safe диагностика lefthook из PowerShell:
+
+```powershell
+lefthook.cmd run pre-commit --command branch-guard --force --verbose
+```
+
+Используй `--command` (singular). Если PowerShell блокирует `lefthook.ps1`
+ExecutionPolicy, запускай `lefthook.cmd` или напрямую:
+
+```powershell
+node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run pre-commit --command branch-guard --force --verbose
+```
+
 CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).
 Слои, DESIGN-стадия, release flow и env-переменные — в [`AGENTS.md`](./AGENTS.md).

@@ -39,16 +39,9 @@ pre-commit:
       run: gitleaks git --staged --redact --no-banner -c .gitleaks.toml
     branch-guard:
       # Commits belong on feature branches. main advances via merged PRs (enforced server-side).
-      run: |
-        b=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
-        case "$b" in
-          main|master)
-            if [ "${HARNESS_ALLOW_MAIN:-}" = "1" ]; then exit 0; fi
-            echo "🛑 pre-commit: коммит на защищённой ветке «$b» запрещён."
-            echo "   Создай feature-ветку:  git checkout -b feat/...  (fix/…, docs/…)"
-            echo "   Релиз/hotfix на $b:  HARNESS_ALLOW_MAIN=1 git commit ..."
-            exit 1 ;;
-        esac
+      # Keep this in Node, not a multi-line shell snippet: lefthook wraps shell
+      # commands as sh -c "..." on Windows, so quoted echo lines break parsing.
+      run: node hooks/branch-guard.js
 
 pre-push:
   commands:

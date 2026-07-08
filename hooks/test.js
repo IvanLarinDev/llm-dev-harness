@@ -41,6 +41,7 @@ const STOP = path.join(__dirname, "agent", "stop-reminder.js");
 const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
+const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const REPO = path.join(__dirname, "..");
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard блокирует правки файлов харнесса относительно projectDir — тесты гоняем
@@ -74,6 +75,8 @@ ok(/commit-msg:/.test(lh) && /cog verify/.test(lh), "lefthook commit-msg -> cog 
 ok(/no-coauthor/.test(lh) && /co-authored-by/i.test(lh), "lefthook commit-msg -> no-coauthor grep");
 ok(/pre-commit:/.test(lh) && /gitleaks/.test(lh), "lefthook pre-commit -> gitleaks (secrets)");
 ok(/HARNESS_ALLOW_MAIN/.test(lh), "lefthook держит escape-hatch HARNESS_ALLOW_MAIN");
+ok(/branch-guard:[\s\S]*node hooks\/branch-guard\.js/.test(lh), "lefthook branch-guard -> Windows-safe Node script");
+ok(fs.existsSync(BRANCH_GUARD), "branch-guard.js на месте");
 ok(/pre-push:/.test(lh) && /verify\.js/.test(lh), "lefthook pre-push -> verify.js");
 ok(/pre-push:[\s\S]*design-gate\.js/.test(lh), "lefthook pre-push -> design-gate.js");
 const cog = readRepo("cog.toml");
@@ -134,6 +137,22 @@ ok(bp('git commit -m "feat(core): real change"') === 0, "НЕ блок: обыч
 ok(bp("git commit --no-verify -m x", { HARNESS_ACK_BYPASS: "1" }) === 0, "HARNESS_ACK_BYPASS=1 разрешает осознанный обход");
 ok(!/HARNESS_ACK_BYPASS/.test(gout({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("hint"))),
   "block-сообщение НЕ содержит рецепт обхода (имя env-переменной)");
+
+// ---------- branch-guard CLI ----------
+console.log("\nbranch-guard:");
+function runBranchGuard(root, env = {}) {
+  try {
+    execFileSync("node", [BRANCH_GUARD], { cwd: root, encoding: "utf8", env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    return 0;
+  } catch (e) { return e.status || 1; }
+}
+const btmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-branchguard-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: btmp });
+ok(runBranchGuard(btmp) === 1, "branch-guard: main блокируется");
+ok(runBranchGuard(btmp, { HARNESS_ALLOW_MAIN: "1" }) === 0, "branch-guard: HARNESS_ALLOW_MAIN=1 пропускает main");
+execFileSync("git", ["checkout", "-q", "-b", "feat/test"], { cwd: btmp });
+ok(runBranchGuard(btmp) === 0, "branch-guard: feature-ветка проходит");
+try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
 
 // ---------- guard: shell-запись в защищённые пути ----------
 console.log("\nguard: protected paths via shell:");
@@ -385,8 +404,8 @@ ok(fs.existsSync(path.join(etmp, "ran_b")) && !fs.existsSync(path.join(etmp, "ra
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "opt", run: "node stepB.js", optional: true }] }] } }));
 ok(verifyExit(etmp) === 0, "optional-шаг падает -> warning, не провал");
 const optOut = verifyOutput(etmp);
-ok(/optional warnings[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut) && !/error WHITESPACE/.test(optOut),
-  "verify UX: optional diagnostics suppressed, warning+summary перед финальным passed");
+ok(/optional warnings[\s\S]*error WHITESPACE: fix me[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut),
+  "verify UX: optional diagnostics excerpt appears before summary/final passed");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "допустимо" } }] }] } }));
 ok(verifyExit(etmp) === 0, "okCodes: допустимый ненулевой exit (напр. pytest 5 «нет тестов») -> warning, не провал");
 
@@ -502,7 +521,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ничего не пишет на диск");
 // реальная установка
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
 ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "install: dev-self-test (test.js) в target НЕ копируется");
 const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
 ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён config без self-test-пина verify (target авто-детектит стеки)");

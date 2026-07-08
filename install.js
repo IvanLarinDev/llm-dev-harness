@@ -38,7 +38,7 @@ const { DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_
 // его доки/CI). .github/rulesets/main.json нужен apply-ruleset.js — копируем всегда.
 const FILES = [
   "hooks/_lib.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js",
-  "hooks/new-mockups.js", "hooks/apply-ruleset.js",
+  "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "cog.toml", ".gitleaks.toml", "settings.example.json",
   ".gitattributes", "AGENTS.md", ".github/rulesets/main.json",

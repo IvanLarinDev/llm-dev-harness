@@ -213,6 +213,12 @@ function emitStepOutput(res) {
   if (res.stdout) process.stdout.write(res.stdout);
   if (res.stderr) process.stderr.write(res.stderr);
 }
+function diagnosticExcerpt(res, maxLines = 8) {
+  const text = [res.stderr, res.stdout].filter(Boolean).join("\n").trim();
+  if (!text) return "";
+  const lines = text.split(/\r?\n/).map((s) => s.trimEnd()).filter((s) => s.trim()).slice(0, maxLines);
+  return lines.join("\n");
+}
 
 // ---------- main ----------
 (function main() {
@@ -290,12 +296,14 @@ function emitStepOutput(res) {
         if (failFast) break outer; else continue;
       }
       if (step.okCodes && step.okCodes[res.code] !== undefined) {
-        warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}`);
+        const detail = diagnosticExcerpt(res);
+        warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}${detail ? "\n" + detail : ""}`);
         summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`);
         continue;
       }
       if (step.optional) {
-        warnings.push(`${label}: optional step exited ${res.code}; diagnostics suppressed from final output`);
+        const detail = diagnosticExcerpt(res);
+        warnings.push(`${label}: optional step exited ${res.code}${detail ? "\n" + detail : "\n(no diagnostics captured)"}`);
         summary.push(`⚠ ${label} (optional, exit ${res.code})`);
         continue;
       }
@@ -308,7 +316,7 @@ function emitStepOutput(res) {
 
   if (warnings.length) {
     console.log("\n— optional warnings —");
-    for (const w of warnings) console.log("  ⚠ " + w);
+    for (const w of warnings) console.log("  ⚠ " + w.replace(/\n/g, "\n    "));
   }
   if (summary.length) {
     console.log("\n— verify summary —");
