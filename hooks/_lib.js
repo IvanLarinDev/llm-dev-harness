@@ -171,11 +171,48 @@ function changedFiles(base, root, explicitFiles) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {
         const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" });
-        return { files: out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), base: b };
+        return { files: mergeFiles(parseFiles(out), dirtyFiles(root)), base: b };
       } catch {}
     }
   }
   return { error: `git diff не удался ни для одной базы (${bases.join(", ")})` };
+}
+
+function parseFiles(out) {
+  return String(out || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
+function gitFiles(root, args) {
+  try {
+    return parseFiles(execFileSync("git", args, {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000, killSignal: "SIGKILL",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function dirtyFiles(root) {
+  return mergeFiles(
+    gitFiles(root, ["diff", "--name-only"]),
+    gitFiles(root, ["diff", "--name-only", "--cached"]),
+    gitFiles(root, ["ls-files", "--others", "--exclude-standard"])
+  );
+}
+
+function mergeFiles(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const f of list || []) {
+      const rel = String(f).replace(/\\/g, "/");
+      if (!rel || seen.has(rel)) continue;
+      seen.add(rel);
+      out.push(rel);
+    }
+  }
+  return out;
 }
 
 module.exports = {

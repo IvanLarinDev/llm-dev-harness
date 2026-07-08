@@ -105,6 +105,8 @@ ok(!!prr && prr.parameters.require_code_owner_review === false,
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
 ok(/design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет verify.js + design-gate.js");
+ok(/cocogitto-action@v3[\s\S]*check:\s*false[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
+  "CI: conventional commit check uses explicit PR range, not latest tag (works before first release tag)");
 const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
 const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
 ok(requiredContexts.length > 0 && requiredContexts.every((ctx) => jobIds.includes(ctx)),
@@ -459,8 +461,8 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
   "авто-детект rust/dotnet/python по маркер-файлам");
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
 ok(dotnetPlan && dotnetPlan.steps.includes("format"), "dotnet verify включает format");
-ok(!/dotnet format --verify-no-changes[^}]*optional/.test(readRepo("hooks/verify.js")),
-  "dotnet format --verify-no-changes обязателен, а не warning-only optional");
+ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify.js")),
+  "dotnet format --verify-no-changes staged rollout: warning-only by default");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
 fs.writeFileSync(path.join(etmp, "stepA.js"), "process.exit(0)");
@@ -517,6 +519,31 @@ ok(chg.plan.some((p) => p.stack === "harness"),
   "--changed: изменение hooks/** запускает harness checks даже без package.json");
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
+const dirtyTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifydirty-"));
+function dgit(args) { return execFileSync("git", args, { cwd: dirtyTmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
+function dwrite(rel, text) {
+  const p = path.join(dirtyTmp, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, text);
+}
+dgit(["init", "-q", "-b", "main"]);
+dgit(["config", "user.name", "Harness Test"]);
+dgit(["config", "user.email", "harness@example.test"]);
+dwrite("hooks/verify.js", "console.log('base');\n");
+dwrite("js/package.json", "{}\n");
+dgit(["add", "."]);
+dgit(["commit", "-q", "-m", "chore: base"]);
+dwrite("hooks/verify.js", "console.log('dirty');\n");
+chg = verifyListArgs(dirtyTmp, ["--changed"]);
+ok(chg.plan.some((p) => p.stack === "harness"), "--changed: unstaged harness edit is included");
+dgit(["add", "hooks/verify.js"]);
+chg = verifyListArgs(dirtyTmp, ["--changed"]);
+ok(chg.plan.some((p) => p.stack === "harness"), "--changed: staged harness edit is included");
+dwrite("hooks/new-check.js", "console.log('new');\n");
+chg = verifyListArgs(dirtyTmp, ["--changed"]);
+ok(chg.plan.some((p) => p.stack === "harness"), "--changed: untracked harness file is included");
+try { fs.rmSync(dirtyTmp, { recursive: true, force: true }); } catch {}
+
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
 
 // ---------- debug-аудит изменённых файлов ----------
@@ -569,6 +596,15 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+fs.mkdirSync(path.join(bootRepo, ".github", "workflows"), { recursive: true });
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /ruleset required check\(s\) not published/.test(r.msg) && /verify/.test(r.msg) && /build/.test(r.msg) && r.level === "FAIL"),
+  "doctor: ruleset requires verify but workflow job is build -> FAIL");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  verify:\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /ruleset required checks match CI workflow job ids/.test(r.msg) && r.level === "PASS"),
+  "doctor: ruleset required check matches workflow job id -> PASS");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /AGENTS\.md: CRLF\/CR line endings/.test(r.msg) && r.level === "FAIL"),
@@ -614,6 +650,17 @@ fs.writeFileSync(transcript, JSON.stringify({
 stopOut = hookOutput(STOP, { transcript_path: transcript }, { HARNESS_PROJECT_DIR: stopRepo2 });
 ok(stopOut.trim() === "", "dirty только harness/local + отчёт объясняет intentional uncommitted -> Stop молчит");
 try { fs.rmSync(stopRepo2, { recursive: true, force: true }); fs.rmSync(transcript, { force: true }); } catch {}
+const stopRepo3 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-review-"));
+execFileSync("git", ["init", "-q"], { cwd: stopRepo3 });
+fs.writeFileSync(path.join(stopRepo3, ".gitattributes"), "x");
+const transcript2 = path.join(os.tmpdir(), "harness-stop-review-transcript-" + process.pid + ".jsonl");
+fs.writeFileSync(transcript2, JSON.stringify({
+  type: "assistant",
+  message: { role: "assistant", content: "Повторный review завершён: изменения я не правил и не коммитил. VERIFY проверено частично, commit/PR не делал, потому что задача была именно на ревью." },
+}) + "\n");
+stopOut = hookOutput(STOP, { transcript_path: transcript2 }, { HARNESS_PROJECT_DIR: stopRepo3 });
+ok(stopOut.trim() === "", "review-only отчёт объясняет dirty tree -> Stop не перекрывает финальный ответ");
+try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcript2, { force: true }); } catch {}
 
 // ---------- installer (install.js) ----------
 console.log("\ninstaller:");

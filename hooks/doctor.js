@@ -19,6 +19,7 @@ function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "ut
 function gitSafe(args) { try { return git(args); } catch { return null; } }
 function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
 function tracked(rel) { return gitSafe(["ls-files", "--error-unmatch", rel]) !== null; }
+function readText(rel) { try { return fs.readFileSync(path.join(ROOT, rel), "utf8"); } catch { return ""; } }
 function checkTextFile(rel) {
   const p = path.join(ROOT, rel);
   let buf;
@@ -28,6 +29,25 @@ function checkTextFile(rel) {
   else if (buf.includes(0)) fail(rel + " содержит NUL-байты");
   else if (buf.includes(13)) fail(rel + ": CRLF/CR line endings (нужен LF)");
   else ok(rel + ": LF, UTF-8, без NUL");
+}
+function workflowJobIds(rel) {
+  const text = readText(rel);
+  const lines = text.split(/\r?\n/);
+  const ids = [];
+  let inJobs = false;
+  for (const line of lines) {
+    if (/^jobs:\s*$/.test(line)) { inJobs = true; continue; }
+    if (inJobs && /^\S/.test(line) && !/^jobs:\s*$/.test(line)) break;
+    const m = inJobs && line.match(/^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/);
+    if (m) ids.push(m[1]);
+  }
+  return ids;
+}
+function rulesetRequiredChecks(rel) {
+  let ruleset = {};
+  try { ruleset = JSON.parse(readText(rel)); } catch { return []; }
+  const rsc = (ruleset.rules || []).find((r) => r.type === "required_status_checks");
+  return (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context).filter(Boolean);
 }
 
 // node / git
@@ -153,6 +173,16 @@ if (fs.existsSync(cogPath)) {
   /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: нужен from_latest_tag=true для release bump от последнего v* tag");
   /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: нужен ignore_merge_commits=true");
   /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: нужен tag_prefix=\"v\"");
+}
+
+const workflowPath = ".github/workflows/ci.yml";
+const rulesetPath = ".github/rulesets/main.json";
+if (fs.existsSync(path.join(ROOT, workflowPath)) && fs.existsSync(path.join(ROOT, rulesetPath))) {
+  const jobs = workflowJobIds(workflowPath);
+  const required = rulesetRequiredChecks(rulesetPath);
+  const missing = required.filter((ctx) => !jobs.includes(ctx));
+  if (missing.length) fail(`ruleset required check(s) not published by CI workflow: ${missing.join(", ")} (jobs: ${jobs.join(", ") || "none"})`);
+  else if (required.length) ok("ruleset required checks match CI workflow job ids");
 }
 
 // report

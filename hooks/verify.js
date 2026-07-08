@@ -130,7 +130,10 @@ const DEFAULT_STACKS = [
     { name: "test", run: "cargo test --all" },
   ] },
   { id: "dotnet", markers: ["*.sln", "*.csproj"], steps: [
-    { name: "format", run: "dotnet format --verify-no-changes" },
+    // Existing C# repos often need a one-time formatting migration. Keep the
+    // default bootstrap gate warning-only; target repos can make this required
+    // by overriding verify.stacks after the format baseline lands.
+    { name: "format", run: "dotnet format --verify-no-changes", optional: true },
     { name: "build", run: "dotnet build --nologo -warnaserror" },
     { name: "test", run: "dotnet test --nologo" },
   ] },
