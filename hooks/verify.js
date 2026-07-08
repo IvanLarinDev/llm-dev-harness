@@ -35,6 +35,7 @@
 //          ИЛИ debug-аудит нашёл hard-находку.
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { changedFiles, globToRe } = require(path.join(__dirname, "_lib.js"));
@@ -128,7 +129,7 @@ const DEFAULT_STACKS = [
     { name: "test", run: "cargo test --all" },
   ] },
   { id: "dotnet", markers: ["*.sln", "*.csproj"], steps: [
-    { name: "format", run: "dotnet format --verify-no-changes", optional: true },
+    { name: "format", run: "dotnet format --verify-no-changes" },
     { name: "build", run: "dotnet build --nologo -warnaserror" },
     { name: "test", run: "dotnet test --nologo" },
   ] },
@@ -205,19 +206,71 @@ function detect(root, stacks) {
 
 // ---------- run ----------
 function runStep(step, cwd) {
-  const r = spawnSync(step.run, { cwd, shell: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT" };
-  return { ok: r.status === 0, code: r.status, stdout: String(r.stdout || ""), stderr: String(r.stderr || "") };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verify-step-"));
+  const stdoutPath = path.join(dir, "stdout.log");
+  const stderrPath = path.join(dir, "stderr.log");
+  const outFd = fs.openSync(stdoutPath, "w");
+  const errFd = fs.openSync(stderrPath, "w");
+  let r;
+  try {
+    r = spawnSync(step.run, { cwd, shell: true, stdio: ["ignore", outFd, errFd] });
+  } finally {
+    try { fs.closeSync(outFd); } catch {}
+    try { fs.closeSync(errFd); } catch {}
+  }
+  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT", stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
+  return { ok: r.status === 0, code: r.status, stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
 }
 function emitStepOutput(res) {
-  if (res.stdout) process.stdout.write(res.stdout);
-  if (res.stderr) process.stderr.write(res.stderr);
+  for (const [file, stream] of [[res.stdoutPath, process.stdout], [res.stderrPath, process.stderr]]) {
+    emitOutputFile(file, stream);
+  }
+}
+function emitOutputFile(file, stream) {
+  if (!file) return;
+  let fd;
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size === 0) return;
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (!n) break;
+      stream.write(buf.subarray(0, n));
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+  }
 }
 function diagnosticExcerpt(res, maxLines = 8) {
-  const text = [res.stderr, res.stdout].filter(Boolean).join("\n").trim();
+  const text = [res.stderrPath, res.stdoutPath].map((file) => readSmallOutputFile(file)).filter(Boolean).join("\n").trim();
   if (!text) return "";
   const lines = text.split(/\r?\n/).map((s) => s.trimEnd()).filter((s) => s.trim()).slice(0, maxLines);
   return lines.join("\n");
+}
+function readSmallOutputFile(file, maxBytes = 64 * 1024) {
+  if (!file) return "";
+  try {
+    const st = fs.statSync(file);
+    if (!st.isFile() || st.size === 0) return "";
+    if (st.size <= maxBytes) return fs.readFileSync(file, "utf8");
+    const start = Math.max(0, st.size - maxBytes);
+    const fd = fs.openSync(file, "r");
+    try {
+      const buf = Buffer.alloc(st.size - start);
+      fs.readSync(fd, buf, 0, buf.length, start);
+      return (start > 0 ? "[output truncated]\n" : "") + buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+function cleanupStepOutput(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
 // ---------- main ----------
@@ -283,34 +336,38 @@ function diagnosticExcerpt(res, maxLines = 8) {
       const label = `${t.stack.id}/${step.name} @ ${t.rel}`;
       console.log(`\n▶ ${label}: ${step.run}`);
       const res = runStep(step, t.dir);
-      if (res.ok) { emitStepOutput(res); summary.push(`✓ ${label}`); continue; }
-      if (res.notFound || res.code === 9009 || res.code === 127) {
-        if (step.optional) {
-          warnings.push(`${label}: optional tool not found — step skipped`);
-          summary.push(`⚠ ${label} (инструмент не найден — пропущено)`);
+      try {
+        if (res.ok) { emitStepOutput(res); summary.push(`✓ ${label}`); continue; }
+        if (res.notFound || res.code === 9009 || res.code === 127) {
+          if (step.optional) {
+            warnings.push(`${label}: optional tool not found — step skipped`);
+            summary.push(`⚠ ${label} (инструмент не найден — пропущено)`);
+            continue;
+          }
+          summary.push(`✗ ${label} (инструмент не найден)`);
+          emitStepOutput(res);
+          failed = `${label}: команда не найдена — установи инструмент или переопредели шаг в harness.config.json`;
+          if (failFast) break outer; else continue;
+        }
+        if (step.okCodes && step.okCodes[res.code] !== undefined) {
+          const detail = diagnosticExcerpt(res);
+          warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}${detail ? "\n" + detail : ""}`);
+          summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`);
           continue;
         }
-        summary.push(`✗ ${label} (инструмент не найден)`);
+        if (step.optional) {
+          const detail = diagnosticExcerpt(res);
+          warnings.push(`${label}: optional step exited ${res.code}${detail ? "\n" + detail : "\n(no diagnostics captured)"}`);
+          summary.push(`⚠ ${label} (optional, exit ${res.code})`);
+          continue;
+        }
+        summary.push(`✗ ${label} (exit ${res.code})`);
         emitStepOutput(res);
-        failed = `${label}: команда не найдена — установи инструмент или переопредели шаг в harness.config.json`;
-        if (failFast) break outer; else continue;
+        failed = `${label}: exit ${res.code}`;
+        if (failFast) break outer;
+      } finally {
+        if (res.cleanup) res.cleanup();
       }
-      if (step.okCodes && step.okCodes[res.code] !== undefined) {
-        const detail = diagnosticExcerpt(res);
-        warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}${detail ? "\n" + detail : ""}`);
-        summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`);
-        continue;
-      }
-      if (step.optional) {
-        const detail = diagnosticExcerpt(res);
-        warnings.push(`${label}: optional step exited ${res.code}${detail ? "\n" + detail : "\n(no diagnostics captured)"}`);
-        summary.push(`⚠ ${label} (optional, exit ${res.code})`);
-        continue;
-      }
-      summary.push(`✗ ${label} (exit ${res.code})`);
-      emitStepOutput(res);
-      failed = `${label}: exit ${res.code}`;
-      if (failFast) break outer;
     }
   }
 

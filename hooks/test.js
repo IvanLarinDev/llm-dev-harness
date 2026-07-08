@@ -423,11 +423,11 @@ try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 // ---------- verify runner ----------
 console.log("\nverify runner:");
 function verifyExit(root) {
-  try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe" }); return 0; }
+  try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe", maxBuffer: 8 * 1024 * 1024 }); return 0; }
   catch (e) { return e.status || 1; }
 }
 function verifyOutput(root) {
-  try { return execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe" }); }
+  try { return execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe", maxBuffer: 8 * 1024 * 1024 }); }
   catch (e) { return String(e.stdout || "") + String(e.stderr || ""); }
 }
 function verifyList(root) {
@@ -442,6 +442,10 @@ fs.writeFileSync(path.join(vtmp, "pyproject.toml"), "[project]\n");
 const ids = verifyList(vtmp).plan.map((p) => p.stack);
 ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
   "авто-детект rust/dotnet/python по маркер-файлам");
+const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
+ok(dotnetPlan && dotnetPlan.steps.includes("format"), "dotnet verify включает format");
+ok(!/dotnet format --verify-no-changes[^}]*optional/.test(readRepo("hooks/verify.js")),
+  "dotnet format --verify-no-changes обязателен, а не warning-only optional");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
 fs.writeFileSync(path.join(etmp, "stepA.js"), "process.exit(0)");
@@ -457,6 +461,9 @@ ok(verifyExit(etmp) === 0, "optional-шаг падает -> warning, не про
 const optOut = verifyOutput(etmp);
 ok(/optional warnings[\s\S]*error WHITESPACE: fix me[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut),
   "verify UX: optional diagnostics excerpt appears before summary/final passed");
+fs.writeFileSync(path.join(etmp, "big.js"), "process.stdout.write('x'.repeat(2 * 1024 * 1024));");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "big", run: "node big.js" }] }] } }));
+ok(verifyExit(etmp) === 0, "required step с большим stdout проходит без spawnSync maxBuffer failure");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "допустимо" } }] }] } }));
 ok(verifyExit(etmp) === 0, "okCodes: допустимый ненулевой exit (напр. pytest 5 «нет тестов») -> warning, не провал");
 
