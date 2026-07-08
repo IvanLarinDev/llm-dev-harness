@@ -8,6 +8,9 @@ build/
 tmp/
 .tmp/
 
+# agent runtime (Claude Code local/project settings — не коммитим)
+.claude/
+
 # OS / editor
 .DS_Store
 Thumbs.db
