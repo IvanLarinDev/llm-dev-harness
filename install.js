@@ -66,7 +66,7 @@ function parseArgs(argv) {
 function defaultConfig() {
   return JSON.stringify({
     ui: { globs: DEFAULT_UI_GLOBS, mockups: DEFAULT_MOCKUPS },
-    debugAudit: { enabled: true, base: "main", soft: false, exclude: ["hooks/**"] },
+    debugAudit: { enabled: true, base: "main", soft: false, exclude: [], strict: true },
   }, null, 2) + "\n";
 }
 
@@ -203,8 +203,12 @@ const a = parseArgs(process.argv.slice(2));
     if (a.withRuleset) out.ruleset = runRuleset();
   }
 
-  const hardFail = out.settings.status === "error";
-  return finish(out, !hardFail, hardFail ? "установка с ошибкой (см. notes)" : null);
+  const hardFailures = [];
+  if (out.settings.status === "error") hardFailures.push("settings");
+  if (!a.dryRun && out.lefthook && !out.lefthook.ok) hardFailures.push("lefthook");
+  if (!a.dryRun && out.doctor && out.doctor.ok === false) hardFailures.push("doctor");
+  return finish(out, hardFailures.length === 0,
+    hardFailures.length ? "установка не fully enforceable: " + hardFailures.join(", ") + " (см. notes/doctor)" : null);
 })();
 
 function finish(out, ok, reason) {
