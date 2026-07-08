@@ -2,6 +2,7 @@
 # ломает запуск на macOS/Linux ("node\r: not found"). Форсим LF независимо от autocrlf.
 hooks/*.js    text eol=lf
 hooks/**/*.js text eol=lf
+install.js    text eol=lf
 *.sh          text eol=lf
 
 # Конфиги — тоже LF: иначе на Windows (autocrlf=true) рабочая копия становится CRLF,
