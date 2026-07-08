@@ -154,6 +154,25 @@ ok(bp("cat hooks/agent/guard.js") === 0, "НЕ блок: чтение хука (
 ok(bp("git add hooks/ lefthook.yml") === 0, "НЕ блок: git add файлов харнесса");
 ok(bp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "ACK_BYPASS=1 разрешает shell-правку");
 
+// ---------- guard: обход защиты через инлайн-eval интерпретатора (нота) ----------
+console.log("\nguard: interpreter-eval write hint:");
+ok(/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1"))),
+  "node -e writeFileSync в hooks/ -> нота про обход через интерпретатор");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1b")) === 0,
+  "нота НЕ жёсткий блок (exit 0) — путь в -e мог бы быть безобидным");
+ok(/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook.yml','w').write('x')\"" } }, sess("ie2"))),
+  "python -c open('lefthook.yml','w') -> нота");
+ok(/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, sess("ie3"))),
+  "bash -c 'rm -rf hooks/' -> нота (глагол спрятан в кавычках от write-детекции)");
+ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"console.log(1+1)\"" } }, sess("ie4"))),
+  "node -e без записи и без пути харнесса -> без ноты");
+ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('build/out.txt','x')\"" } }, sess("ie5"))),
+  "node -e запись в обычный файл (build/) -> без ноты");
+ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "ssh -c aes256 host" } }, sess("ie6"))),
+  "ssh -c … -> без ноты (не интерпретатор, `sh` в `ssh` не матчит по границе слова)");
+ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js" } }, sess("ie7"))),
+  "node hooks/verify.js (без -e) -> без ноты");
+
 // ---------- guard: сбой стриминга ----------
 console.log("\nguard: stream corruption:");
 ok(bp("cd /x && echo garbage 183<tool_call>") === 2, "блок: мусор tool-разметки (<tool_call>)");

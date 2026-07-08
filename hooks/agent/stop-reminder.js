@@ -23,7 +23,7 @@ const path = require("path");
 
   let status = "";
   try {
-    status = execSync("git status --porcelain", { cwd, stdio: ["ignore", "pipe", "ignore"] })
+    status = execSync("git status --porcelain", { cwd, stdio: ["ignore", "pipe", "ignore"], timeout: 3000, killSignal: "SIGKILL" })
       .toString().trim();
   } catch {}
   if (!status) process.exit(0);

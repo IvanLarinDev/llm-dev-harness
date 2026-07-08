@@ -19,9 +19,12 @@
 // (top-level for simpler runners, hookSpecificOutput for Claude Code) + stderr mirror.
 
 function readStdin() {
-  // Idle-timeout read: жёсткий дедлайн резал большие payload'ы посередине.
-  // Таймер сбрасывается каждым чанком; лимит размера даёт флаг truncated —
-  // по нему guard решает fail-closed вместо слепого allow.
+  // Чтение stdin без жёсткого дедлайна. Основной сигнал конца — событие `end`.
+  // На паузе потока (idle) завершаемся ТОЛЬКО если буфер уже парсится как целый
+  // JSON: иначе это середина рывкового payload'а (GC-пауза, медленный пайп) —
+  // ждём остаток до общего капа, а не мис-фреймим на неполных данных (иначе
+  // легитимный вызов ловил ложный fail-closed блок). Лимит размера → truncated,
+  // по нему guard решает fail-closed. Пустой idle держим до капа (ручной запуск).
   const IDLE_MS = 300, CAP_MS = 5000, MAX_BYTES = 2 * 1024 * 1024;
   return new Promise((resolve) => {
     let data = "", done = false, idle = null, truncated = false;
@@ -31,7 +34,13 @@ function readStdin() {
       resolve({ data, truncated });
     };
     const cap = setTimeout(finish, CAP_MS);
-    const arm = () => { clearTimeout(idle); idle = setTimeout(finish, IDLE_MS); };
+    const onIdle = () => {
+      if (truncated) return finish();       // обрезано по лимиту — дальше не ждём
+      if (!data) return arm();              // ничего не пришло — ждём (до капа)
+      try { JSON.parse(data); finish(); }   // целый JSON — можно завершать
+      catch { arm(); }                      // ещё неполный — ждём остаток
+    };
+    const arm = () => { clearTimeout(idle); idle = setTimeout(onIdle, IDLE_MS); };
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (c) => {
       const room = MAX_BYTES - data.length;
