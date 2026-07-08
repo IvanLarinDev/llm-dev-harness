@@ -12,11 +12,10 @@
 //     --root   repo root to resolve config + mockups (default: cwd)
 //
 // Exit 0 = gate satisfied (or no UI change), exit 1 = UI changed without approved mockups.
-// Internal error → exit 0 (never wedge unrelated work); missing git → treat as no changes.
+// Internal error → exit 0 (never wedge unrelated work), но с ГРОМКИМ warning.
 
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -30,48 +29,9 @@ function parseArgs(argv) {
   return a;
 }
 
-// ---------- config ----------
-const DEFAULTS = {
-  globs: ["**/*.ui", "**/*.qml", "**/*.slint", "**/ui/**", "**/views/**", "**/widgets/**"],
-  mockups: { dir: "design/mockups", min: 4, mockupExtensions: [".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".pdf"], approvalFile: "APPROVED" },
-};
-function loadConfig(root) {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(path.join(root, "harness.config.json"), "utf8"));
-    const ui = cfg.ui || {};
-    return {
-      globs: ui.globs || DEFAULTS.globs,
-      mockups: { ...DEFAULTS.mockups, ...(ui.mockups || {}) },
-    };
-  } catch {
-    return DEFAULTS;
-  }
-}
-
-// ---------- glob → regex (supports **, *, literal) ----------
-function globToRe(glob) {
-  const re = glob
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\//g, "@@DS@@")
-    .replace(/\*\*/g, "@@SS@@")
-    .replace(/\*/g, "[^/]*")
-    .replace(/@@DS@@/g, "(?:.*/)?")
-    .replace(/@@SS@@/g, ".*");
-  return new RegExp("^" + re + "$");
-}
-
-// ---------- changed files ----------
-function changedFiles(a) {
-  if (a.files) return a.files;
-  for (const args of [["diff", "--name-only", `${a.base}...HEAD`], ["diff", "--name-only", a.base]]) {
-    try {
-      const out = execFileSync("git", args, { cwd: a.root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-      const list = out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-      if (list.length) return list;
-    } catch {}
-  }
-  return [];
-}
+// ---------- config (общая с guard.js: hooks/_lib.js) ----------
+// changedFiles — общий с verify.js (--changed): единый источник git-diff логики.
+const { globToRe, loadConfig, changedFiles } = require(path.join(__dirname, "_lib.js"));
 
 // ---------- mockups scan ----------
 // Одобренный набор засчитывается ТОЛЬКО если он затронут в diff этой же ветки —
@@ -112,9 +72,17 @@ function hasApprovedMockups(root, m, changed) {
   const cfg = loadConfig(a.root);
   const res = { ok: true, uiChanged: [], mockups: null };
 
-  const uiRes = cfg.globs.map(globToRe);
+  const uiRes = cfg.uiGlobs.map(globToRe);
   const mockRoot = cfg.mockups.dir.replace(/\\/g, "/").replace(/\/$/, "");
-  const files = changedFiles(a).map((f) => f.replace(/\\/g, "/"));
+  const cf = changedFiles(a.base, a.root, a.files);
+  if (cf.error) {
+    // fail-open, но ГРОМКО: молчаливый пропуск = гейта нет.
+    const warn = `⚠️ design-gate: ${cf.error} — гейт ПРОПУЩЕН, UI-изменения не проверены. Укажи базу явно: --base <ref>.`;
+    if (a.json) console.log(JSON.stringify({ ...res, skipped: true, warn }));
+    else console.error(warn);
+    process.exit(0);
+  }
+  const files = cf.files.map((f) => f.replace(/\\/g, "/"));
 
   res.uiChanged = files.filter(
     (f) => !f.startsWith(mockRoot + "/") && uiRes.some((re) => re.test(f))

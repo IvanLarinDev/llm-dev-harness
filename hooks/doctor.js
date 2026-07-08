@@ -42,6 +42,30 @@ if (!inRepo) {
     } catch {}
   }
   wired ? ok("lefthook wired into .git/hooks") : warn("хуки не установлены — запусти: lefthook install");
+
+  // .git должна допускать полный жизненный цикл lock-файла (write + unlink): git
+  // обновляет index и refs через <name>.lock -> rename/unlink. На FS без удаления
+  // (некоторые сетевые/контейнерные/FUSE mount'ы) commit/checkout/rebase падают на
+  // "index.lock: File exists". Проверяем реальной пробой, а не предположением —
+  // именно этот отказ среды раньше не ловился.
+  const gitDir = gitSafe(["rev-parse", "--git-dir"]) || ".git";
+  const gitDirAbs = path.isAbsolute(gitDir) ? gitDir : path.join(ROOT, gitDir);
+  const probe = path.join(gitDirAbs, ".doctor-lock-probe-" + process.pid);
+  try {
+    fs.writeFileSync(probe, "x");
+    try {
+      fs.unlinkSync(probe);
+      ok(".git допускает атомарные lock-операции (write + unlink)");
+    } catch {
+      fail(".git запрещает удаление файлов — git не уберёт *.lock (index.lock/ref.lock); commit/checkout/rebase упадут. Проверь mount (read-delete/FUSE) или права.");
+    }
+  } catch {
+    fail(".git недоступна для записи — git add/commit/checkout работать не будут. Проверь права/mount.");
+  }
+  try {
+    if (fs.existsSync(path.join(gitDirAbs, "index.lock")))
+      warn("залипший .git/index.lock — удали, если ни один git-процесс не запущен (иначе add/commit блокируются)");
+  } catch {}
 }
 
 // runner + delegated tools in PATH (WARN, not FAIL — CI provides them)

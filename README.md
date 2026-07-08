@@ -3,11 +3,15 @@
 Экономичный dev-loop харнесс для агентных правок кода — работает с **любой LLM/раннером**.
 Каждый заход в код идёт через один цикл (EXPLORE → PLAN → IMPLEMENT+TEST → VERIFY →
 COMMIT → PR → REPORT), и цикл гарантируется исполняемыми хуками, а не инструкциями.
-Полное описание — в [`AGENTS.md`](./AGENTS.md).
+**Канонический документ — [`AGENTS.md`](./AGENTS.md)**: loop, правила этапов, слои,
+release flow, env-переменные. Здесь — только стек и установка.
 
-> **Честная граница.** Локальные хуки — **гигиена** (ловят ошибки до коммита), а не защита
-> от состязательного агента: у агента write-доступ к рабочему дереву. **Настоящий
-> enforcement — только серверный ruleset** (`.github/rulesets/main.json`).
+> **Честная граница.** Локальные хуки — **гигиена** (ловят ошибки и небрежность до
+> коммита), а не защита от состязательного агента: у агента write-доступ к рабочему
+> дереву, и намеренный обход (подстановки переменных, кавычки-конкатенация) regex-слоем
+> не ловится. **Настоящий enforcement — только серверный ruleset**
+> (`.github/rulesets/main.json`; required-check запинен на GitHub Actions через
+> `integration_id`, иначе статус подделывается через API).
 
 ## Стек
 
@@ -24,6 +28,8 @@ Commit-lint / secret-scan / release / hook-раннер делегированы
 | GUI DESIGN-гейт | *своё* | [`hooks/design-gate.js`](./hooks/design-gate.js) |
 | Agent-хук (обход/циклы/подсказки) | *своё* | [`hooks/agent/guard.js`](./hooks/agent/guard.js) |
 
+Общие хелперы хуков (глобы, конфиг, нормализация путей) — [`hooks/_lib.js`](./hooks/_lib.js).
+
 ## Установка
 
 ```bash
@@ -34,21 +40,9 @@ node hooks/doctor.js           # проверить окружение: lefthook
 
 Слой 2 (агент, опционально): скопировать блок `hooks` из
 [`settings.example.json`](./settings.example.json) в `.claude/settings.json` —
-это один хук `guard.js` на PreToolUse + условный `stop-reminder.js` на Stop.
-
-## Три слоя
-
-**0 — серверный ruleset (единственный настоящий гейт):** require PR, зелёный check
-`verify`, блок force-push/delete main. `--no-verify` и правка локальных хуков его не обходят.
-
-**1 — lefthook (гигиена):** commit-msg → `cog verify` + запрет соавторства;
-pre-commit → gitleaks + запрет коммита на main; pre-push → `verify.js` + `design-gate.js`.
-Escape (человеку): `HARNESS_ALLOW_MAIN=1` (релиз/hotfix), `LEFTHOOK=0` (разовый пропуск).
-
-**2 — agent-adapter:** `guard.js` блокирует попытки агента обойти харнесс
-(`--no-verify`, `core.hooksPath`, `LEFTHOOK=0`, правка `hooks/`/конфигов харнесса),
-дегенеративные циклы (тривиальные серии, N× одно действие, чередование A-B-A-B) и
-даёт ранние подсказки (main, DESIGN-стадия). Осознанный обход: `HARNESS_ACK_BYPASS=1`.
+один хук `guard.js` на PreToolUse + условный `stop-reminder.js` на Stop.
+Контракт хуков: exit 0 = allow, exit 2 = block; notes — `hookSpecificOutput.
+additionalContext` (PreToolUse), Stop — `{"decision":"block","reason":…}`.
 
 ## Проверка
 
@@ -60,29 +54,5 @@ node hooks/doctor.js                   # окружение
 node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
 ```
 
-## CI
-
-`.github/workflows/ci.yml` (job `verify` — это контекст required-check в ruleset):
-gitleaks + `cog check` + `verify.js` + `design-gate.js` на push в main и на PR.
-На **GitHub Free + private** workflow работает, но required стать не может (BACKLOG P0-0).
-
-## GUI: DESIGN-стадия
-
-UI-изменение (глобы в [`harness.config.json`](./harness.config.json)) проходит pre-push/CI
-только если в diff ветки затронут одобренный набор мокапов:
-
-```bash
-node hooks/new-mockups.js <feature>   # ≥4 стилистически разных HTML-мокапа
-# показать пользователю → approval → создать design/mockups/<feature>/APPROVED
-# повторное использование старого набора: дописать строку в его APPROVED
-```
-
-## Env
-
-| Переменная | Назначение | Default |
-|------------|-----------|---------|
-| `HARNESS_ALLOW_MAIN=1` | коммит на main (релиз/hotfix) | — |
-| `HARNESS_ACK_BYPASS=1` | одобренный пользователем обход guard.js | — |
-| `HARNESS_LOOP_THRESHOLD` | порог циклов shell | `5` |
-| `HARNESS_TOOLLOOP_THRESHOLD` | порог циклов file-tools | `12` |
-| `LEFTHOOK=0` | пропуск lefthook (человек; агенту заблокирует guard) | — |
+CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).
+Слои, DESIGN-стадия, release flow и env-переменные — в [`AGENTS.md`](./AGENTS.md).
