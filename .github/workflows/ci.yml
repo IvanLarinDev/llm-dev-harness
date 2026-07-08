@@ -1,15 +1,20 @@
 name: verify
-# CI mirror of the local harness (BACKLOG P0-1). Runs the SAME checks as the
-# git-native / VERIFY layer, but server-side where `git commit --no-verify` cannot
-# skip them. On GitHub Free + private this workflow RUNS and reports status, but it
-# cannot be made a *required* check (that needs Pro/Team or a public repo — see P0-0).
+# CI mirror of the local harness — the SAME checks, server-side where local hooks and
+# `--no-verify` cannot skip them. The job id `verify` is the context referenced by the
+# branch ruleset (.github/rulesets/main.json -> required_status_checks). Renaming the job
+# means updating the ruleset too.
 #
-# NOTE: actions are pinned to major-version tags for now; pin to full commit SHAs
-# per supply-chain best practice (BACKLOG P1-9).
+# On GitHub Free + private this workflow RUNS and reports status but cannot be *required*
+# (rulesets need Pro/Team or a public repo — see BACKLOG P0-0).
+#
+# NOTE: actions are pinned to major-version tags; pin to full commit SHAs per
+# supply-chain best practice (BACKLOG P1-9). Dependabot keeps them current.
 
 on:
+  # push только на main (пост-merge контроль); ветки проверяются через PR —
+  # иначе каждый PR-коммит гоняет CI дважды (push + pull_request).
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -28,17 +33,23 @@ jobs:
         with:
           node-version: "22"
 
+      # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+      # Conventional Commits across the PR's commits — cocogitto (`cog check`).
+      - name: Conventional commits (cocogitto)
+        if: github.event_name == 'pull_request'
+        uses: cocogitto/cocogitto-action@v3
+
       # Executable VERIFY: auto-detects stacks and runs lint/build/test fail-fast.
       # For this repo that runs the harness self-test suite (node hooks/test.js).
       - name: VERIFY (verify.js)
         run: node hooks/verify.js
 
-      # Conventional commits + no co-authorship across the PR's commits.
-      - name: Conventional commits
-        if: github.event_name == 'pull_request'
-        run: node hooks/lint-commits.js --base ${{ github.event.pull_request.base.sha }}
-
-      # DESIGN-gate: UI changes require an approved mockup set (>=4).
+      # DESIGN-gate: UI changes require an approved mockup set touched in the same diff.
       - name: DESIGN-gate
         if: github.event_name == 'pull_request'
         run: node hooks/design-gate.js --base ${{ github.event.pull_request.base.sha }}

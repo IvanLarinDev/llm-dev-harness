@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// design-gate.js — DESIGN-stage gate (BACKLOG P1-5).
+// design-gate.js — DESIGN-stage gate.
 //
-// Policy (from the user's practice): GUI work must be preceded by design review.
-// If a branch's changes touch UI paths, the branch must also contain an APPROVED set
-// of >= N stylistically-distinct mockups. This makes "always require 4 mockups" an
-// executable gate, not a reminder.
+// Policy: GUI work must be preceded by design review. If a branch's changes touch UI
+// paths, the SAME branch diff must also touch an APPROVED set of >= N mockups —
+// otherwise one old approval would open the gate for all future UI work forever.
 //
 // Usage:
 //   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json]
@@ -50,7 +49,6 @@ function loadConfig(root) {
 }
 
 // ---------- glob → regex (supports **, *, literal) ----------
-// Placeholder tokens are plain-ASCII and cannot appear in a real path glob.
 function globToRe(glob) {
   const re = glob
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -76,23 +74,35 @@ function changedFiles(a) {
 }
 
 // ---------- mockups scan ----------
-function hasApprovedMockups(root, m) {
+// Одобренный набор засчитывается ТОЛЬКО если он затронут в diff этой же ветки —
+// иначе один старый approval навсегда открывал бы гейт для любых будущих UI-правок.
+// Повторное использование уже одобренного набора: допиши строку в его APPROVED
+// (дата/ветка) — файл попадёт в diff, и связь «этот набор ↔ это изменение» явная.
+function hasApprovedMockups(root, m, changed) {
   const base = path.join(root, m.dir);
+  const mockRoot = m.dir.replace(/\\/g, "/").replace(/\/$/, "");
   let dirs;
   try { dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()); }
   catch { return { ok: false, reason: `нет каталога ${m.dir}/` }; }
 
+  const stale = [];
   for (const d of dirs) {
     const dir = path.join(base, d.name);
     let files;
     try { files = fs.readdirSync(dir); } catch { continue; }
     const mockups = files.filter((f) => m.mockupExtensions.includes(path.extname(f).toLowerCase()));
     const approved = files.includes(m.approvalFile);
-    if (mockups.length >= m.min && approved) return { ok: true, feature: d.name, count: mockups.length };
+    if (mockups.length < m.min || !approved) continue;
+    if (changed.some((c) => c.startsWith(`${mockRoot}/${d.name}/`)))
+      return { ok: true, feature: d.name, count: mockups.length };
+    stale.push(d.name);
   }
   return {
     ok: false,
-    reason: `нет ни одного ${m.dir}/<feature>/ с >=${m.min} мокапами и файлом ${m.approvalFile}`,
+    reason: stale.length
+      ? `одобренные наборы (${stale.join(", ")}) не затронуты в diff этой ветки — ` +
+        `привяжи набор к изменению: допиши строку в ${m.dir}/<feature>/${m.approvalFile}`
+      : `нет ${m.dir}/<feature>/ с >=${m.min} мокапами и файлом ${m.approvalFile}, затронутого в этой ветке`,
   };
 }
 
@@ -112,25 +122,25 @@ function hasApprovedMockups(root, m) {
 
   if (res.uiChanged.length === 0) {
     if (a.json) console.log(JSON.stringify({ ...res, note: "нет изменений в UI-путях" }));
-    else console.log("✅ design-gate: изменений в UI-путях нет — гейт не требуется.");
+    else console.log("OK design-gate: изменений в UI-путях нет — гейт не требуется.");
     process.exit(0);
   }
 
-  const mk = hasApprovedMockups(a.root, cfg.mockups);
+  const mk = hasApprovedMockups(a.root, cfg.mockups, files);
   res.mockups = mk;
   if (mk.ok) {
     if (a.json) console.log(JSON.stringify(res));
-    else console.log(`✅ design-gate: UI-изменения есть, найден одобренный набор мокапов (${mk.feature}, ${mk.count} шт.).`);
+    else console.log(`OK design-gate: UI-изменения есть, одобренный набор мокапов затронут в ветке (${mk.feature}, ${mk.count} шт.).`);
     process.exit(0);
   }
 
   if (a.json) { console.log(JSON.stringify({ ...res, ok: false })); process.exit(1); }
   console.error(
-    `🛑 design-gate: изменения затрагивают GUI, но DESIGN-стадия не выполнена.\n` +
-      `   UI-файлы: ${res.uiChanged.slice(0, 8).join(", ")}${res.uiChanged.length > 8 ? " …" : ""}\n` +
+    `BLOCK design-gate: изменения затрагивают GUI, но DESIGN-стадия не выполнена.\n` +
+      `   UI-файлы: ${res.uiChanged.slice(0, 8).join(", ")}${res.uiChanged.length > 8 ? " ..." : ""}\n` +
       `   Требуется: ${mk.reason}.\n` +
-      `   Сгенерируй мокапы:  node hooks/new-mockups.js <feature>\n` +
-      `   Затем получи approval и создай пустой файл ${cfg.mockups.dir}/<feature>/${cfg.mockups.approvalFile}.\n` +
+      `   Новый набор:  node hooks/new-mockups.js <feature> → approval → создай ${cfg.mockups.dir}/<feature>/${cfg.mockups.approvalFile}.\n` +
+      `   Уже одобренный набор: допиши строку в его ${cfg.mockups.approvalFile}, чтобы он попал в diff ветки.\n` +
       `   Политика: для нового/изменяемого GUI — >=${cfg.mockups.min} стилистически разных мокапа + approval.`
   );
   process.exit(1);

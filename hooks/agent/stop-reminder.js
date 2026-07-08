@@ -1,36 +1,33 @@
 #!/usr/bin/env node
-// stop-reminder.js — AGENT-ADAPTER hook (runtime-agnostic), note-only.
-// Fires when the agent tries to end its turn. Reminds it not to declare the loop
-// done before VERIFY / COMMIT / REPORT, and surfaces uncommitted work.
-// Never blocks (exit 0); prints a note (stdout JSON + stderr mirror).
+// stop-reminder.js — note-only Stop-хук. Напоминает про VERIFY / COMMIT / REPORT
+// ТОЛЬКО если в рабочем дереве есть незакоммиченные изменения; чистое дерево → молчит
+// (иначе напоминание превращается в шум, который агент учится игнорировать).
 
 const { execSync } = require("child_process");
 const path = require("path");
 
-let projectDir = process.cwd();
-try {
-  const { parse } = require(path.join(__dirname, "_input.js"));
-  // parse() is async and reads stdin; a Stop payload may be empty — resolve fast.
-  parse().then((ctx) => finish(ctx.projectDir || projectDir)).catch(() => finish(projectDir));
-} catch {
-  finish(projectDir);
-}
-
-function gitStatus(cwd) {
+(async () => {
+  let cwd = process.cwd();
   try {
-    return execSync("git status --porcelain", { cwd, stdio: ["ignore", "pipe", "ignore"] })
-      .toString().trim();
-  } catch { return ""; }
-}
+    const { parse } = require(path.join(__dirname, "_input.js"));
+    const ctx = await parse();
+    if (ctx.projectDir) cwd = ctx.projectDir;
+  } catch {}
 
-function finish(cwd) {
-  const status = gitStatus(cwd);
+  let status = "";
+  try {
+    status = execSync("git status --porcelain", { cwd, stdio: ["ignore", "pipe", "ignore"] })
+      .toString().trim();
+  } catch {}
+  if (!status) process.exit(0);
+
+  const lines = status.split("\n");
+  const shown = lines.slice(0, 20).join("\n") + (lines.length > 20 ? `\n... ещё ${lines.length - 20}` : "");
   const text =
-    "ℹ️ stop-reminder: закрыты ли все шаги loop из AGENTS.md?\n" +
-    "  4. VERIFY (тесты/lint/build/git diff), 5. COMMIT на feature-ветке, 6. REPORT.\n" +
-    "  Если пользователь явно принял результат — loop завершён корректно.\n\n" +
-    (status ? "git status:\n" + status : "Рабочее дерево чистое (нечего коммитить).");
+    "stop-reminder: есть незакоммиченные изменения — закрыты ли шаги loop?\n" +
+    "  4. VERIFY (node hooks/verify.js + git diff review) -> 5. COMMIT на feature-ветке -> 6. REPORT.\n" +
+    "git status:\n" + shown;
   try { process.stdout.write(JSON.stringify({ additionalContext: text }) + "\n"); } catch {}
   process.stderr.write(text + "\n");
   process.exit(0);
-}
+})();
