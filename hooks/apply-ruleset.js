@@ -51,7 +51,7 @@ try {
 
   gh(apiArgs, { input: body });
   console.log(`✅ ruleset "${raw.name}" ${existingId ? "updated" : "created"} on ${repo} (branches: main/master).`);
-  console.log("   Enforced: require PR, required check «verify», block force-push & deletion.");
+  console.log("   Enforced: require PR + code-owner review, required check «verify», block force-push & deletion.");
   process.exit(0);
 } catch (e) {
   console.error("❌ apply-ruleset failed:", e.message);
