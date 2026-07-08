@@ -1,334 +1,133 @@
-# AGENTS.md — Dev Loop для этого проекта
+# AGENTS.md — Dev Loop
 
-> Цель: каждый заход агента в код идёт через один и тот же проверенный цикл.
-> Loop = **что** агент делает. Harness (plan mode / permissions / hooks / TodoWrite) =
-> **что гарантирует**, что он реально это делает.
+> Каждый заход агента в код идёт через один цикл. Всё, что можно проверить кодом,
+> гарантируют хуки (см. «Слои харнесса»); здесь остаётся только то, что хуками не покрыть.
 
 ## Loop
 
 ```
-1. EXPLORE          — изучить кодбазу, найти паттерны, оценить риски
-2. PLAN             — сформулировать план → ⏸ APPROVAL пользователя
-2.5 DESIGN (GUI)    — для UI-работы: ≥4 разных мокапа → ⏸ APPROVAL → APPROVED-маркер
-3. IMPLEMENT+TEST   — код + тесты (edge cases как тесты), не одно без другого
-4. VERIFY           — тесты → lint → build + анализ логов → git diff self-review
-   ├─ ошибки/новые warnings/silent-fallback → вернуться к 3 (внутренний цикл)
-   └─ всё зелёное (в т.ч. clean log)        → шаг 5
+1. EXPLORE          — изучить кодбазу, паттерны, риски
+2. PLAN             — план → ⏸ APPROVAL пользователя
+2.5 DESIGN (GUI)    — ≥4 мокапа → ⏸ APPROVAL → файл APPROVED
+3. IMPLEMENT+TEST   — код + тесты вместе (edge cases как тесты)
+4. VERIFY           — node hooks/verify.js + чтение вывода + git diff self-review
+   ├─ провал/новые warnings → вернуться к 3
+   └─ зелёное               → шаг 5
 5. COMMIT on branch → PR (не в main)
-6. REPORT           — что изменено / что проверено / что осталось / как протестировать
-7. ⏸ USER DECISION
-   ├─ принять      → DONE (условие выхода из loop)
-   ├─ доработать   → обратно к 2 или 3
-   └─ отклонить    → откат / новая итерация
+6. REPORT           — изменено / проверено / осталось / как тестировать
+7. ⏸ USER DECISION  — принять = DONE; доработать → к 2/3; отклонить → откат
 ```
 
-## Обязательные правила
+**Сокращение:** trivial-фикс (опечатка/однострочник) — можно без plan mode;
+VERIFY и feature-ветка обязательны всегда.
 
-### Этап 1 — EXPLORE (до каких-либо правок)
-- Прочитать релевантные файлы и существующие паттерны в репозитории.
-- Не предполагать структуру — проверять инструментами (`grep`, `find`, Read).
-- Если задача затрагивает >2–3 файлов или меняет поведение — это сигнал, что
-  нужен план.
+## Правила по этапам
 
-### Этап 2 — PLAN (обязательно через plan mode)
-- Нетривиальные задачи реализовать **только через plan mode**
-  (`EnterPlanMode` → `ExitPlanMode`). Внутри plan mode — explore + проектирование,
-  вне его — реализация только после approval.
-- План должен содержать: что меняем, почему, как тестируем, какие риски/edge cases.
+**1. EXPLORE.** Не предполагать структуру — проверять (`grep`/`find`/Read).
+Задача на >2–3 файла или смену поведения ⇒ нужен план.
 
-### Этап 2.5 — DESIGN (обязательно для GUI-работы)
-Любая работа, затрагивающая UI (`harness.config.json` → `ui.globs`: `*.ui`, `*.qml`, каталоги
-`ui/`, `views/`, `widgets/` и т.п.), проходит стадию дизайна **до написания GUI-кода**:
-- **Новый GUI** — подготовить **≥4 стилистически разных мокапа** (`node hooks/new-mockups.js <feature>`),
-  показать пользователю, выбрать направление.
-- **Изменение GUI** — мокап нового состояния (для крупных правок — тоже несколько вариантов).
-- После approval — создать пустой файл `design/mockups/<feature>/APPROVED`.
-- Гейт исполняемый: `hooks/design-gate.js` в VERIFY/CI **блокирует** (exit 1) UI-изменения без
-  одобренного набора мокапов; `hooks/agent/design-guard.js` предупреждает агента заранее при
-  правке UI-файла. Порог/пути/каталог настраиваются в `harness.config.json`.
+**2. PLAN.** Нетривиальное — только через plan mode (`EnterPlanMode` → `ExitPlanMode`,
+реализация после approval). В плане: что меняем, почему, как тестируем, риски/edge cases.
 
-### Этап 3 — IMPLEMENT + TEST
-- Код и тесты пишутся **вместе**. Edge cases оформляются как тесты, а не «подумал и забыл».
-- Если в проекте нет тест-раннера — явно сказать об этом в отчёте и предложить минимальный.
+**2.5 DESIGN (GUI).** UI-работа (глобы в `harness.config.json → ui`) до кода:
+новый GUI → ≥4 стилистически разных мокапа (`node hooks/new-mockups.js <feature>`),
+показать пользователю, выбрать направление; правка GUI → мокап нового состояния.
+После approval — файл `design/mockups/<feature>/APPROVED`.
+Гейт `hooks/design-gate.js` (pre-push + CI) пропускает UI-изменения только если
+одобренный набор **затронут в diff этой же ветки**; повторное использование старого
+набора — допиши строку в его APPROVED (дата/ветка), чтобы он попал в diff.
 
-### Этап 4 — VERIFY (до любого коммита)
-**Исполняемый прогон:** `node hooks/verify.js` — авто-детект стеков по маркер-файлам
-(Python/Qt → `ruff`+`pytest`; C#/WPF → `dotnet format`+`build -warnaserror`+`test`;
-Rust/Tauri → `cargo fmt`+`clippy -D warnings`+`test`, Tauri = node-фронт + rust-бэкенд;
-Node → `npm lint/build/test`) и прогон lint→build→test **fail-fast**, с warnings-as-errors
-по умолчанию. Стеки/шаги переопределяются в `harness.config.json` → `verify`.
-`node hooks/verify.js --list` показывает план без запуска. Эта же команда — основа CI (P0-1).
+**3. IMPLEMENT+TEST.** Код и тесты вместе. Нет тест-раннера — сказать в отчёте
+и предложить минимальный.
 
-Прогнать **по порядку**, остановиться на первом провале и чинить:
-1. Тесты.
-2. Lint (если настроен).
-3. **Build + анализ вывода** (см. ниже) — только если проект подразумевает билд.
-4. `git diff` self-review: убрать debug-логи, закомментированный код, мусор.
+**4. VERIFY (до коммита).** `node hooks/verify.js` — авто-детект стеков
+(Python→ruff+pytest; C#→dotnet format/build -warnaserror/test; Rust→fmt+clippy -D warnings+test;
+Node→npm lint/build/test), fail-fast, warnings-as-errors зашиты в шаги; переопределение —
+`harness.config.json → verify`; `--list` — план без запуска. Сверх exit-кода: прочитать
+вывод билда (новые warnings, deprecation, «falling back to …» — чинить или явно отметить
+в отчёте) и сделать `git diff` self-review (debug-логи, закомментированный код, мусор).
 
-Только после зелёного VERIFY — шаг 5.
+**5. COMMIT → PR.** Только feature-ветка (`feat/…`, `fix/…`, `docs/…`), не main.
+Conventional Commits: `<type>(<scope>): <subject>`; `feat:`→MINOR, `fix:`→PATCH,
+`!`/`BREAKING CHANGE:`→MAJOR. Без соавторства (`Co-Authored-By`, «Generated with …») —
+lefthook отклонит. `git push` / `--force` / `reset --hard` — только по явному запросу
+пользователя.
 
-#### 4.3. Build и проверка по выводу/логам
-**Exit-код 0 ≠ успех.** Билд может завершиться «успешно» и при этом накопить
-предупреждения, deprecation-ноты или silent-fallback'и — это latent-баги.
-После каждого билда **обязательно** прочитать stdout/stderr и проверить:
+**6. REPORT.** Что изменено / чем проверено (команды + результат) / что осталось /
+как пользователю проверить руками.
 
-- **Ошибки (errors)** — вообще не должно быть. Любая `error:`/`ERROR`/`FAILED` блокирует.
-- **Предупреждения (warnings)** — индустриальный стандарт: относиться к warnings как
-  к ошибкам (`-Werror`, `TreatWarningsAsErrors`, `#[deny(warnings)]`).
-  - Новых warning'ов после правки быть **не должно** (сравни с baseline — предыдущим
-    билдом на той же ветке). Рост warning'ов = регрессия, чинить, а не глушить.
-  - Известные/принятые warning'и подавлять точечно (`// noqa`, `#[allow]`,
-    `#pragma warning disable`), а не глобально.
-- **Deprecation-ноты** (`deprecated`, `will be removed`, `obsolete`) — фиксировать;
-  если suppression неизбежен — указать срок/тикет в комментарии.
-- **Silent-fallback'и** — сообщения вида «falling back to …», «using default …»,
-  «could not … — skipping» — каждая такая строка повод задуматься, не сломалось ли
-  что-то тихо. По крайней мере явно отметить в отчёте.
-- **Размер/время артефакта** — если билд внезапно потолстел/замедлился в разы без
-  видимой причины — это тоже сигнал (часто = зацикливание, дублирование, утечка).
+**7. USER DECISION.** Loop завершён только когда пользователь принял результат.
 
-Если в проекте уже настроен warn-as-error (CI/конфиг) — отлично, это и есть гейт.
-Если нет — на этапе VERIFY агент сам прогоняет билд с включённым treat-warnings-as-errors
-(где инструмент это позволяет) либо вручную проверяет лог на отсутствие новых warning'ов.
+## Release flow (только по явной просьбе, после merge в main)
 
-### Этап 5 — COMMIT on a branch → PR
-- Коммиты идут **только в feature-ветку**, не в `main`/`master`.
-- Branch naming: `feat/...`, `fix/...`, `docs/...`.
-- **Conventional Commits** — сообщения вида `<type>(<scope>): <subject>`:
-  - `feat:` → MINOR, `fix:` → PATCH, `<type>!:` или `BREAKING CHANGE:` → MAJOR.
-  - Скоупы: `feat(parser): …`, `fix(api): …`, `docs(readme): …`.
-  - Полное тело в conventional-формате — это и есть источник для авто-релиза (шаг R2).
-- **Без соавторства.** НЕ добавлять `Co-Authored-By: …`, `Generated with Claude/…`,
-  `🤖 Generated with …` и подобные trailers и значки. Коммиты выглядят как от автора.
-  git-native hook `hooks/git/commit-msg` отклонит сообщение с такими trailers
-  (читает финальный файл сообщения — обойти можно только `git commit --no-verify`).
-- Не делать `git push`, `--force`, `reset --hard` без явного запроса пользователя —
-  это outward-facing / необратимые действия. **Push — отдельный gated-этап (R3).**
-
-### Этап 6 — REPORT
-В отчёте: что изменено, что проверено (команды + результат), что осталось/TODO, как
-пользователю протестировать вручную.
-
-### Этап 7 — USER DECISION (условие выхода)
-- Loop считается завершённым **только** когда пользователь принял результат.
-- Без явного решения пользователя — не объявлять задачу выполненной.
-
-## Когда loop можно сократить
-- Trivial-фикс (опечатка, однострочник, comment-only) → разрешено миновать plan mode,
-  но VERIFY (diff review) и feature-ветка остаются обязательными.
-
----
-
-# RELEASE FLOW
-
-Dev-loop (этапы 1–7) закрывает **доработку кода**. Release-flow закрывает
-**публикацию** — он стартует **только после** того, как код слит в `main` (PR merged),
-пользователь явно попросил релиз, и это разрешено настройками репозитория.
-
-> Push, тэг и публикация релиза — outward-facing, необратимые действия.
-> **Каждый шаг идёт только после явного approval пользователя.**
-
-```
-R1. PRE-CHECKS   — main зелёный, нет незакоммиченных правок, версия определена
-R2. VERSION+TAG  — вычислить SemVer по conventional-commits → annotated tag v...
-R3. PUSH         — ⏸ запрос у пользователя → push ветки и тэга
-R4. CI VERIFY    — дождаться зелёного релизного workflow на GitHub (по тэгу)
-R5. PUBLISH      — артефакты появились в GitHub Release; проверить
-R6. VERIFY-PROD  — быстрая проверка опубликованного релиза
-R7. ROLLBACK-READY — знать, как откатить (tag/delete release/revert)
-```
-
-### R1 — PRE-CHECKS (до релиза)
-- `main` актуален и зелёный в CI; нет незакоммиченных/непушенных правок.
-- Определить **текущую версию**: последний тэг `git describe --tags --abbrev=0` →
-  например `v1.2.3`.
-- Проверить, что с прошлого релиза появились новые коммиты на `main` (иначе релизить нечего).
-
-### R2 — VERSION + TAG (инкремент тэга по SemVer)
-Вычислить следующий SemVer из conventional-commits **с момента последнего тэга**:
-
-| Коммиты с прошлого тэга | bump | пример (`v1.2.3` →) |
+| Шаг | Действие | Гейт |
 |---|---|---|
-| хотя бы один `!:` или `BREAKING CHANGE:` | **MAJOR** | `v2.0.0` |
-| есть `feat:`, но без breaking | **MINOR** | `v1.3.0` |
-| только `fix:`/`perf:`/`docs:`/`refactor:` | **PATCH** | `v1.2.4` |
-| нет conventional-коммитов | уточнить у пользователя | — |
+| R1 | main зелёный, дерево чистое; версия: `git describe --tags --abbrev=0` | |
+| R2 | SemVer из conventional-commits (`cog bump --auto`): annotated tag + CHANGELOG | ⏸ показать тэг/diff/notes → approval |
+| R3 | `git push origin <branch> && git push origin vX.Y.Z` | ⏸ только после явного «да» |
+| R4 | `gh run watch` — релизный workflow зелёный, без skipped-шагов | |
+| R5 | `gh release view vX.Y.Z` — Published, артефакты на месте | |
+| R6 | скачать артефакт, smoke-тест, версия в бинарнике = тэг | |
+| R7 | знать откат: до публикации — пересоздать тэг; после — `gh release delete` + revert (с approval) | |
 
-- **Annotated tag, не lightweight**: `git tag -a v1.3.0 -m "release v1.3.0"`.
-  В сообщение тэга — краткие release notes (сгенерировать из conventional-commits).
-- Pre-release / RC: `v1.3.0-rc.1`, `v2.0.0-beta.1` (SemVer pre-release build).
-- **CHANGELOG.md**: обновить (генерируется из conventional-commits;
-  `semantic-release`/`release-please` делают это автоматически).
-  - Если CHANGELOG коммитится **локально на `main`** — это единственный легитимный
-    коммит на защищённой ветке, поэтому его нужно пометить escape-hatch'ем:
-    `HARNESS_ALLOW_MAIN=1 git commit -m "chore(release): v1.3.0"`.
-    Обычно же CHANGELOG генерит CI, и локальный коммит на main не требуется.
-- ⏸ Перед R3 показать пользователю: новый тэг, diff с прошлого релиза, draft notes.
-  **Не двигаться дальше без явного approval.**
+Hotfix: ветка от тэга (`git checkout -b hotfix/x.y.z vX.Y.Z-1`) → fix → PR в main + тэг по R2–R6.
+Легитимный коммит на main (CHANGELOG релиза): `HARNESS_ALLOW_MAIN=1 git commit …`.
 
-### R3 — PUSH (gated, по запросу пользователя)
-- **Push никогда не делать автоматически.** Спросить пользователя и явно получить «да».
-- Пушим ветку и тэг: `git push origin <branch> && git push origin v1.3.0`.
-  - Git-native `pre-push` **пропускает** пуш тегов (`refs/tags/*`) и feature-веток и
-    блокирует только прямой пуш в `main`/`master`. Поэтому команда выше проходит
-    без escape-hatch'а — конфликта со сторожем ветки больше нет.
-  - Прямой `git push origin main` намеренно (мейнтейнером) — `HARNESS_ALLOW_MAIN=1 git push ...`.
-- Контролируемые исключения (тоже с approval): `git push --tags --force` для
-  пере-создания тэга при ошибке — **только если тэг ещё не опубликован публично**.
-- Если на remote есть более новые коммиты — **не force-push**, сначала rebase/merge.
+## Слои харнесса
 
-### R4 — CI VERIFY (проверка релизной сборки на GitHub)
-После пуша тэга релизный workflow GitHub Actions стартует автоматически (по триггеру
-`on.push.tags: ['v*']`). **Обязательно дождаться и проверить**:
-- Запустить: `gh run list --workflow=release.yml` → `gh run watch <id>`.
-- Workflow должен завершиться **success** (зелёный).
-- Проверить, что в нём **не было пропущенных шагов** (skipped steps иногда = тихий
-  пропуск публикации). Сверить шаги с заявленным релизным пайплайном.
-- При провале — **релиз не опубликован**; пойти по R7 (rollback) или починить и
-  пере-запустить workflow (`gh run rerun --failed <id>`).
+**Слой 0 — серверный ruleset (единственный настоящий enforcement).**
+`.github/rulesets/main.json`, ставится `node hooks/apply-ruleset.js`: require PR,
+required check `verify`, блок force-push/delete main. Не обходится локально.
+(Free+private: ruleset требует Pro или публичный репо — BACKLOG P0-0.)
 
-### R5 — PUBLISH (GitHub Release создан)
-- `gh release view v1.3.0` — релиз существует, статус `Published`, артефакты залиты
-  (binary/archive/SBOM — что заявлено).
-- Тело release notes корректное, прикреплены билд-артефакты из R4.
-- (Опционально, для зрелых репо) **Supply-chain**: проверить наличие
-  [artifact attestations / SLSA provenance](https://docs.github.com/en/actions/concepts/security/artifact-attestations)
-  у артефактов. Если настроено — подписи должны верифицироваться
-  (`gh attestation verify <file>` или `slsa-verifier`).
+**Слой 1 — lefthook (гигиена, для любого агента/человека).** `lefthook install`:
+commit-msg → `cog verify` + запрет соавторства; pre-commit → gitleaks + запрет коммита
+на main; pre-push → `verify.js` + `design-gate.js`.
 
-### R6 — VERIFY-PROD (быстрая проверка опубликованного)
-Минимальная проверка, что релиз реально валиден для потребителя:
-- Артефакт скачивается (`gh release download v1.3.0`).
-- Запускается/устанавливается на чистом окружении, проходит базовый smoke-тест.
-- Версия в бинарнике/пакете совпадает с тэгом (частая ошибка — забыли bump).
+**Слой 2 — agent-adapter (опционально, per-runtime).** Один хук `hooks/agent/guard.js`
+на PreToolUse + `stop-reminder.js` на Stop (молчит при чистом дереве и при
+`stop_hook_active`). Вход — нормализованный JSON (`hooks/agent/_input.js`), поэтому
+подходит любому раннеру. Логика guard — в экспортируемой `run(ctx, env) →
+{exitCode, stdout, stderr}` без побочных эффектов: тесты и диспетчеры зовут её
+in-process (без ~50-100мс спавна), CLI-обёртка — для раннеров.
+Строгость: `HARNESS_PROFILE=minimal|standard|strict` (minimal — только анти-обход
+и защита файлов харнесса; strict — пороги циклов вдвое ниже) и
+`HARNESS_DISABLED_CHECKS=<id,id>` для точечного отключения — это ручки ЧЕЛОВЕКА
+в env раннера, команды агента на env хуков не влияют. Контракт: exit 0 = allow, exit 2 = block; заметка —
+`{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"…"}}`
+(+ top-level дубль для простых раннеров, stderr-зеркало для человека); Stop-хук
+доносит текст ТОЛЬКО через `{"decision":"block","reason":"…"}`.
+Подключение: скопировать блок `hooks` из `settings.example.json` в `.claude/settings.json`.
 
-### R7 — ROLLBACK-READY (всегда знать, как откатить)
-До релиза понимать путь отката, потому что тэги часто иммутабельны, а release — public:
-- **Workflow провалился до публикации** — безопасно: починить и `gh run rerun --failed`,
-  или удалить локальный тэг `git tag -d v1.3.0` и пере-создать.
-- **Release уже опубликован** — `gh release delete v1.3.0` (с approval пользователя),
-  `git push origin :refs/tags/v1.3.0` для удаления тэга; revert-коммит в `main`.
-- Сообщить пользователю о последствиях (загруженные кем-то артефакты уже «в дикой природе»).
-
-### Hotfix-flow (критический фикс проде)
-Срочный баг в релизе идёт **отдельной короткой веткой** от тэга, не от `main`:
-1. `git checkout -b hotfix/1.2.4 v1.2.3`
-2. Фикс → тесты → conventional-коммит `fix(api): ...`
-3. PR в `main` **и** коммит/тэг `v1.2.4` по release-flow R2–R6.
-4. Если hotfix применим и к более ранним веткам — backport отдельно.
-
-## Что остаётся на уровне репозитория/CI (вне agent-цикла)
-Эти практики GitHub важны, но решаются конфигурацией репо, а не поведением агента:
-- **Branch protection** на `main` (require PR, required reviews, require status checks).
-- **CODEOWNERS** для авто-ревью.
-- **renovate/dependabot** для зависимостей.
-- **artifact attestations / SBOM** — настраиваются в release workflow YAML.
-- **cherry-pick policy** для backport на maintenance-ветки.
-
----
-
-## Связь с harness (что гарантировано помимо инструкций)
-
-Harness состоит из **двух слоёв**, и это ключ к тому, чтобы он работал с **любой LLM**,
-а не только с конкретным агент-раннером:
-
-**Слой 1 — git-native enforcement (`hooks/git/*`), универсальный.**
-Это реальные git-хуки, подключаемые через `core.hooksPath`. Они срабатывают при самой
-git-операции — **независимо от того, какой агент или человек** её запускает (Claude Code,
-кастомный Agent SDK, Cursor, голый git в терминале). Ставятся один раз: `node hooks/install.js`.
-
-| Правило | Механизм | Обход (аварийный) |
-|---|---|---|
-| Коммит не в `main`/`master` | `pre-commit` → блок | `HARNESS_ALLOW_MAIN=1` (релиз/hotfix) или `--no-verify` |
-| Conventional-commits + без соавторства | `commit-msg` читает **финальный файл сообщения** (ловит `-m`, `-F`, heredoc, `$EDITOR`) | `git commit --no-verify` |
-| Нет прямого пуша в `main`/`master` (теги и ветки — можно) | `pre-push` → блок только на `refs/heads/main|master` | `HARNESS_ALLOW_MAIN=1 git push ...` |
-| Нет секретов в коммите | `pre-commit` → `secret-scan.js` по staged-контенту | инлайн `secret-scan:allow` |
-
-**Слой 2 — agent-adapter (`hooks/agent/*`), опциональный, per-runtime.**
-Ловит то, чего git не видит: гигиену tool-loop'а и напоминания. Это не enforcement, а
-подсказки агенту. Вход — нормализованный JSON-контракт (см. `hooks/agent/_input.js`),
-поэтому подходит любому раннеру, который умеет запускать команду перед tool-call'ом и
-читать её exit-код. Пример подключения для Claude Code — в `settings.example.json`.
-
-| Правило | Механизм | Тип |
-|---|---|---|
-| План до реализации | plan mode (`EnterPlanMode`/`ExitPlanMode`) | внешний (раннер) |
-| Ранняя подсказка про ветку/сообщение до git | `branch-guard.js` (warn-only, exit 0) | note |
-| **Агент не обходит harness** (`--no-verify`, `git commit -n`, правка `core.hooksPath`) | `bypass-guard.js` — блок (exit 2), обход только через `HARNESS_ACK_BYPASS=1` | блок |
-| DESIGN-стадия для GUI (≥4 мокапа) | `design-gate.js` — блок в VERIFY/CI (exit 1); `design-guard.js` — ранняя подсказка при правке UI-файла | блок + note |
-| Push/force/reset/tag/delete/release | permission modes раннера → подтверждение пользователя | внешний |
-| Трекинг шагов | `TodoWrite` / task-list — обновлять по мере loop | note |
-| Незакрытые шаги не «забываются» | `stop-reminder.js` (Stop) — про VERIFY/COMMIT/REPORT | note |
-| **Защита от runaway-loop (Bash)** | `loop-guard.js` — блок дегенеративных серий команд (exit 2) | блок |
-| **Защита от runaway-loop (не-Bash)** | `tool-loop-guard.js` — блок N× точных повторов tool+target (Read/Write/Edit) | блок |
-
-**Контракт exit-кодов агент-слоя (для любого раннера):** `exit 0` = пропустить,
-`exit 2` = заблокировать pending tool-call, stdout `{"additionalContext":"…"}` = не-блокирующая
-заметка в контекст.
-
-### Установка
-```
-node hooks/install.js                 # git-native слой: git config core.hooksPath hooks/git
-# агент-слой (опционально, пример для Claude Code):
-#   скопировать блок "hooks" из settings.example.json в .claude/settings.json
-```
-Требование: Node в PATH (на Windows git-хуки исполняются через bash из Git-for-Windows).
-Настраиваемое: `HARNESS_LOOP_THRESHOLD` (порог loop-guard), `HARNESS_ALLOW_MAIN=1` (escape-hatch),
-`HARNESS_SESSION_ID`/`HARNESS_PROJECT_DIR` (если раннер не выставляет свои).
-
-### Портируемость на другую LLM/раннер
-- **Слой 1 не требует ничего** — git сам исполняет хуки. Работает везде.
-- **Слой 2**: раннеру нужно уметь вызывать команду на pre-tool-use / stop. `_input.js`
-  уже понимает разные имена полей (`tool_name`/`toolName`/`tool`, `tool_input.command`/`command`,
-  и т.д.). Для нового раннера обычно достаточно прописать вызовы `node hooks/agent/*.js`
-  в его конфиг хуков — как в `settings.example.json`.
-
----
-
-## Защита от runaway-loop (degenerate loop)
-
-Runaway-loop — failure mode, при котором агент теряет нить задачи и начинает
-плодить бессмысленные повторяющиеся команды (`echo a`, `echo b`, … `echo z`),
-либо мусор из tool-разметки утекает в shell (`cd /x && echo ", " 183<tool`).
-Симптомы наблюдались в реальных сессиях: модель застревает и не может выйти из
-цикла генерации, не двигаясь к цели.
-
-**`hooks/agent/loop-guard.js`** (agent-adapter, вешается на shell/Bash-tool) ловит это тремя способами:
-
-| Триггер | Поведение |
+| guard.js ловит | Тип |
 |---|---|
-| **Мусор из tool-разметки** (`<tool`, `</tool`, stray quotes+numbers) | мгновенный **блок** (exit 2) — это верный признак сбоя streaming/парсинга |
-| **Низкая энтропия токенов** в команде (<35% уникальных при длине ≥8) | мгновенный **блок** — паттерн «echo a echo a echo a …» в одном вызове |
-| **Серия тривиальных команд подряд** (`echo <word>`, голый `ls`/`pwd`/`true`, повтор одной команды) | streak-счётчик; при достижении порога 5 → **блок** |
+| Обход харнесса: `--no-verify`/`commit -n`, `core.hooksPath` (config и `-c`), `LEFTHOOK=0`, `lefthook uninstall`, запись в `.git/hooks` | блок |
+| Правку файлов харнесса (`hooks/`, `lefthook.yml`, конфиги, workflows, `.claude/settings.json`) — file-tools **и** shell (POSIX `sed -i`/`rm`/`mv`/`tee`/редирект + cmd/PowerShell `del`/`move`/`Remove-Item`/`Set-Content`…); пути нормализуются (`./`, `..`, регистр, `/` и `\`) | блок |
+| Правку **существующего** lint/format-конфига проекта (`.eslintrc*`, `ruff.toml`, `biome.json`, `clippy.toml`, `pytest.ini`…) — красный VERIFY чинится кодом, а не ослаблением конфига; создание нового конфига с нуля разрешено; смешанные файлы (`pyproject.toml`, `package.json`, `tsconfig.json`) намеренно не в списке | блок |
+| Дегенеративные циклы: серия тривиальных команд; N× одно действие подряд; чередование A-B-A-B — на shell **и** на file-tools (Read/Write/Edit) | блок |
+| Мусор tool-разметки / низкоэнтропийную команду (признак сбоя стриминга/парсинга) | блок |
+| Обрезанный или нечитаемый входной payload (fail-closed, всегда включён) | блок |
+| git commit/merge/push или правку файлов на `main`/`master` | note |
+| Правку UI-файла — напоминание про DESIGN-стадию (≥N мокапов + `APPROVED`) | note |
+| fact-force: правку существующего файла, не читанного в этой сессии (EXPLORE → IMPLEMENT) | note |
 
-### Как работает счётчик
-- **Stateful per session**: состояние лежит в `os.tmpdir()/harness-loop-guard-<session>.json`, TTL 2 ч.
-  Если раннер не выставил `HARNESS_SESSION_ID`/`CLAUDE_SESSION_ID`, ключ берётся из хэша
-  пути проекта — чтобы параллельные сессии в разных репозиториях не делили один счётчик.
-- Каждая тривиальная команда: streak += 1 (повтор одной команды: streak += 2, т.к. подозрительнее).
-- Любая **настоящая** команда (с аргументами, не из тривиального списка) **сбрасывает** streak в 0.
-- После блокировки streak тоже сбрасывается — следующий ход начинает с чистого листа.
+Осознанный, одобренный пользователем обход блока: `HARNESS_ACK_BYPASS=1` (аудит-заметка в контекст).
+Что guard **не** ловит: «тонкое» зацикливание из внешне осмысленных шагов и состязательный обход
+(подстановка переменных, конкатенация кавычек) — это закрывают TodoWrite + этап 7 (пользователь
+видит, что todo не двигаются) и настоящий серверный ruleset.
 
-### Что делать, если hook сработал (false positive)
-Hook блокирует через exit 2. Если блок ложный (например, legitimately нужно 6+ коротких `echo` для генерации тестовых данных) — поясни цель задачи в следующем ходе и реши задачу иначе (например, одним скриптом, а не серией команд). Порог настраивается переменной окружения `HARNESS_LOOP_THRESHOLD` (по умолчанию 5).
+## Env
 
-### Что НЕ ловит этот hook
-- Runaway-loop из **не-Bash** tool calls (например, серия бесполезных `Read`/`Write`). Для этого нужен аналогичный счётчик на других tool'ах — пока не реализовано (BACKLOG P2-10).
-- «Тонкое» зацикливание, где команды выглядят легитимно, но не двигают задачу. Это закрывается поведенчески: этап 7 (USER DECISION) + TodoWrite — если агент не продвигает todo, пользователь это видит.
+Ручки для ЧЕЛОВЕКА — задаются в env раннера; команды агента на env хуков не влияют.
 
----
-
-## Анти-чит: агент не должен обходить harness (`bypass-guard.js`)
-
-Весь локальный слой обходится одним флагом: `git commit --no-verify`, `git push --no-verify`,
-`git commit -n`, либо правкой `core.hooksPath`. **`hooks/agent/bypass-guard.js`** (agent-adapter,
-на shell/Bash-tool) детектит такие команды агента и **блокирует** (exit 2) ещё до запуска.
-
-- Сообщения коммитов, где просто упомянуто `-n`/`--no-verify`, не считаются обходом
-  (перед проверкой строки в кавычках обнуляются).
-- `-n` трактуется как обход только для `git commit` (у `merge`/`revert` это другое, безобидное).
-- Осознанный, одобренный пользователем обход: `HARNESS_ACK_BYPASS=1` (аудит-заметка в контекст).
-
-**Важно:** это защита от того, чтобы *агент* тихо снял проверки. От человека с `--no-verify`
-локально это не спасает — настоящий backstop против обхода это серверный required-check на PR
-(BACKLOG P0-1), которого на плане Free+private пока нет.
+| Переменная | Назначение | Default |
+|---|---|---|
+| `HARNESS_ALLOW_MAIN=1` | легитимный коммит на `main` (релиз/hotfix/bootstrap); снимает branch-guard в pre-commit | — |
+| `HARNESS_ACK_BYPASS=1` | одобренный пользователем обход guard.js (блок → аудит-заметка) | — |
+| `HARNESS_PROFILE` | строгость guard: `minimal` (только анти-обход + защита файлов харнесса), `standard`, `strict` (пороги циклов вдвое ниже) | `standard` |
+| `HARNESS_DISABLED_CHECKS` | точечно выключить проверки: `loops,entropy,lintconfig,design-note,fact-force,…` | — |
+| `HARNESS_LOOP_THRESHOLD` | порог циклов shell-команд | 5 |
+| `HARNESS_TOOLLOOP_THRESHOLD` | порог циклов file-tools (Read/Write/Edit) | 12 |
+| `HARNESS_SESSION_ID` / `HARNESS_PROJECT_DIR` | ключ состояния guard, если раннер не задал своих (`CLAUDE_*`/`ZCODE_*` тоже читаются) | — |
+| `HARNESS_ROOT` | корень для `new-mockups.js` при scaffolding мокапов | корень репо |
+| `LEFTHOOK=0` | пропуск lefthook-хуков (только человек; агенту блокирует guard) | — |

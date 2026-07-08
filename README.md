@@ -1,106 +1,58 @@
 # llm-dev-harness
 
-Универсальный dev-loop харнесс для агентных правок кода — работает с **любой LLM/раннером**,
-а не только с конкретным агентом. Заставляет каждый заход в код идти через один и тот же
-проверенный цикл (EXPLORE → PLAN → IMPLEMENT+TEST → VERIFY → COMMIT → PR → REPORT) и
-гарантирует его не инструкциями, а исполняемыми хуками.
+Экономичный dev-loop харнесс для агентных правок кода — работает с **любой LLM/раннером**.
+Каждый заход в код идёт через один цикл (EXPLORE → PLAN → IMPLEMENT+TEST → VERIFY →
+COMMIT → PR → REPORT), и цикл гарантируется исполняемыми хуками, а не инструкциями.
+**Канонический документ — [`AGENTS.md`](./AGENTS.md)**: loop, правила этапов, слои,
+release flow, env-переменные. Здесь — только стек и установка.
 
-Полное описание loop'а и release-flow — в [`AGENTS.md`](./AGENTS.md).
+> **Честная граница.** Локальные хуки — **гигиена** (ловят ошибки и небрежность до
+> коммита), а не защита от состязательного агента: у агента write-доступ к рабочему
+> дереву, и намеренный обход (подстановки переменных, кавычки-конкатенация) regex-слоем
+> не ловится. **Настоящий enforcement — только серверный ruleset**
+> (`.github/rulesets/main.json`; required-check запинен на GitHub Actions через
+> `integration_id`, иначе статус подделывается через API).
 
-## Два слоя
+## Стек
 
-**Слой 1 — git-native enforcement (`hooks/git/`).** Реальные git-хуки, подключаемые через
-`core.hooksPath`. Срабатывают при самой git-операции — неважно, кто её запускает (Claude Code,
-кастомный Agent SDK, Cursor, голый git в терминале). Это и делает харнесс LLM-агностичным.
+Commit-lint / secret-scan / release / hook-раннер делегированы зрелым инструментам.
+Своё — только то, чего у них нет: verify-раннер, design-гейт и agent-хук.
 
-| Хук | Что гарантирует | Аварийный обход |
-|-----|-----------------|-----------------|
-| `commit-msg` | Conventional Commits + запрет со-авторства (читает финальный файл сообщения → ловит `-m`, `-F`, heredoc, `$EDITOR`) | `git commit --no-verify` |
-| `pre-commit` | Нет коммитов в `main`/`master` | `HARNESS_ALLOW_MAIN=1` или `--no-verify` |
-| `pre-push` | Нет прямого пуша в `main`/`master` (теги и ветки — можно) | `HARNESS_ALLOW_MAIN=1 git push …` |
+| Задача | Инструмент | Конфиг |
+|--------|-----------|--------|
+| Git-hook раннер | **lefthook** | [`lefthook.yml`](./lefthook.yml) |
+| Секреты | **gitleaks** | [`.gitleaks.toml`](./.gitleaks.toml) |
+| Conventional Commits + SemVer + CHANGELOG | **cocogitto** (`cog`) | [`cog.toml`](./cog.toml) |
+| **Реальный enforcement** (require PR + check, block force-push) | **GitHub ruleset** | [`.github/rulesets/main.json`](./.github/rulesets/main.json) |
+| VERIFY (мульти-стек lint/build/test) | *своё* | [`hooks/verify.js`](./hooks/verify.js) |
+| GUI DESIGN-гейт | *своё* | [`hooks/design-gate.js`](./hooks/design-gate.js) |
+| Agent-хук (обход/циклы/подсказки) | *своё* | [`hooks/agent/guard.js`](./hooks/agent/guard.js) |
 
-**Слой 2 — agent-adapter (`hooks/agent/`), опциональный.** Гигиена tool-loop'а, которую git
-не видит: `loop-guard.js` (защита от runaway-цикла), `bypass-guard.js` (блок попыток агента
-обойти harness — `--no-verify`, `core.hooksPath`), `branch-guard.js` (ранние подсказки,
-warn-only), `stop-reminder.js`. Вход — нормализованный JSON (`_input.js` понимает разные
-имена полей), поэтому подключается к любому раннеру через exit-код: `2` = блок, `0` = пропуск.
-Пример подключения для Claude Code — в [`settings.example.json`](./settings.example.json).
+Общие хелперы хуков (глобы, конфиг, нормализация путей) — [`hooks/_lib.js`](./hooks/_lib.js).
 
 ## Установка
 
 ```bash
-node hooks/install.js     # git config core.hooksPath hooks/git
+lefthook install               # слой 1: .git/hooks/* — срабатывает для любого агента/человека
+node hooks/apply-ruleset.js    # слой 0: серверный ruleset (нужен gh + admin; Free — Pro/публичный репо)
+node hooks/doctor.js           # проверить окружение: lefthook/gitleaks/cog в PATH, конфиги
 ```
 
-Требование: Node в PATH (на Windows git-хуки исполняются через bash из Git-for-Windows).
-Агент-слой (опционально): скопировать блок `hooks` из `settings.example.json` в `.claude/settings.json`.
+Слой 2 (агент, опционально): скопировать блок `hooks` из
+[`settings.example.json`](./settings.example.json) в `.claude/settings.json` —
+один хук `guard.js` на PreToolUse + условный `stop-reminder.js` на Stop.
+Контракт хуков: exit 0 = allow, exit 2 = block; notes — `hookSpecificOutput.
+additionalContext` (PreToolUse), Stop — `{"decision":"block","reason":…}`.
 
 ## Проверка
 
 ```bash
-node hooks/test.js                    # unit + integration self-tests (временный git-репо)
-node hooks/verify.js                  # исполняемый VERIFY: авто-детект стеков → lint/build/test
-node hooks/verify.js --list           # показать план без запуска
-node hooks/design-gate.js --base main # DESIGN-гейт: UI-изменения требуют ≥4 одобренных мокапа
-node hooks/lint-commits.js --base main # conventional-commits + no-coauthor по коммитам ветки
-node hooks/secret-scan.js --all        # поиск секретов (private keys, токены, high-entropy)
-node hooks/setup-signing.js            # (opt-in) включить SSH-подпись коммитов в этом репо
-node hooks/doctor.js                   # проверка окружения (hooksPath, LF/NUL, config, identity)
-node hooks/quality-gate.js --base main # AI-code гигиена: конфликт-маркеры, гигантские файлы
-node hooks/commit.js                   # интерактивный conventional-commit (или --type/--subject)
-node hooks/release.js                  # dry-run: next SemVer + CHANGELOG (--tag создаёт тег, без push)
+node hooks/test.js                     # self-test suite харнесса
+node hooks/verify.js [--list]          # исполняемый VERIFY (авто-детект стеков)
+node hooks/design-gate.js --base main  # DESIGN-гейт по diff ветки
+node hooks/doctor.js                   # окружение
+node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
 ```
 
-## Безопасность / supply-chain
-
-- **secret-scan** встроен в git-native `pre-commit` — коммит с секретом (AWS/GitHub/Google/Slack/
-  Stripe токен, private key, high-entropy значение) блокируется. Ложное срабатывание — метка
-  `secret-scan:allow` в строке.
-- **Signed commits**: `node hooks/setup-signing.js` включает SSH-подпись (усиливает политику
-  «коммиты как от автора»). Жёсткое требование подписи — через ruleset (нужен Pro/public).
-- **CODEOWNERS** (`.github/CODEOWNERS`) + **Dependabot** (`.github/dependabot.yml`), Actions в
-  `ci.yml` запиннены на commit-SHA. На Free+private ревью по CODEOWNERS совещательны.
-
-## CI (серверное зеркало)
-
-`.github/workflows/ci.yml` гоняет те же проверки (`verify.js` + `lint-commits.js` + `design-gate.js`)
-на push/PR — там, где `--no-verify` их уже не пропустит. На **GitHub Free + private** workflow
-запускается и показывает статус, но **не может быть required** (не блокирует merge); required-check
-и ruleset требуют Pro/Team или публичного репо.
-
-## VERIFY (мульти-стек)
-
-`hooks/verify.js` делает шаг VERIFY исполняемым. Он определяет стеки по маркер-файлам и гоняет
-lint→build→test **fail-fast** с warnings-as-errors по умолчанию:
-
-| Стек | Маркер | Шаги по умолчанию |
-|------|--------|-------------------|
-| Python/Qt | `pyproject.toml`/`requirements.txt`/`setup.py` | `ruff check` · `ruff format --check` · `pytest -q` |
-| C#/WPF | `*.sln`/`*.csproj` | `dotnet format --verify-no-changes` · `dotnet build -warnaserror` · `dotnet test` |
-| Rust/Tauri | `Cargo.toml` | `cargo fmt --check` · `cargo clippy -- -D warnings` · `cargo test` |
-| Node (фронт Tauri и пр.) | `package.json` | `npm run lint/build/test --if-present` |
-
-Переопределение — в `harness.config.json` → `verify.stacks` (если задать, авто-детект отключается).
-Монорепо поддерживается: шаги запускаются в каталоге каждого найденного маркера.
-
-## GUI: DESIGN-стадия (≥4 мокапа)
-
-Для UI-работы (`*.ui`, `*.qml`, каталоги `ui/`/`views/`/`widgets/` — см. `harness.config.json`)
-харнесс требует **≥4 стилистически разных мокапа + approval до кода**:
-
-```bash
-node hooks/new-mockups.js <feature>   # создаст design/mockups/<feature>/ с 4 HTML-мокапами
-# довести макеты → выбрать направление → создать пустой design/mockups/<feature>/APPROVED
-```
-
-`hooks/design-gate.js` (в VERIFY/CI) блокирует UI-изменения без одобренного набора; подробности —
-в `design/mockups/README.md`.
-
-## Конфигурация (env)
-
-| Переменная | Назначение | По умолчанию |
-|------------|-----------|--------------|
-| `HARNESS_ALLOW_MAIN=1` | Разрешить коммит/пуш на `main` (релиз/hotfix/bootstrap) | — |
-| `HARNESS_ACK_BYPASS=1` | Осознанно разрешить обход хуков агентом (`--no-verify` и т.п.) | — |
-| `HARNESS_LOOP_THRESHOLD` | Порог блокировки loop-guard | `5` |
-| `HARNESS_SESSION_ID` / `HARNESS_PROJECT_DIR` | Если раннер не выставляет свои | автоопределение |
+CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).
+Слои, DESIGN-стадия, release flow и env-переменные — в [`AGENTS.md`](./AGENTS.md).

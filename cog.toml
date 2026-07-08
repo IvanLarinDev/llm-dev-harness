@@ -1,0 +1,25 @@
+# cog.toml — Cocogitto config: Conventional Commits + SemVer + CHANGELOG.
+# Replaces the hand-rolled lib/commit-lint.js (enforcement path) and hooks/release.js.
+#
+#   cog verify --file <msg>   # single message  — used by lefthook commit-msg
+#   cog check                 # a RANGE of commits — CI backstop (replaces lint-commits.js)
+#   cog bump --auto           # next SemVer from commits → tag + CHANGELOG (replaces release.js R1–R2)
+#
+# The "no co-authorship" policy is NOT here (cocogitto has no such rule); it lives as a
+# grep in lefthook.yml commit-msg. cocogitto owns format + versioning + changelog only.
+
+# false: в репо ещё нет тегов, а from_latest_tag=true заставлял cog check искать
+# последний тег и падать с «unable to get any tag». С false проверяется вся история.
+from_latest_tag = false
+ignore_merge_commits = true
+tag_prefix = "v"
+branch_whitelist = ["main", "master", "feat/**", "fix/**", "docs/**", "hotfix/**", "chore/**", "refactor/**"]
+
+[changelog]
+path = "CHANGELOG.md"
+remote = "github.com"
+authors = []
+
+# Extra non-default type used by this repo's history.
+[commit_types]
+improvement = { changelog_title = "Improvements" }

@@ -1,36 +1,18 @@
 {
   "_comment": [
-    "Reference wiring for the AGENT-ADAPTER layer (loop hygiene git cannot see).",
-    "This example uses the Claude Code hooks schema. Any runtime that can run a",
-    "command before a tool call and honor its exit code can wire the same scripts:",
-    "  exit 2 = block the pending tool call, exit 0 = allow,",
-    "  stdout {\"additionalContext\":\"...\"} = non-blocking note.",
-    "The ENFORCEMENT layer (commit-msg / pre-commit / pre-push) is NOT wired here —",
-    "it is git-native; install it once with `node hooks/install.js`.",
+    "Reference wiring for the agent-adapter layer (Claude Code hooks schema).",
+    "Any runtime that can run a command before a tool call and honor its exit code",
+    "can wire the same scripts: exit 2 = block, exit 0 = allow,",
+    "stdout {\"additionalContext\":\"...\"} = non-blocking note.",
+    "The git layer is NOT wired here — install it once with `lefthook install`.",
     "Copy the `hooks` block into .claude/settings.json (project) to activate."
   ],
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Write|Edit|MultiEdit|Read",
         "hooks": [
-          { "type": "command", "command": "node hooks/agent/bypass-guard.js" },
-          { "type": "command", "command": "node hooks/agent/loop-guard.js" },
-          { "type": "command", "command": "node hooks/agent/branch-guard.js" }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          { "type": "command", "command": "node hooks/agent/branch-guard.js" },
-          { "type": "command", "command": "node hooks/agent/design-guard.js" },
-          { "type": "command", "command": "node hooks/agent/tool-loop-guard.js" }
-        ]
-      },
-      {
-        "matcher": "Read",
-        "hooks": [
-          { "type": "command", "command": "node hooks/agent/tool-loop-guard.js" }
+          { "type": "command", "command": "node hooks/agent/guard.js" }
         ]
       }
     ],

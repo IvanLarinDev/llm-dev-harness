@@ -1,5 +1,14 @@
 # BACKLOG — llm-dev-harness
 
+> **Миграция (2026-07):** commit-lint/secret-scan/release/git-hook-раннер выпилены и заменены
+> боевыми стандартами — **lefthook** (`lefthook.yml`), **gitleaks** (`.gitleaks.toml`),
+> **cocogitto** (`cog.toml`). Своим осталась AGENTS.md-петля, agent-хук и loop/design-гейты.
+> Реальный enforcement вынесен в серверный ruleset (`.github/rulesets/main.json`, `hooks/apply-ruleset.js`).
+>
+> **Lean-rewrite (7cbf0e8):** три отдельных agent-хука (bypass/design/tool-loop-guard) слиты в
+> один `hooks/agent/guard.js`; отдельные helper'ы `quality-gate.js` и `setup-signing.js` убраны.
+> Статусы ниже с пометкой «✅ СДЕЛАНО» отражают это состояние, а не исходные имена файлов.
+
 Что не хватает харнессу, сверено с практикой топовых GitHub-проектов (2026). Приоритеты:
 **P0** — закрывает реальную дыру в текущей модели; **P1** — сильно повышает качество;
 **P2** — зрелость/автоматизация.
@@ -24,9 +33,9 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   статус, но не может блокировать merge. Пересмотреть при переходе на Pro/Team или публичный репо.
 
 - **P0-1. CI-зеркало проверок. ⏳ АВТОРИЗОВАНО, ждёт пуша workflow.** Готовы: `.github/workflows/ci.yml`
-  (прогон `node hooks/verify.js` + `lint-commits.js` + `design-gate.js` на push/PR) и
-  `hooks/lint-commits.js` — серверный бэкстоп против `--no-verify` (перепроверяет каждый коммит PR).
-  `lint-commits.js` и доки уже в `main`. **Файл workflow не запушен из этой сессии**: у gh-токена нет
+  (gitleaks + cocogitto `cog check` + `node hooks/verify.js` + `design-gate.js` на push/PR) —
+  серверный бэкстоп против `--no-verify` (перепроверяет каждый коммит PR через cocogitto-action).
+  `cog check` (в CI через cocogitto-action) — серверный бэкстоп против `--no-verify`. **Файл workflow не запушен из этой сессии**: у gh-токена нет
   скоупа `workflow`, а SSH к GitHub из окружения заблокирован (порты 22 и 443). Добавить workflow:
   `gh auth refresh -s workflow -h github.com` → закоммитить `.github/workflows/ci.yml` → push;
   либо добавить файл через веб-UI GitHub. На Free+private он **не станет required** (см. P0-0).
@@ -42,10 +51,11 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   loop'а (VERIFY сделан, тесты, мокапы для GUI). Для solo: ruleset «bypass for PRs only» +
   самоапрув, но required CI обязателен.
 
-- **P0-4. Анти-чит агента (специфично для AI-харнесса). ✅ СДЕЛАНО.** `hooks/agent/bypass-guard.js`
-  блокирует `git commit --no-verify`, `git push --no-verify`, `git commit -n` и правку
-  `core.hooksPath` (обход только через `HARNESS_ACK_BYPASS=1`). Строки в кавычках обнуляются,
-  чтобы сообщение коммита с «-n» не было ложным срабатыванием. Покрыто self-test'ами.
+- **P0-4. Анти-чит агента (специфично для AI-харнесса). ✅ СДЕЛАНО.** `hooks/agent/guard.js`
+  блокирует `git commit --no-verify`, `git push --no-verify`, `git commit -n`, правку
+  `core.hooksPath`, `lefthook uninstall`, `LEFTHOOK=0` (варианты имени `git`/`git.exe`/`git.cmd`;
+  обход только через `HARNESS_ACK_BYPASS=1`). Строки в кавычках обнуляются, чтобы сообщение
+  коммита с «-n» не было ложным срабатыванием. Покрыто self-test'ами.
   Настоящий backstop против `--no-verify` — серверный required-check (P0-1), пока недоступен на Free.
 
 ---
@@ -55,21 +65,21 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
 - **P1-5. GUI design-gate (твоё требование: 4 мокапа). ✅ СДЕЛАНО.** Стадия **DESIGN** (2.5) в loop
   между PLAN и IMPLEMENT, обязательная для GUI. Реализация:
   - `harness.config.json` — UI-globs (`*.ui`/`*.qml`/`ui/`/`views/`/`widgets/`…), `min=4`, каталог мокапов.
-  - `hooks/design-gate.js` — **жёсткий** гейт (exit 1) для VERIFY/CI: UI-изменения без каталога
-    `design/mockups/<feature>/` с ≥4 мокапами и файлом `APPROVED` → блок.
-  - `hooks/agent/design-guard.js` — warn при правке UI-файла (agent-adapter).
+  - `hooks/design-gate.js` — **жёсткий** гейт (exit 1) для VERIFY/CI: UI-изменения проходят,
+    только если одобренный набор ≥4 мокапов с файлом `APPROVED` **затронут в diff этой же ветки**
+    (иначе один старый approval открывал бы гейт навсегда).
+  - `hooks/agent/guard.js` — warn при правке UI-файла (design-note, часть единого agent-хука).
   - `hooks/new-mockups.js` — генерит 4 стилистически разных HTML-мокапа под фичу.
-  - Покрыто self-test'ами. Возможное усиление (позже): требовать, чтобы мокапы менялись в том же
-    диффе, и поддержать `Design-Approved:` trailer как альтернативу файлу APPROVED.
+  - Покрыто self-test'ами. Возможное усиление (позже): поддержать `Design-Approved:` trailer
+    как альтернативу файлу APPROVED.
 
-- **P1-6. Secret scanning. ✅ СДЕЛАНО.** `hooks/secret-scan.js` — портируемый (без внешних зависимостей)
-  сканер: high-precision паттерны (private keys, AWS/GitHub/Google/Slack/Stripe токены) +
-  консервативная эвристика high-entropy присваиваний. Встроен в git-native `pre-commit` (блок при
-  попытке закоммитить секрет), годится для CI/VERIFY. Инлайн-исключение `secret-scan:allow`. Тесты есть.
+- **P1-6. Secret scanning. ✅ МИГРИРОВАНО НА gitleaks.** Самописный `secret-scan.js` удалён; секреты
+  ловит **gitleaks** (`.gitleaks.toml`, `useDefault=true` → 100+ детекторов), встроен в lefthook
+  `pre-commit` и в CI. Инлайн-исключение `gitleaks:allow` (+ legacy `secret-scan:allow` в allowlist).
 
-- **P1-7. Signed commits. ✅ СДЕЛАНО (helper).** `hooks/setup-signing.js` — opt-in включение
-  SSH-подписи коммитов на уровне репо (детект ключа, `commit.gpgsign`, allowed_signers). «Require
-  signed» как жёсткий гейт — это ruleset (нужен Pro/public, см. P0-0); локально подпись включается.
+- **P1-7. Signed commits. ⏸️ Helper убран в lean-rewrite.** Отдельный `setup-signing.js` удалён как
+  редко нужный: SSH-подпись включается вручную (`git config commit.gpgsign true` + allowed_signers).
+  «Require signed» как жёсткий гейт — это ruleset (нужен Pro/public, см. P0-0).
 
 - **P1-8. Исполняемый VERIFY. ✅ СДЕЛАНО.** `hooks/verify.js` — мульти-стек авто-детект
   (Python/Qt: `ruff`+`pytest`; C#/WPF: `dotnet format`+`build -warnaserror`+`test`;
@@ -77,8 +87,8 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   warnings-as-errors по умолчанию, монорепо (шаги в каталоге маркера), `--list`/`--stack`/`--json`.
   Переопределение через `harness.config.json` → `verify`. Покрыто self-test'ами; сам харнесс
   прогоняет свой `node test.js` через verify. Это же — команда для CI (P0-1).
-  Возможное усиление (позже): `--changed`/`--base` (верифицировать только тронутые стеки для скорости);
-  baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
+  `--changed`/`--base` (верифицировать только тронутые стеки для скорости) — ✅ добавлено (99bf0c7).
+  Возможное усиление (позже): baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
 
 - **P1-9. CODEOWNERS + Dependabot. ✅ СДЕЛАНО (SHA-пиннинг — опционально).** `.github/CODEOWNERS`
   (owner на `*`, `/hooks/`, `/.github/`) и `.github/dependabot.yml` (github-actions, weekly) — в `main`
@@ -92,25 +102,22 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
 
 ## P2 — зрелость
 
-- **P2-10. loop-guard для не-Bash tool'ов. ✅ СДЕЛАНО.** `hooks/agent/tool-loop-guard.js` — блок
+- **P2-10. loop-guard для не-Bash tool'ов. ✅ СДЕЛАНО.** Часть единого `hooks/agent/guard.js` — блок
   дегенеративных серий не-Bash tool'ов: считает ТОЧНЫЕ повторы (tool+target) подряд, любой другой
   target сбрасывает streak (нулевой FP на нормальном редактировании). Порог
   `HARNESS_TOOLLOOP_THRESHOLD` (12). Тесты есть.
-- **P2-11. Release-автоматизация. ✅ СДЕЛАНО (локальная часть).** `hooks/release.js` — портируемо
-  (node+git, без зависимостей) автоматизирует R1–R2: next SemVer из conventional-коммитов с
-  последнего тега, черновик CHANGELOG, `--write-changelog`, `--tag` (annotated, БЕЗ push — push это
-  gated R3). `--dry-run`/`--json`. Тесты (fix→patch, feat→minor, `!`→major). CI-публикация
-  (release.yml + SLSA/SBOM) — опциональный workflow, добавляется вручную (скоуп `workflow`).
+- **P2-11. Release-автоматизация. ✅ МИГРИРОВАНО НА cocogitto.** Самописный `release.js` удалён.
+  `cog bump --auto` считает next SemVer из conventional-коммитов, ставит annotated-тег и генерит
+  CHANGELOG (`cog.toml`). Push — по-прежнему gated (R3). CI-публикация (SLSA/SBOM) — опциональный workflow.
 - **P2-12. `harness doctor`. ✅ СДЕЛАНО.** `hooks/doctor.js` — проверка окружения: node/git,
-  `core.hooksPath`, наличие хуков + LF-shebang + отсутствие NUL, exec-бит (posix), валидность
+  lefthook/gitleaks/cog в PATH + wiring в `.git/hooks`, LF + отсутствие NUL в конфигах, валидность
   `harness.config.json`, git-identity. Ловит ровно те грабли, что мы поймали (CRLF, NUL). Тесты есть.
-- **P2-13. Quality-gate для AI-кода. ✅ СДЕЛАНО (лёгкая версия).** `hooks/quality-gate.js` —
-  low-FP гейт на изменённых файлах: маркеры merge-конфликта и переросшие файлы → FAIL; минифицированные
-  строки и >5 TODO → WARN. Порог в `harness.config.json` → `quality`. Тесты есть. Возможное усиление:
-  реальное покрытие/сложность из тест-раннеров (per-language).
-- **P2-14. Интерактивный commit-хелпер. ✅ СДЕЛАНО.** `hooks/commit.js` — строит и валидирует
-  conventional-сообщение (интерактивно или флагами `--type/--scope/--subject/--body/--breaking`),
-  затем коммитит; `--print` для превью. Тесты есть.
+- **P2-13. Quality-gate для AI-кода. ⏸️ Убран в lean-rewrite.** Отдельный `quality-gate.js` (маркеры
+  merge-конфликта, переросшие файлы, TODO) удалён как дублирующий VERIFY + git diff self-review из
+  loop-шага 4. При возврате — делать через тест-раннеры (реальное покрытие/сложность per-language),
+  а не самописным эвристическим гейтом.
+- **P2-14. Интерактивный commit-хелпер. ✅ МИГРИРОВАНО НА cocogitto.** Самописный `hooks/commit.js`
+  удалён — его заменяет `cog commit <type> <scope> <subject>` (идёт в комплекте cocogitto). Одной зависимостью меньше.
 
 ---
 

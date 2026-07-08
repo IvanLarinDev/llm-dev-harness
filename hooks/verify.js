@@ -9,19 +9,36 @@
 //   Node (npm lint/build/test).
 //
 // Usage:
-//   node hooks/verify.js [--root <dir>] [--stack <id>] [--list] [--json]
-//     --list   detect + print the plan, do not run
-//     --stack  run only the named stack
-//     --root   repo root (default: cwd)
+//   node hooks/verify.js [--root <dir>] [--stack <id>] [--changed [--base <ref>]] [--list] [--json]
+//     --list     detect + print the plan, do not run
+//     --stack    run only the named stack
+//     --root     repo root (default: cwd)
+//     --changed  verify only stacks whose dir is touched in the branch diff (faster inner loop)
+//     --base     git ref to diff against for --changed (default: main; fallback master/origin/HEAD)
+//     --files    explicit comma-separated changed files (tests/CI; bypasses git)
+//   --changed fail-safe: if the diff can't be computed, verify ALL stacks (loud warn),
+//   never silently skip verification; empty diff = nothing to verify.
 //
 // Config: harness.config.json -> "verify". If "verify.stacks" is present it REPLACES
 // the auto-detected defaults (explicit control); otherwise DEFAULT_STACKS are used.
+// Per-step: optional (missing tool → skip), okCodes { "<exit>": "note" } — non-zero
+// exits that are warnings, not failures (e.g. pytest 5 = no tests collected).
 //
 // Exit 0 = all steps passed (or nothing to verify), exit 1 = a required step failed.
 
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { changedFiles } = require(path.join(__dirname, "_lib.js"));
+
+// Файл `file` лежит под каталогом стека `rel`? Корневой стек (rel ".") владеет всем
+// деревом → матчит любой изменённый файл; глубокий стек — только свой подкаталог.
+function fileUnder(rel, file) {
+  const r = String(rel).replace(/\\/g, "/");
+  const f = String(file).replace(/\\/g, "/");
+  if (r === "." || r === "") return true;
+  return f === r || f.startsWith(r + "/");
+}
 
 // ---------- defaults (warnings-as-errors baked in) ----------
 const DEFAULT_STACKS = [
@@ -38,7 +55,8 @@ const DEFAULT_STACKS = [
   { id: "python", markers: ["pyproject.toml", "requirements.txt", "setup.py"], steps: [
     { name: "lint", run: "ruff check ." },
     { name: "format", run: "ruff format --check .", optional: true },
-    { name: "test", run: "pytest -q" },
+    // pytest exit 5 = «тесты не собраны»: проект без тестов — warning, не вечно-красный VERIFY
+    { name: "test", run: "pytest -q", okCodes: { 5: "pytest: тесты не найдены — добавь хотя бы smoke-тест" } },
   ] },
   { id: "node", markers: ["package.json"], steps: [
     { name: "lint", run: "npm run lint --if-present" },
@@ -52,12 +70,15 @@ const MAX_DEPTH = 6;
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { root: process.cwd(), stack: null, list: false, json: false };
+  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--stack") a.stack = argv[++i];
     else if (argv[i] === "--list") a.list = true;
     else if (argv[i] === "--json") a.json = true;
+    else if (argv[i] === "--changed") a.changed = true;
+    else if (argv[i] === "--base") a.base = argv[++i];
+    else if (argv[i] === "--files") a.files = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
   }
   return a;
 }
@@ -115,7 +136,19 @@ function runStep(step, cwd) {
   let { stacks, failFast, explicit } = loadStacks(a.root);
   if (a.stack) stacks = stacks.filter((s) => s.id === a.stack);
 
-  const targets = detect(a.root, stacks);
+  let targets = detect(a.root, stacks);
+
+  // --changed: сузить до стеков, чьи каталоги затронуты в diff ветки. Fail-safe —
+  // при ошибке diff проверяем ВСЕ стеки (громкий warn), а не молча пропускаем.
+  if (a.changed) {
+    const cf = changedFiles(a.base, a.root, a.files);
+    if (cf.error) {
+      console.error(`⚠️ verify --changed: ${cf.error} — фильтр не применён, проверяю все обнаруженные стеки. Задай базу: --base <ref>.`);
+    } else {
+      const files = cf.files.map((f) => f.replace(/\\/g, "/"));
+      targets = files.length ? targets.filter((t) => files.some((f) => fileUnder(t.rel, f))) : [];
+    }
+  }
 
   if (a.list) {
     const plan = targets.map((t) => ({ stack: t.stack.id, dir: t.rel, steps: (t.stack.steps || []).map((s) => s.name) }));
@@ -129,7 +162,9 @@ function runStep(step, cwd) {
   }
 
   if (!targets.length) {
-    console.log("✅ verify: стеки не обнаружены — проверять нечего.");
+    console.log(a.changed
+      ? "✅ verify --changed: изменённые файлы не затрагивают ни один стек — проверять нечего."
+      : "✅ verify: стеки не обнаружены — проверять нечего.");
     process.exit(0);
   }
 
@@ -147,6 +182,9 @@ function runStep(step, cwd) {
         summary.push(`✗ ${label} (инструмент не найден)`);
         failed = `${label}: команда не найдена — установи инструмент или переопредели шаг в harness.config.json`;
         if (failFast) break outer; else continue;
+      }
+      if (step.okCodes && step.okCodes[res.code] !== undefined) {
+        summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`); continue;
       }
       if (step.optional) { summary.push(`⚠ ${label} (optional, exit ${res.code})`); continue; }
       summary.push(`✗ ${label} (exit ${res.code})`);

@@ -6,21 +6,42 @@
 // react to the exit code.
 //
 // Normalized contract returned by parse():
-//   { tool, command, filePath, sessionId, projectDir, raw }
+//   { tool, command, filePath, sessionId, projectDir, stopHookActive, raw }
 //
 // Exit-code convention (documented for all runtimes):
 //   exit 0  = allow
 //   exit 2  = BLOCK the pending tool call (Claude Code PreToolUse "deny")
-//   stdout {"additionalContext": "..."} = non-blocking note injected into context
 //   stderr text = human-readable reason (shown by most runners)
+//
+// Non-blocking note (see note()): Claude Code reads additionalContext ONLY from
+//   {"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"…"}}
+// — a bare top-level {"additionalContext": …} is ignored. We emit BOTH shapes
+// (top-level for simpler runners, hookSpecificOutput for Claude Code) + stderr mirror.
 
 function readStdin() {
+  // Idle-timeout read: жёсткий дедлайн резал большие payload'ы посередине.
+  // Таймер сбрасывается каждым чанком; лимит размера даёт флаг truncated —
+  // по нему guard решает fail-closed вместо слепого allow.
+  const IDLE_MS = 300, CAP_MS = 5000, MAX_BYTES = 2 * 1024 * 1024;
   return new Promise((resolve) => {
-    let data = "";
+    let data = "", done = false, idle = null, truncated = false;
+    const finish = () => {
+      if (done) return;
+      done = true; clearTimeout(idle); clearTimeout(cap);
+      resolve({ data, truncated });
+    };
+    const cap = setTimeout(finish, CAP_MS);
+    const arm = () => { clearTimeout(idle); idle = setTimeout(finish, IDLE_MS); };
     process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (c) => (data += c));
-    process.stdin.on("end", () => resolve(data));
-    setTimeout(() => resolve(data), 500); // never hang if stdin stays open
+    process.stdin.on("data", (c) => {
+      const room = MAX_BYTES - data.length;
+      if (room <= 0 || c.length > room) truncated = true;
+      if (room > 0) data += c.slice(0, room);
+      arm();
+    });
+    process.stdin.on("end", finish);
+    process.stdin.on("error", finish);
+    arm();
   });
 }
 
@@ -30,12 +51,11 @@ function firstString(...vals) {
 }
 
 async function parse() {
+  const { data, truncated } = await readStdin();
   let raw = {};
-  try {
-    raw = JSON.parse((await readStdin()) || "{}");
-  } catch {
-    raw = {};
-  }
+  let parseError = false;
+  try { raw = JSON.parse(data || "{}"); }
+  catch { parseError = data.trim().length > 0; } // пустой stdin = ручной запуск, не ошибка
   const ti = raw.tool_input || raw.toolInput || raw.input || raw.arguments || {};
   return {
     tool: firstString(raw.tool_name, raw.toolName, raw.tool, raw.name),
@@ -55,14 +75,21 @@ async function parse() {
       raw.cwd,
       process.cwd()
     ),
+    stopHookActive: raw.stop_hook_active === true || raw.stopHookActive === true,
+    truncated,
+    parseError,
     raw,
   };
 }
 
-function note(text) {
-  // Non-blocking: Claude Code reads {additionalContext} from stdout; other runners
-  // can read the stderr mirror.
-  try { process.stdout.write(JSON.stringify({ additionalContext: text }) + "\n"); } catch {}
+// Non-blocking note injected into agent context. eventName: "PreToolUse" | "PostToolUse" | …
+function note(text, eventName = "PreToolUse") {
+  try {
+    process.stdout.write(JSON.stringify({
+      additionalContext: text, // simpler runners
+      hookSpecificOutput: { hookEventName: eventName, additionalContext: text }, // Claude Code
+    }) + "\n");
+  } catch {}
   process.stderr.write(text + "\n");
   process.exit(0);
 }
