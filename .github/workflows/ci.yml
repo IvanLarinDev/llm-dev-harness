@@ -34,9 +34,11 @@ jobs:
           node-version: "22"
 
       # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
+      # GITHUB_TOKEN обязателен с gitleaks-action@v2 для сканирования PR (иначе шаг падает).
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
 
       # Conventional Commits across the PR's commits — cocogitto (`cog check`).
