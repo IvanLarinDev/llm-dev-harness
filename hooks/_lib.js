@@ -80,14 +80,22 @@ function isProtectedPath(rel, protectedList) {
 }
 
 // ---------- shell-write detection ----------
-// Covers: rm/mv/cp/tee/chmod/ln/truncate/touch <…path>, sed/perl -i <…path>,
-// and redirection > / >> into the path. Read-only uses (cat/ls/node hooks/x.js) pass.
+// Covers write/delete/move verbs across POSIX, cmd и PowerShell + sed/perl -i и
+// перенаправление > / >>. Windows-глаголы (del/move/Remove-Item/Set-Content…) —
+// потому что здесь основная оболочка PowerShell/cmd, а не bash: без них
+// `del hooks\x.js` или `Remove-Item lefthook.yml` проходили мимо защиты.
+// Все глаголы срабатывают ТОЛЬКО когда цель — защищённый путь (${target}),
+// поэтому обычные команды не задеваются. Read-only (cat/ls/node hooks/x.js) — мимо.
+const WRITE_VERBS =
+  "rm|mv|cp|tee|chmod|ln|truncate|touch|" + // POSIX
+  "del|erase|rmdir|rd|move|ren|rename|copy|" + // cmd.exe
+  "Remove-Item|Move-Item|Rename-Item|Copy-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item"; // PowerShell
 function shellWriteHit(scrubbed, alt, lb, dirPrefixInRedirect) {
   const seg = "[^;|&<>]*";
   const target = lb + alt;
-  const redir = dirPrefixInRedirect ? `>>?\\s*(?:[^\\s;|&]*\\/)?${alt}` : `>>?\\s*${alt}`;
+  const redir = dirPrefixInRedirect ? `>>?\\s*(?:[^\\s;|&]*[\\/\\\\])?${alt}` : `>>?\\s*${alt}`;
   const res = [
-    new RegExp(`(?:^|[\\s;&|])(?:rm|mv|cp|tee|chmod|ln|truncate|touch)\\s+${seg}${target}`, "i"),
+    new RegExp(`(?:^|[\\s;&|])(?:${WRITE_VERBS})\\s+${seg}${target}`, "i"),
     new RegExp(`(?:^|[\\s;&|])(?:sed|perl)\\s+${seg}\\s-[a-z]*i[a-z.]*\\b${seg}${target}`, "i"),
     new RegExp(`(?:^|[\\s;&|])(?:sed|perl)\\s+${seg}-[a-z]*i[a-z.]*\\s+${seg}${target}`, "i"),
     new RegExp(redir, "i"),
@@ -95,22 +103,28 @@ function shellWriteHit(scrubbed, alt, lb, dirPrefixInRedirect) {
   return res.some((re) => re.test(scrubbed));
 }
 
+// SEP — разделитель пути: `/` ИЛИ `\` (в PowerShell/cmd путь пишут через backslash,
+// поэтому `del hooks\agent\guard.js` должен матчиться так же, как `rm hooks/...`).
+const SEP = "[\\/\\\\]";
+
 // Запись в защищённые пути харнесса (префиксы от корня репо).
 function isProtectedShellWrite(scrubbed, protectedList) {
-  const esc = (str) => str.replace(/[.\\/]/g, (m) => "\\" + m);
+  // Порядок важен: сначала слэши → SEP, потом точки → `\.`. Иначе экранирование
+  // точки вставит `\`, который замена слэшей затрёт (lefthook.yml → lefthook[\/\\]yml).
+  const esc = (str) => str.replace(/[\/\\]/g, SEP).replace(/\./g, "\\.");
   // "hooks/" защищает и "hooks/x", и голое "rm -rf hooks"; файлы — по границе слова.
-  const alt = "(?:\\./)?(?:" + protectedList.map((p) =>
-    p.endsWith("/") ? esc(p.slice(0, -1)) + "(?:\\/|[\\s;&|]|$)" : esc(p) + "\\b"
+  const alt = "(?:\\." + SEP + ")?(?:" + protectedList.map((p) =>
+    p.endsWith("/") ? esc(p.slice(0, -1)) + "(?:" + SEP + "|[\\s;&|]|$)" : esc(p) + "\\b"
   ).join("|") + ")";
-  // Lookbehind БЕЗ "/": src/hooks/useAuth.ts (React) — не файл харнесса.
+  // Lookbehind БЕЗ разделителя: src/hooks/useAuth.ts (React) — не файл харнесса.
   return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(])", false);
 }
 
-// Запись в lint/format-конфиг (по basename, в любом каталоге).
+// Запись в lint/format-конфиг (по basename, в любом каталоге — через / или \).
 function isLintConfigShellWrite(scrubbed, lintConfigs) {
   const names = lintConfigs.map((n) => n.replace(/\./g, "\\.")).join("|");
-  const alt = `(?:[^\\s;|&<>]*\\/)?(?:${names})\\b`;
-  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(/])", true);
+  const alt = `(?:[^\\s;|&<>]*${SEP})?(?:${names})\\b`;
+  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(/\\\\])", true);
 }
 
 // rel — нормализованный путь; сравнение по basename, регистронезависимо.

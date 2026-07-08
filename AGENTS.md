@@ -102,7 +102,7 @@ in-process (без ~50-100мс спавна), CLI-обёртка — для ра
 | guard.js ловит | Тип |
 |---|---|
 | Обход харнесса: `--no-verify`/`commit -n`, `core.hooksPath` (config и `-c`), `LEFTHOOK=0`, `lefthook uninstall`, запись в `.git/hooks` | блок |
-| Правку файлов харнесса (`hooks/`, `lefthook.yml`, конфиги, workflows, `.claude/settings.json`) — file-tools **и** shell (`sed -i`/`rm`/`mv`/`tee`/редирект); пути нормализуются (`./`, `..`, регистр) | блок |
+| Правку файлов харнесса (`hooks/`, `lefthook.yml`, конфиги, workflows, `.claude/settings.json`) — file-tools **и** shell (POSIX `sed -i`/`rm`/`mv`/`tee`/редирект + cmd/PowerShell `del`/`move`/`Remove-Item`/`Set-Content`…); пути нормализуются (`./`, `..`, регистр, `/` и `\`) | блок |
 | Правку **существующего** lint/format-конфига проекта (`.eslintrc*`, `ruff.toml`, `biome.json`, `clippy.toml`, `pytest.ini`…) — красный VERIFY чинится кодом, а не ослаблением конфига; создание нового конфига с нуля разрешено; смешанные файлы (`pyproject.toml`, `package.json`, `tsconfig.json`) намеренно не в списке | блок |
 | Дегенеративные циклы: серия тривиальных команд; N× одно действие подряд; чередование A-B-A-B — на shell **и** на file-tools (Read/Write/Edit) | блок |
 | Мусор tool-разметки / низкоэнтропийную команду (признак сбоя стриминга/парсинга) | блок |

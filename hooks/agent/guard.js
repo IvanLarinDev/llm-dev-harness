@@ -10,7 +10,8 @@
 //   • обход харнесса: --no-verify / git commit -n, core.hooksPath (config и -c),
 //     LEFTHOOK=0, lefthook uninstall, запись в .git/hooks;
 //   • правка файлов харнесса (hooks/, lefthook.yml, конфиги, workflows) — file-tools
-//     И shell (sed -i / rm / mv / tee / редирект); пути нормализуются;
+//     И shell (POSIX rm/mv/sed -i/tee/редирект + cmd/PowerShell del/move/Remove-Item/
+//     Set-Content…); пути нормализуются, разделитель / и \;
 //   • правка СУЩЕСТВУЮЩЕГО lint/format-конфига проекта (создание нового — можно);
 //   • дегенеративные циклы; мусор tool-разметки; низкоэнтропийная команда;
 //   • обрезанный/нечитаемый входной payload (fail-closed, всегда включён).
@@ -160,13 +161,16 @@ function loopCheck(st, p, T) {
 }
 
 // ---------- обход харнесса (shell) ----------
-// Замечание про -n: у git commit это --no-verify (обход), у merge/revert — безобидное.
+// GIT: на Windows `git.exe`/`git.cmd` — валидные вызовы; без вариантов имени
+// `git.exe commit --no-verify` проходил мимо блока. Замечание про -n: у git commit
+// это --no-verify (обход), у merge/revert — безобидное.
+const GIT = "git(?:\\.exe|\\.cmd)?";
 const BYPASS = [
-  { re: /\bgit\s+commit\b[^\n]*(?:\s--no-verify\b|\s-[a-z]*n[a-z]*\b)/i,
+  { re: new RegExp(`\\b${GIT}\\s+commit\\b[^\\n]*(?:\\s--no-verify\\b|\\s-[a-z]*n[a-z]*\\b)`, "i"),
     why: "--no-verify / -n на git commit — пропускает pre-commit и commit-msg" },
-  { re: /\bgit\s+(merge|push)\b[^\n]*\s--no-verify\b/i,
+  { re: new RegExp(`\\b${GIT}\\s+(merge|push)\\b[^\\n]*\\s--no-verify\\b`, "i"),
     why: "--no-verify на git merge/push — пропускает хуки" },
-  { re: /\bgit\b[^\n]*\bcore\.hookspath\b/i,
+  { re: new RegExp(`\\b${GIT}\\b[^\\n]*\\bcore\\.hookspath\\b`, "i"),
     why: "core.hooksPath (git config или git -c) — отключение/подмена git-хуков" },
   { re: /\blefthook\s+uninstall\b/i,
     why: "lefthook uninstall — снятие всех git-хуков" },
@@ -175,7 +179,7 @@ const BYPASS = [
 ];
 function isGitHooksWrite(scrubbed) {
   return /\.git[\/\\]hooks\b/i.test(scrubbed) &&
-    /(^|[\s;&|])(rm|mv|cp|tee|chmod|ln|truncate|sed)\b|>/.test(scrubbed);
+    /(^|[\s;&|])(rm|mv|cp|tee|chmod|ln|truncate|sed|del|erase|rmdir|rd|move|ren|rename|copy|Remove-Item|Move-Item|Rename-Item|Copy-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item)\b|>/i.test(scrubbed);
 }
 // Обнулить строки в кавычках, чтобы commit -m "про -n флаг" не считался обходом.
 function scrubQuotes(cmd) {
@@ -255,9 +259,9 @@ function run(ctx, env = process.env) {
       // 4) ранние подсказки про main
       if (checkEnabled("main-note", env)) {
         const branch = currentBranch(projectDir);
-        if (["main", "master"].includes(branch) && /\bgit\s+(commit|merge)\b/.test(scrubbed))
+        if (["main", "master"].includes(branch) && new RegExp(`\\b${GIT}\\s+(commit|merge)\\b`).test(scrubbed))
           notes.push(`⚠️ guard: git commit/merge на «${branch}» — pre-commit отклонит. Перейди на feature-ветку (релиз: HARNESS_ALLOW_MAIN=1).`);
-        if (/\bgit\s+push\b/.test(scrubbed) && /\b(main|master)\b/.test(scrubbed) && !/refs\/tags|v\d/.test(scrubbed))
+        if (new RegExp(`\\b${GIT}\\s+push\\b`).test(scrubbed) && /\b(main|master)\b/.test(scrubbed) && !/refs\/tags|v\d/.test(scrubbed))
           notes.push(`⚠️ guard: прямой push в main/master отклонит серверный ruleset. main обновляется через PR.`);
       }
       return allowRes(notes);
