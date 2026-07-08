@@ -90,6 +90,29 @@ function writeConfig(force, dryRun) {
   return { action: exists ? "overwrite" : "write" };
 }
 
+// ---------- .gitignore: только персональный файл раннера ----------
+// Файлы харнесса (hooks/, lefthook.yml, конфиги, .github/) НЕ игнорируем — они
+// КОММИТЯТСЯ: иначе lefthook (ссылается на hooks/verify.js), CI и серверный ruleset
+// не получат кода проверок на свежем клоне. Игнорируем лишь персональный
+// .claude/settings.local.json (разрешения раннера, у каждого свои). Состояние
+// guard живёт в системном tmp, в репозиторий не пишется — там игнорировать нечего.
+const GITIGNORE_LINES = [".claude/settings.local.json"];
+function ensureGitignore(dryRun) {
+  const dst = path.join(a.target, ".gitignore");
+  let cur = "";
+  try { cur = fs.readFileSync(dst, "utf8"); } catch {}
+  const have = new Set(cur.split(/\r?\n/).map((s) => s.trim()));
+  const covered = have.has(".claude/") || have.has(".claude") || have.has("/.claude/");
+  const missing = covered ? [] : GITIGNORE_LINES.filter((l) => !have.has(l));
+  if (!missing.length) return { action: "already" };
+  if (!dryRun) {
+    const pad = cur && !cur.endsWith("\n") ? "\n" : "";
+    fs.writeFileSync(dst, cur + pad + (cur ? "\n" : "") +
+      "# agent runtime (персональные настройки раннера — не коммитим)\n" + missing.join("\n") + "\n");
+  }
+  return { action: cur ? "appended" : "created", added: missing };
+}
+
 // ---------- мерж agent-хуков в .claude/settings.json ----------
 // Наши записи не дублируются: дедуп по basename скрипта (guard.js/stop-reminder.js),
 // поэтому повторный install и уже настроенный вручную .claude/settings.json — ок.
@@ -140,7 +163,7 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, settings: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
 
   // целевой каталог должен существовать
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
@@ -168,6 +191,9 @@ const a = parseArgs(process.argv.slice(2));
   // 2. agent-хуки в settings.json
   out.settings = mergeSettings(a.dryRun);
   if (out.settings.status === "error") out.notes.push("settings: " + out.settings.reason);
+
+  // 2b. .gitignore: только персональный settings.local.json (файлы харнесса коммитятся)
+  out.gitignore = ensureGitignore(a.dryRun);
 
   // 3. активация (кроме dry-run)
   if (!a.dryRun) {
@@ -197,6 +223,7 @@ function finish(out, ok, reason) {
   }
   if (out.config) console.log(`  harness.config.json: ${out.config.action === "skip" ? "уже был (не трогаю)" : out.config.action === "write" ? "сгенерён" : "перезаписан"}`);
   if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent-хук(а) вплетено` : out.settings.status === "already" ? "agent-хуки уже вплетены" : "ошибка — " + out.settings.reason}`);
+  if (out.gitignore) console.log(`  .gitignore: ${out.gitignore.action === "already" ? "уже покрыт (.claude/settings.local.json)" : (out.gitignore.action === "created" ? "создан" : "дополнен") + " → .claude/settings.local.json"}`);
   if (out.lefthook) console.log(`  lefthook install: ${out.lefthook.ok ? "ок" : "пропущено (" + (out.lefthook.reason || out.lefthook.code) + ")"}`);
   if (out.doctor) console.log(`  doctor: ${out.doctor.ok ? "окружение в порядке" : "есть FAIL — запусти `node hooks/doctor.js`"}`);
   if (out.ruleset) console.log(`  ruleset: ${out.ruleset.ok ? "применён" : "не применён (нужен gh admin + Pro/публичный репо)"}`);
