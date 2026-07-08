@@ -52,6 +52,17 @@ jobs:
       - name: VERIFY (verify.js)
         run: node hooks/verify.js
 
+      # AgentShield — офлайн security-скан КОНФИГУРАЦИИ агента (секреты, широкие
+      # разрешения tool/MCP, инъекции в хуках, небезопасные паттерны в CLAUDE.md/
+      # AGENTS.md). Версия прибита (не плавающий тег/Action) — supply-chain-гигиена,
+      # как SHA-пиннинг экшенов в P1-9. `--opus` (Anthropic) НЕ используем: базовый
+      # scan офлайн и без ключа. Пока СОВЕЩАТЕЛЬНЫЙ (continue-on-error): накапливаем
+      # статистику ложных срабатываний на наших конфигах, прежде чем делать блок.
+      # Снять continue-on-error и добавить в ruleset вторым required-check — позже.
+      - name: AgentShield (agent-config security scan, advisory)
+        continue-on-error: true
+        run: npx --yes ecc-agentshield@1.4.0 scan --path .
+
       # DESIGN-gate: UI changes require an approved mockup set touched in the same diff.
       - name: DESIGN-gate
         if: github.event_name == 'pull_request'

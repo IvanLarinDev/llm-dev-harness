@@ -24,12 +24,20 @@
 // Per-step: optional (missing tool → skip), okCodes { "<exit>": "note" } — non-zero
 // exits that are warnings, not failures (e.g. pytest 5 = no tests collected).
 //
-// Exit 0 = all steps passed (or nothing to verify), exit 1 = a required step failed.
+// Debug-аудит: параллельно со стеками verify сканирует ТОЛЬКО изменённые в diff
+// файлы на забытые отладочные строки. hard-маркеры (debugger; / breakpoint() /
+// pdb.set_trace() / dbg!()) валят VERIFY; soft (console.log / print) — заметка,
+// включается harness.config.json -> debugAudit.soft. Область — diff (база = --base
+// или debugAudit.base); без diff аудит пропускается (не сканируем весь репо, иначе
+// массовые легитимные console.log/print дали бы шум). exclude-глобы — пропуск путей.
+//
+// Exit 0 = all steps passed (or nothing to verify), exit 1 = a required step failed
+//          ИЛИ debug-аудит нашёл hard-находку.
 
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { changedFiles } = require(path.join(__dirname, "_lib.js"));
+const { changedFiles, globToRe } = require(path.join(__dirname, "_lib.js"));
 
 // Файл `file` лежит под каталогом стека `rel`? Корневой стек (rel ".") владеет всем
 // деревом → матчит любой изменённый файл; глубокий стек — только свой подкаталог.
@@ -38,6 +46,78 @@ function fileUnder(rel, file) {
   const f = String(file).replace(/\\/g, "/");
   if (r === "." || r === "") return true;
   return f === r || f.startsWith(r + "/");
+}
+
+// ---------- debug-leftover audit (только изменённые файлы) ----------
+// Маркеры «никогда не коммить». Точные по синтаксису (требуют `;`/`()`), поэтому
+// строковые определения ниже и regex-литералы НЕ матчат сами себя (self-FP).
+// `what` намеренно без реального синтаксиса (без точки/скобок) — та же причина.
+// Привязка к расширениям: `breakpoint()`/`set_trace` — только .py, `dbg!` — только
+// .rs; иначе слово-омоним в чужом языке дал бы ложную тревогу.
+const DEBUG_HARD = [
+  { ext: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"], re: /(?:^|[^.\w])debugger\s*;/, what: "debugger statement" },
+  { ext: [".py"], re: /(?:^|[^.\w])breakpoint\s*\(\s*\)/, what: "breakpoint call" },
+  { ext: [".py"], re: /(?:^|[^.\w])i?pdb\.set_trace\s*\(/, what: "pdb set_trace" },
+  { ext: [".rs"], re: /(?:^|[^.\w])dbg!\s*\(/, what: "dbg macro" },
+  { ext: [".cs"], re: /Debugger\.Break\s*\(/, what: "Debugger Break" },
+];
+const DEBUG_SOFT = [
+  { ext: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"], re: /(?:^|[^.\w])console\.(?:log|debug)\s*\(/, what: "console.log/debug" },
+  { ext: [".py"], re: /(?:^|[^.\w])print\s*\(/, what: "print()" },
+];
+
+// harness.config.json → debugAudit (дефолты: включён, база main, soft off, без exclude).
+function loadDebugAudit(root) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(root, "harness.config.json"), "utf8"));
+    const d = cfg.debugAudit || {};
+    return {
+      enabled: d.enabled !== false,
+      base: d.base || "main",
+      soft: d.soft === true,
+      exclude: Array.isArray(d.exclude) ? d.exclude : [],
+    };
+  } catch {
+    return { enabled: true, base: "main", soft: false, exclude: [] };
+  }
+}
+
+// Один файл → массив находок. Бинарь/крупный/нечитаемый → пропуск (не ошибка).
+function scanFileForDebug(abs, rel, soft) {
+  let text;
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size > 1024 * 1024) return [];
+    text = fs.readFileSync(abs, "utf8");
+  } catch { return []; }
+  if (text.includes(String.fromCharCode(0))) return [];
+  const ext = path.extname(rel).toLowerCase();
+  const softSet = new Set(DEBUG_SOFT);
+  const markers = (soft ? DEBUG_HARD.concat(DEBUG_SOFT) : DEBUG_HARD).filter((m) => m.ext.includes(ext));
+  if (!markers.length) return [];
+  const hits = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    for (const m of markers) if (m.re.test(lines[i])) hits.push({ rel, line: i + 1, what: m.what, soft: softSet.has(m) });
+  }
+  return hits;
+}
+
+// Аудит изменённых файлов. Область — ТОЛЬКО diff (в отличие от стеков, где fail-safe
+// = проверить всё): без diff НЕ сканируем весь репозиторий, т.к. console.log/print
+// массово легитимны и дали бы шум. → { hard:[], soft:[], skipped:<причина>|null }.
+function debugAudit(root, opts, base, explicitFiles) {
+  if (!opts.enabled) return { hard: [], soft: [], skipped: "отключён в harness.config.json" };
+  const cf = changedFiles(base || opts.base, root, explicitFiles);
+  if (cf.error) return { hard: [], soft: [], skipped: cf.error };
+  const excludeRe = (opts.exclude || []).map(globToRe);
+  const hard = [], soft = [];
+  for (const f of cf.files) {
+    const rel = String(f).replace(/\\/g, "/");
+    if (excludeRe.some((re) => re.test(rel))) continue;
+    for (const h of scanFileForDebug(path.join(root, rel), rel, opts.soft)) (h.soft ? soft : hard).push(h);
+  }
+  return { hard, soft, skipped: null };
 }
 
 // ---------- defaults (warnings-as-errors baked in) ----------
@@ -161,7 +241,23 @@ function runStep(step, cwd) {
     process.exit(0);
   }
 
-  if (!targets.length) {
+  // debug-аудит изменённых файлов: до раннего выхода — работает даже без стеков.
+  // hard-находки валят VERIFY; soft (только при soft=true) — заметка без падения.
+  const da = loadDebugAudit(a.root);
+  const audit = debugAudit(a.root, da, a.base, a.files);
+  let auditFailed = null;
+  if (audit.skipped) {
+    if (da.enabled) console.log(`\n· debug-аудит пропущен: ${audit.skipped}`);
+  } else {
+    for (const h of audit.soft) console.log(`  ⚠ debug-строка (soft): ${h.rel}:${h.line} — ${h.what}`);
+    if (audit.hard.length) {
+      console.error("\n❌ debug-аудит — забытые отладочные строки в изменённых файлах:");
+      for (const h of audit.hard) console.error(`  ✗ ${h.rel}:${h.line} — ${h.what}`);
+      auditFailed = `debug-аудит: ${audit.hard.length} hard-находок (debugger/breakpoint/set_trace/dbg!)`;
+    }
+  }
+
+  if (!targets.length && !auditFailed) {
     console.log(a.changed
       ? "✅ verify --changed: изменённые файлы не затрагивают ни один стек — проверять нечего."
       : "✅ verify: стеки не обнаружены — проверять нечего.");
@@ -193,9 +289,14 @@ function runStep(step, cwd) {
     }
   }
 
-  console.log("\n— verify summary —");
-  for (const s of summary) console.log("  " + s);
-  if (failed) { console.error(`\n❌ VERIFY failed: ${failed}`); process.exit(1); }
+  if (summary.length) {
+    console.log("\n— verify summary —");
+    for (const s of summary) console.log("  " + s);
+  }
+  if (failed || auditFailed) {
+    console.error(`\n❌ VERIFY failed: ${[failed, auditFailed].filter(Boolean).join(" | ")}`);
+    process.exit(1);
+  }
   console.log("\n✅ VERIFY passed.");
   process.exit(0);
 })();
