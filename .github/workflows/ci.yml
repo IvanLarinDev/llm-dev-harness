@@ -11,8 +11,8 @@ name: verify
 # github-actions updater able to identify the source action and desired major.
 
 on:
-  # push только на main (пост-merge контроль); ветки проверяются через PR —
-  # иначе каждый PR-коммит гоняет CI дважды (push + pull_request).
+  # Push runs only on main for post-merge control. Branches are checked through PRs;
+  # otherwise every PR commit would run CI twice (push + pull_request).
   push:
     branches: [main]
   pull_request:
@@ -20,7 +20,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # gitleaks-action читает список коммитов PR (GET /pulls/{n}/commits)
+  pull-requests: read # gitleaks-action reads the PR commit list (GET /pulls/{n}/commits)
 
 jobs:
   verify:
@@ -39,7 +39,7 @@ jobs:
         run: node hooks/doctor.js
 
       # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
-      # GITHUB_TOKEN обязателен с gitleaks-action@v2 для сканирования PR (иначе шаг падает).
+      # GITHUB_TOKEN is required by gitleaks-action@v2 for PR scanning.
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # gitleaks/gitleaks-action@v2
         env:
@@ -65,13 +65,13 @@ jobs:
       - name: VERIFY (verify.js)
         run: node hooks/verify.js
 
-      # AgentShield — офлайн security-скан КОНФИГУРАЦИИ агента (секреты, широкие
-      # разрешения tool/MCP, инъекции в хуках, небезопасные паттерны в CLAUDE.md/
-      # AGENTS.md). Версия прибита (не плавающий тег/Action) — supply-chain-гигиена,
-      # как SHA-пиннинг экшенов в P1-9. `--opus` (Anthropic) НЕ используем: базовый
-      # scan офлайн и без ключа. Пока СОВЕЩАТЕЛЬНЫЙ (continue-on-error): накапливаем
-      # статистику ложных срабатываний на наших конфигах, прежде чем делать блок.
-      # Снять continue-on-error и добавить в ruleset вторым required-check — позже.
+      # AgentShield is an offline security scan of agent configuration: secrets,
+      # broad tool/MCP permissions, hook injections, and unsafe CLAUDE.md/AGENTS.md
+      # patterns. The version is pinned rather than using a floating tag/action, in
+      # the same supply-chain spirit as action SHA pinning. We do not use `--opus`;
+      # the baseline scan runs offline without a key. It is advisory for now
+      # (continue-on-error) while we collect false-positive data on our configs.
+      # Later: remove continue-on-error and add this as a second required check.
       - name: AgentShield (agent-config security scan, advisory)
         continue-on-error: true
         env:

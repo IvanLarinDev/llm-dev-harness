@@ -253,6 +253,27 @@ if (fs.existsSync(cogPath)) {
   /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: нужен from_latest_tag=true для release bump от последнего v* tag");
   /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: нужен ignore_merge_commits=true");
   /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: нужен tag_prefix=\"v\"");
+  /branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog)
+    ? ok("cog.toml: branch_whitelist includes release/**")
+    : fail("cog.toml: branch_whitelist must include release/** for release worktrees");
+  /template\s*=\s*"remote"/.test(cog)
+    ? ok("cog.toml: changelog.template=\"remote\"")
+    : fail("cog.toml: changelog.template=\"remote\" is required for github.com remote changelog generation");
+  /owner\s*=\s*"[^"]+"/.test(cog)
+    ? ok("cog.toml: changelog.owner set")
+    : fail("cog.toml: changelog.owner is required for remote changelog generation");
+  /repository\s*=\s*"[^"]+"/.test(cog)
+    ? ok("cog.toml: changelog.repository set")
+    : fail("cog.toml: changelog.repository is required for remote changelog generation");
+  const changelogPath = path.join(ROOT, "CHANGELOG.md");
+  let changelog = "";
+  try { changelog = fs.readFileSync(changelogPath, "utf8"); } catch {}
+  changelog
+    ? ok("CHANGELOG.md: present")
+    : fail("CHANGELOG.md is required for cog bump changelog generation");
+  /^---\s*$/m.test(changelog)
+    ? ok("CHANGELOG.md: contains Cocogitto separator ---")
+    : fail("CHANGELOG.md must contain Cocogitto separator line ---");
 }
 
 const workflowPath = ".github/workflows/ci.yml";

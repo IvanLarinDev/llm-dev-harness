@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// test.js — self-test suite харнесса. Кроссплатформенный (без bash).
-// Проверяет конфиги делегированных инструментов (lefthook/gitleaks/cocogitto/ruleset/CI),
-// guard.js (обход, циклы, защита файлов, lint-конфиги, fact-force, профили),
-// design-gate и verify. Guard-тесты гоняются IN-PROCESS через экспортируемую run()
-// (паттерн ECC-диспетчера) — на порядок быстрее спавна node на каждый кейс;
-// CLI-контракт (stdin/exit-коды) покрыт отдельной секцией со спавном.
-// Запуск: node hooks/test.js.  Exit 0 = зелёное, 1 = есть провалы.
+// test.js — cross-platform harness self-test suite without bash.
+// Checks delegated tool configs (lefthook/gitleaks/cocogitto/ruleset/CI),
+// guard.js behavior (bypass, loops, protected files, lint configs, fact-force,
+// profiles), design-gate, and verify. Guard tests run in-process through the
+// exported run() function, following the ECC dispatcher pattern; this is much
+// faster than spawning node for every case. The CLI stdin/exit-code contract is
+// covered separately with spawn-based tests.
+// Run: node hooks/test.js. Exit 0 = green, 1 = failures.
 
 const { execFileSync } = require("child_process");
 const fs = require("fs");
@@ -27,7 +28,7 @@ function runHook(hookPath, payloadObj, env = {}) {
   } catch (e) { return e.status || 1; }
 }
 function hookOutput(hookPath, payloadObj, env = {}) {
-  // stdout+stderr независимо от exit-кода
+  // Capture stdout+stderr regardless of exit code.
   try {
     return execFileSync("node", [hookPath], {
       input: JSON.stringify(payloadObj), encoding: "utf8",
@@ -45,8 +46,8 @@ const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
-// guard блокирует правки файлов харнесса относительно projectDir — тесты гоняем
-// из нейтрального каталога, чтобы проверять именно относительные пути.
+// guard blocks harness-file edits relative to projectDir; tests run from a neutral
+// directory so relative-path behavior is what gets exercised.
 const NEUTRAL = fs.mkdtempSync(path.join(os.tmpdir(), "harness-neutral-"));
 function sess(name) {
   return { HARNESS_SESSION_ID: name + "-" + Date.now() + "-" + Math.random().toString(36).slice(2), HARNESS_PROJECT_DIR: NEUTRAL };
@@ -69,7 +70,7 @@ function grun(payload, env = {}) {
 const gexit = (payload, env = {}) => grun(payload, env).exitCode;
 function gout(payload, env = {}) { const r = grun(payload, env); return String(r.stdout) + String(r.stderr); }
 
-// ---------- конфиги делегированных инструментов ----------
+// ---------- delegated tool configs ----------
 console.log("\nconfigs (lefthook + gitleaks + cocogitto + ruleset + ci):");
 const lh = readRepo("lefthook.yml");
 ok(/commit-msg:/.test(lh) && /cog verify/.test(lh), "lefthook commit-msg -> cog verify (conventional)");
@@ -86,6 +87,11 @@ const cog = readRepo("cog.toml");
 ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "cog.toml на месте (bump + changelog)");
 ok(/from_latest_tag\s*=\s*true/.test(cog) && /ignore_merge_commits\s*=\s*true/.test(cog) && /tag_prefix\s*=\s*"v"/.test(cog),
   "cog.toml release-safe: latest v* tag + merge commits ignored");
+ok(/branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog),
+  "cog.toml release-safe: release/** branch whitelist is allowed");
+ok(/template\s*=\s*"remote"/.test(cog) && /owner\s*=\s*"[^"]+"/.test(cog) && /repository\s*=\s*"[^"]+"/.test(cog),
+  "cog.toml release-safe: remote changelog template has owner/repository");
+ok(/^---\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
 const gl = readRepo(".gitleaks.toml");
 ok(/useDefault\s*=\s*true/.test(gl), "gitleaks расширяет дефолтный ruleset");
 let ruleset = {};
@@ -146,7 +152,7 @@ ok(noCoauthorExit("feat(ui): add setting\n") === 0, "CLI пропускает ч
 ok(noCoauthorExit("feat(ui): add setting\n\nCo-Authored-By: Claude <noreply@example.test>\n") === 1,
   "CLI блокирует co-author trailer");
 
-// ---------- guard: обход харнесса ----------
+// ---------- guard: harness bypass ----------
 console.log("\nguard: bypass detection:");
 const bp = (cmd, env = {}) => gexit({ tool_name: "Bash", tool_input: { command: cmd } }, { ...sess("bp"), ...env });
 ok(bp('git commit -m "feat: x" --no-verify') === 2, "блок: git commit --no-verify");
@@ -182,7 +188,7 @@ execFileSync("git", ["checkout", "-q", "-b", "feat/test"], { cwd: btmp });
 ok(runBranchGuard(btmp) === 0, "branch-guard: feature-ветка проходит");
 try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
 
-// ---------- guard: shell-запись в защищённые пути ----------
+// ---------- guard: shell writes to protected paths ----------
 console.log("\nguard: protected paths via shell:");
 ok(bp("sed -i 's/x/y/' hooks/agent/guard.js") === 2, "блок: sed -i по hooks/");
 ok(bp("echo bad >> lefthook.yml") === 2, "блок: редирект в lefthook.yml");
@@ -203,7 +209,7 @@ ok(bp("cat hooks/agent/guard.js") === 0, "НЕ блок: чтение хука (
 ok(bp("git add hooks/ lefthook.yml") === 0, "НЕ блок: git add файлов харнесса");
 ok(bp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "ACK_BYPASS=1 разрешает shell-правку");
 
-// ---------- guard: обход защиты через инлайн-eval интерпретатора ----------
+// ---------- guard: protected-write bypass through inline interpreter eval ----------
 console.log("\nguard: interpreter-eval protected write:");
 ok(/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1"))),
   "node -e writeFileSync в hooks/ -> сообщение про инлайн-eval интерпретатора");
@@ -213,6 +219,12 @@ ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook
   "python -c open('lefthook.yml','w') -> жёсткий блок");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, sess("ie3")) === 2,
   "bash -c 'rm -rf hooks/' -> жёсткий блок (глагол спрятан в кавычках от write-детекции)");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "pwsh -EncodedCommand SQBFAFgAIAAoACcAaABvAG8AawBzAC8AYQBnAGUAbgB0AC8AZwB1AGEAcgBkAC4AagBzACcAKQA=" } }, sess("ie9")) === 2,
+  "pwsh -EncodedCommand -> opaque eval is blocked");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "powershell -EncodedCommand SQBFAFgAIAAoACcAbABlAGYAdABoAG8AbwBrAC4AeQBtAGwAJwApAA==" } }, sess("ie10")) === 2,
+  "powershell -EncodedCommand -> opaque eval is blocked");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs')['write'+'FileSync']('hooks/agent/guard.js','x')\"" } }, sess("ie11")) === 2,
+  "node -e dynamic writeFileSync in hooks/ -> hard block");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, { ...sess("ie8"), HARNESS_ACK_BYPASS: "1" }) === 0,
   "ACK_BYPASS=1 разрешает инлайн-eval protected write");
 ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"console.log(1+1)\"" } }, sess("ie4"))),
@@ -224,14 +236,14 @@ ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { c
 ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js" } }, sess("ie7"))),
   "node hooks/verify.js (без -e) -> без ноты");
 
-// ---------- guard: сбой стриминга ----------
+// ---------- guard: stream corruption ----------
 console.log("\nguard: stream corruption:");
 ok(bp("cd /x && echo garbage 183<tool_call>") === 2, "блок: мусор tool-разметки (<tool_call>)");
 ok(bp("echo garbage </tool_use> x") === 2, "блок: мусор tool-разметки (</tool_use>)");
 ok(bp("echo a echo a echo a echo a echo a") === 2, "блок: низкая энтропия токенов");
 ok(bp("cat > a.html <<EOF\n<toolbar>hi</toolbar>\nEOF") === 0, "НЕ блок: heredoc с <toolbar> (легитимный HTML)");
 
-// ---------- guard: циклы (shell) ----------
+// ---------- guard: shell loops ----------
 console.log("\nguard: shell loops:");
 let S = sess("triv");
 let last = 0;
@@ -259,7 +271,7 @@ for (let i = 0; i < 4; i++) {
 last = gexit({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js --list" } }, S);
 ok(last === 0, "третья команда разрывает чередование");
 
-// ---------- guard: циклы (file-tools) ----------
+// ---------- guard: file-tool loops ----------
 console.log("\nguard: file-tool loops:");
 S = sess("ft");
 for (let i = 0; i < 12; i++) last = gexit({ tool_name: "Read", tool_input: { file_path: "/tmp/same.txt" } }, S);
@@ -269,7 +281,7 @@ for (let i = 0; i < 11; i++) gexit({ tool_name: "Edit", tool_input: { file_path:
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/b.py" } }, S) === 0, "другой файл сбрасывает серию");
 ok(gexit({ tool_name: "Read", tool_input: {} }, sess("ft3")) === 0, "нет target -> не проверяется");
 
-// ---------- guard: защита файлов харнесса ----------
+// ---------- guard: protected harness files ----------
 console.log("\nguard: protected harness files:");
 const ed = (fp, env = {}) => gexit({ tool_name: "Edit", tool_input: { file_path: fp } }, { ...sess("prot"), ...env });
 ok(ed("lefthook.yml") === 2, "блок: правка lefthook.yml");
@@ -283,7 +295,7 @@ ok(ed("design/../hooks/agent/guard.js") === 2, "блок: обход через 
 ok(ed("Lefthook.yml") === 2, "блок: обход через регистр (Windows/macOS ФС регистронезависимы)");
 ok(ed("hooks2/readme.md") === 0, "НЕ блок: hooks2/ — не hooks/");
 
-// ---------- guard: lint-config protection (паттерн ECC config-protection) ----------
+// ---------- guard: lint-config protection (ECC config-protection pattern) ----------
 console.log("\nguard: lint-config protection:");
 fs.writeFileSync(path.join(NEUTRAL, ".eslintrc.json"), "{}");
 ok(ed(".eslintrc.json") === 2, "блок: правка существующего .eslintrc.json");
@@ -298,7 +310,7 @@ ok(bp("cat ruff.toml") === 0, "НЕ блок: чтение lint-конфига")
 ok(bp("rm myruff.toml") === 0, "НЕ блок: похожее имя (myruff.toml) — не lint-конфиг");
 ok(bp("echo x > src/hooks/useAuth.ts") === 0, "НЕ блок: src/hooks/ проекта (React) — не файлы харнесса");
 
-// ---------- guard: fact-force (EXPLORE перед IMPLEMENT, паттерн ECC GateGuard) ----------
+// ---------- guard: fact-force (EXPLORE before IMPLEMENT, ECC GateGuard pattern) ----------
 console.log("\nguard: fact-force:");
 fs.writeFileSync(path.join(NEUTRAL, "existing.py"), "x = 1");
 let SF = sess("ff");
@@ -313,7 +325,7 @@ ok(!/не читав/.test(gout({ tool_name: "Edit", tool_input: { file_path: "e
 ok(!/не читав/.test(gout({ tool_name: "Write", tool_input: { file_path: "brand-new.py" } }, sess("ff3"))),
   "Write нового файла -> без note (нечего читать)");
 
-// ---------- guard: профили строгости ----------
+// ---------- guard: strictness profiles ----------
 console.log("\nguard: strictness profiles:");
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf1"), HARNESS_PROFILE: "minimal" }) === 0,
   "minimal: lint-конфиг не блокируется (только анти-обход + файлы харнесса)");
@@ -330,7 +342,7 @@ ok(lastP === 2, "strict: порог повторов вдвое ниже (3x о�
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf6"), HARNESS_DISABLED_CHECKS: "lintconfig" }) === 0,
   "HARNESS_DISABLED_CHECKS=lintconfig отключает проверку точечно");
 
-// ---------- guard: DESIGN-подсказка ----------
+// ---------- guard: DESIGN note ----------
 console.log("\nguard: design note:");
 const dn = gout({ tool_name: "Edit", tool_input: { file_path: "src/ui/panel.qml" } }, sess("dn1"));
 ok(/DESIGN|мокап/i.test(dn), "правка UI-файла -> note про DESIGN-стадию");
@@ -339,7 +351,7 @@ ok(/"hookSpecificOutput"/.test(dn) && /"hookEventName"\s*:\s*"PreToolUse"/.test(
 const dn2 = gout({ tool_name: "Edit", tool_input: { file_path: "src/core/logic.py" } }, sess("dn2"));
 ok(!/DESIGN|мокап/i.test(dn2), "обычный файл -> без note");
 
-// ---------- guard: CLI-обёртка (spawn-контракт stdin/exit-кодов) ----------
+// ---------- guard: CLI wrapper (spawn-based stdin/exit-code contract) ----------
 console.log("\nguard: CLI contract:");
 ok(runHook(GUARD, { tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("cli1")) === 2, "CLI: блок -> exit 2");
 ok(runHook(GUARD, { tool_name: "Bash", tool_input: { command: "echo ok" } }, sess("cli2")) === 0, "CLI: allow -> exit 0");
@@ -347,7 +359,7 @@ ok(typeof guardMod.run === "function", "guard экспортирует run(ctx, 
 const rr = grun({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("ip1"));
 ok(rr.exitCode === 2 && /guard/.test(rr.stderr), "run(): блок приходит результатом, без process.exit");
 
-// ---------- guard: fail-closed на битом вводе ----------
+// ---------- guard: fail-closed on malformed input ----------
 console.log("\nguard: fail-closed input:");
 function runRaw(hookPath, rawStr, env = {}) {
   try {
@@ -432,7 +444,7 @@ ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]) === 0,
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
   "блок: старый approval НЕ в diff ветки — вечного пропуска больше нет");
 ok(gate(dtmp, ["design/mockups/login/02-dark-pro.html"]) === 0, "пропуск: правки только мокапов не триггерят гейт");
-// fail-open при недоступной базе — но ГРОМКИЙ (skipped:true в --json), не молчаливый
+// Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};
 try {
@@ -506,7 +518,7 @@ fs.writeFileSync(path.join(etmp, "slow.js"), "setTimeout(() => {}, 5000);\n");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "slow", run: "node slow.js", timeoutMs: 50 }] }] } }));
 ok(/timeout after 50ms/.test(verifyOutput(etmp)), "verify timeout: hung step is killed and reported clearly");
 
-// --changed: фильтр стеков по diff ветки (детерминированно через --files)
+// --changed: stack filtering by branch diff, made deterministic with --files.
 function verifyListArgs(root, extra) {
   try { return JSON.parse(execFileSync("node", [VERIFY, "--root", root, "--list", "--json", ...extra], { encoding: "utf8", stdio: "pipe" })); }
   catch { return { plan: [] }; }
@@ -563,7 +575,7 @@ try { fs.rmSync(dirtyTmp, { recursive: true, force: true }); } catch {}
 
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
 
-// ---------- debug-аудит изменённых файлов ----------
+// ---------- debug audit of changed files ----------
 console.log("\ndebug-audit:");
 const dbgtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dbgaudit-"));
 fs.writeFileSync(path.join(dbgtmp, "clean.js"), "const x = 1;\nmodule.exports = x;\n");
@@ -575,7 +587,7 @@ fs.mkdirSync(path.join(dbgtmp, "hooks"), { recursive: true });
 fs.writeFileSync(path.join(dbgtmp, "hooks", "bad-hook.js"), "function f(){ debugger; return 1; }\n");
 fs.writeFileSync(path.join(dbgtmp, "hooks", "fixture.js"), "const fixture = \"debugger;\";\n");
 fs.writeFileSync(path.join(dbgtmp, "hooks", "comment.js"), "// debugger;\nconst x = 1;\n");
-// verify с --files: аудит сканирует именно эти файлы (без git), стеков в dbgtmp нет.
+// verify with --files: audit scans exactly these files without git; dbgtmp has no stacks.
 function dbgExit(files, cfg) {
   fs.writeFileSync(path.join(dbgtmp, "harness.config.json"), JSON.stringify(cfg || {}));
   return verifyExitArgs(dbgtmp, ["--files", files]);
@@ -646,6 +658,22 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /verify\.stacks.*harness self-test/.test(r.msg) && r.level === "FAIL"),
   "doctor: verify.stacks не может убрать обязательный harness self-test");
+const badCog = fs.readFileSync(path.join(bootRepo, "cog.toml"), "utf8")
+  .replace(/,\s*"release\/\*\*"/, "")
+  .replace(/\ntemplate\s*=\s*"remote"/, "")
+  .replace(/\nowner\s*=\s*"[^"]+"/, "")
+  .replace(/\nrepository\s*=\s*"[^"]+"/, "");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), badCog);
+fs.rmSync(path.join(bootRepo, "CHANGELOG.md"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branch_whitelist.*release\/\*\*/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.template/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.owner/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /changelog\.repository/.test(r.msg) && r.level === "FAIL") &&
+   (dres.results || []).some((r) => /CHANGELOG\.md is required/.test(r.msg) && r.level === "FAIL"),
+  "doctor: release-blocking cog.toml/CHANGELOG gaps -> FAIL");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml"));
+fs.writeFileSync(path.join(bootRepo, "CHANGELOG.md"), "# Changelog\n\n---\n");
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "self-test", run: "node test.js" }] }] } }, null, 2) + "\n");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);
@@ -715,12 +743,12 @@ function installJson(target, extra) {
 }
 const itmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-"));
 execFileSync("git", ["init", "-q"], { cwd: itmp });
-// dry-run: план есть, диск не тронут
+// dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "install --dry-run: ok, режим install");
 ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f.rel)), "dry-run план включает hooks/agent/guard.js");
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ничего не пишет на диск");
-// реальная установка
+// Real installation.
 installJson(itmp, []);
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
 ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "install: dev-self-test (test.js) в target НЕ копируется");
@@ -729,7 +757,7 @@ ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён conf
 const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
 ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "install: guard вплетён в PreToolUse");
 ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "install: stop-reminder вплетён в Stop");
-// .gitignore: игнорируется ТОЛЬКО персональный settings.local.json, не файлы харнесса
+// .gitignore ignores only personal settings.local.json, not harness files.
 const gi = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
 ok(/\.claude\/settings\.local\.json/.test(gi), "install: .gitignore получает .claude/settings.local.json");
 ok(!/^hooks\//m.test(gi) && !/lefthook\.yml/.test(gi) && !/harness\.config/.test(gi),
@@ -738,36 +766,50 @@ installJson(itmp, []);
 const gi2 = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
 ok((gi2.match(/settings\.local\.json/g) || []).length === 1, "повторный install не дублирует строку в .gitignore");
 
-// идемпотентность: повторный install не дублирует hook-записи
+// Idempotency: repeated install does not duplicate hook entries.
 const preLen = tset.hooks.PreToolUse.length;
 installJson(itmp, []);
 const tset2 = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
 ok(tset2.hooks.PreToolUse.length === preLen, "повторный install идемпотентен (hook-записи не дублируются)");
-// не затирает существующий файл без --force, затирает с --force
+const dstSet = path.join(itmp, ".claude", "settings.json");
+const staleSet = JSON.parse(fs.readFileSync(dstSet, "utf8"));
+staleSet.hooks.PreToolUse = [
+  { hooks: [{ type: "command", command: "node vendor/guard.js" }] }
+];
+staleSet.hooks.Stop = [
+  { hooks: [{ type: "command", command: "node vendor/stop-reminder.js" }] }
+];
+fs.writeFileSync(dstSet, JSON.stringify(staleSet, null, 2) + "\n");
+const staleMerge = installJson(itmp, []);
+const staleAfter = JSON.parse(fs.readFileSync(dstSet, "utf8"));
+ok(staleMerge.settings && staleMerge.settings.added === 2 &&
+   staleAfter.hooks.PreToolUse.some((e) => JSON.stringify(e).includes("hooks/agent/guard.js")) &&
+   staleAfter.hooks.Stop.some((e) => JSON.stringify(e).includes("hooks/agent/stop-reminder.js")),
+  "install: unrelated guard.js basename does not mask missing harness hooks");
+// Existing files are preserved unless --force is requested.
 const gp = path.join(itmp, "hooks", "agent", "guard.js");
 fs.writeFileSync(gp, "// local edit\n");
 installJson(itmp, []);
 ok(fs.readFileSync(gp, "utf8") === "// local edit\n", "install без --force не перезатирает существующий файл");
 installJson(itmp, ["--force"]);
 ok(fs.readFileSync(gp, "utf8") !== "// local edit\n", "install --force перезаписывает файлы харнесса");
-// мерж settings.json сохраняет чужие ключи
-const dstSet = path.join(itmp, ".claude", "settings.json");
+// settings.json merge keeps foreign keys.
 const cur = JSON.parse(fs.readFileSync(dstSet, "utf8")); cur.model = "opus"; fs.writeFileSync(dstSet, JSON.stringify(cur));
 installJson(itmp, []);
 ok(JSON.parse(fs.readFileSync(dstSet, "utf8")).model === "opus", "install мержит settings.json, сохраняя чужие ключи (не затирает)");
-// невалидный чужой settings.json — не трогаем, а сообщаем
+// Invalid existing settings.json is reported and left untouched.
 fs.writeFileSync(dstSet, "{ broken");
 const br = installJson(itmp, []);
 ok(br.settings && br.settings.status === "error", "невалидный .claude/settings.json → ошибка мержа, файл не тронут");
 ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "невалидный settings.json остался как был (не затёрт)");
-// не-git каталог → нота, но установка файлов проходит
+// A non-git target gets a note; file installation still runs.
 const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
 ok(Array.isArray(ng.notes) && ng.notes.some((n) => /git-репозиторий/.test(n)), "не-git target → нота про git init");
 ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "install: activation/doctor failure делает JSON ok=false");
 try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
 
-// ---------- гигиена: NUL-байты ----------
+// ---------- hygiene: NUL bytes ----------
 console.log("\nsource hygiene:");
 function walk(dir) {
   const out = [];
@@ -781,10 +823,11 @@ function walk(dir) {
 const nulFiles = walk(__dirname).filter((f) => fs.readFileSync(f).includes(0));
 ok(nulFiles.length === 0, "нет NUL-байтов в исходниках хуков" + (nulFiles.length ? " (найдено: " + nulFiles.join(", ") + ")" : ""));
 
-// ---------- гигиена: целостность ключевых доков ----------
-// Ловит обрезанный/битый markdown (регрессия 99bf0c7: AGENTS.md обрубился посреди
-// таблицы битым UTF-8 байтом, потеряв секцию ## Env). Обрезанный многобайтный хвост
-// не переживает decode→encode roundtrip и даёт U+FFFD — проверяем оба признака.
+// ---------- hygiene: key docs integrity ----------
+// Catches truncated/corrupt markdown. Regression 99bf0c7 cut AGENTS.md in the
+// middle of a table with a broken UTF-8 byte and lost the ## Env section. A
+// truncated multibyte tail fails decode→encode roundtrip and produces U+FFFD, so
+// both signals are checked.
 console.log("\ndocs integrity:");
 function docCheck(rel) {
   let buf;
