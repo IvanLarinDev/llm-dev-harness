@@ -43,7 +43,9 @@ VERIFY и feature-ветка обязательны всегда.
 **4. VERIFY (до коммита).** `node hooks/verify.js` — авто-детект стеков
 (Python→ruff+pytest; C#→dotnet format/build -warnaserror/test; Rust→fmt+clippy -D warnings+test;
 Node→npm lint/build/test), fail-fast, warnings-as-errors зашиты в шаги; переопределение —
-`harness.config.json → verify`; `--list` — план без запуска. Сверх exit-кода: прочитать
+`harness.config.json → verify`; `--list` — план без запуска. Параллельно — **debug-аудит**
+изменённых файлов: hard-маркеры (`debugger;`/`breakpoint()`/`pdb.set_trace()`/`dbg!()`)
+валят VERIFY, soft (`console.log`/`print`) — заметка (`debugAudit` в конфиге). Сверх exit-кода: прочитать
 вывод билда (новые warnings, deprecation, «falling back to …» — чинить или явно отметить
 в отчёте) и сделать `git diff` self-review (debug-логи, закомментированный код, мусор).
 

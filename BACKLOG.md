@@ -27,10 +27,13 @@
 GitHub Rulesets + required status checks + required PR. Сейчас у харнесса есть только слой 1
 (локальный) и слой 2 (agent-adapter). Серверного слоя нет.
 
-- **P0-0. План/приватность. ✅ РЕШЕНО: Free + private, без серверного принуждения.**
-  Следствие: rulesets/required-checks недоступны, защита `main` остаётся **локальной/совещательной**
-  (git-native pre-push + PR-дисциплина + agent bypass-guard). CI (P0-1) запускается и показывает
-  статус, но не может блокировать merge. Пересмотреть при переходе на Pro/Team или публичный репо.
+- **P0-0. План/приватность. 🔄 ПЕРЕСМОТРЕНО (2026-07): делаем репозиторий ПУБЛИЧНЫМ.**
+  Публичный репо на Free получает rulesets/required-checks — это разблокирует серверный слой 0
+  (P0-2) без оплаты Pro. Предусловие (опасная операция, необратимо): прогнать `gitleaks detect`
+  по ВСЕЙ истории коммитов до публикации — в открытый доступ уходит вся история, отозвать нельзя
+  (форки/кэши). Порядок: чистый history-scan → `gh repo edit --visibility public` →
+  `node hooks/apply-ruleset.js` → проверить через `gh` что ruleset активен. Прежнее решение
+  (Free+private, только локальная защита) — отменено.
 
 - **P0-1. CI-зеркало проверок. ⏳ АВТОРИЗОВАНО, ждёт пуша workflow.** Готовы: `.github/workflows/ci.yml`
   (gitleaks + cocogitto `cog check` + `node hooks/verify.js` + `design-gate.js` на push/PR) —
@@ -97,6 +100,21 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   запинить на commit-SHA (checkout `9c091bb…`=v7.0.0, setup-node `48b55a…`=v6.4.0) и дать Dependabot
   их поддерживать, либо просто мёржить его версионные PR. Пуш workflow — только из твоей сессии
   (скоуп `workflow`). На Free+private review по CODEOWNERS — совещательны (см. P0-0).
+
+- **P1-10. Security-аудит конфигурации агента. ✅ СДЕЛАНО (advisory).** Идея из харнесса ECC
+  (AgentShield). В CI добавлен шаг `npx ecc-agentshield@1.4.0 scan --path .` — офлайн pattern-скан
+  конфигов агента (секреты, широкие tool/MCP-разрешения, инъекции в хуках, небезопасные паттерны
+  в CLAUDE.md/AGENTS.md), exit 2 на critical. Версия прибита (supply-chain, ср. P1-9); НЕ готовый
+  Action и НЕ `--opus` (тот требует `ANTHROPIC_API_KEY`). Пока `continue-on-error: true` —
+  **совещательный**, копим статистику ложных срабатываний. Дальше: снять `continue-on-error`
+  и добавить вторым required-check в ruleset (после публикации репо, P0-0).
+
+- **P1-11. Debug-аудит изменённых файлов. ✅ СДЕЛАНО.** `hooks/verify.js` сканирует ТОЛЬКО diff-файлы
+  на забытые отладочные строки: hard-маркеры (`debugger;`/`breakpoint()`/`pdb.set_trace()`/`dbg!()`/
+  `Debugger.Break()`) валят VERIFY, soft (`console.log`/`print`) — заметка (`debugAudit.soft`).
+  Маркеры привязаны к расширениям (защита от омонимов), self-FP исключён точным синтаксисом +
+  `debugAudit.exclude` (тут `hooks/**`). Заменяет ручной шаг «grep debug-строк» из git-diff
+  self-review. Покрыто self-test'ами (8 кейсов).
 
 ---
 

@@ -97,6 +97,8 @@ ok(!!prr && prr.parameters.require_code_owner_review === false,
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
 ok(/design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет verify.js + design-gate.js");
+ok(/ecc-agentshield@\d/.test(ci) && /continue-on-error:\s*true/.test(ci),
+  "CI: security-скан ecc-agentshield с прибитой версией, пока совещательный (continue-on-error)");
 
 // ---------- no-coauthor grep (паттерн из lefthook.yml, через RegExp) ----------
 console.log("\nno-coauthor pattern:");
@@ -380,6 +382,29 @@ ok(allIds === "node,python" && fbIds === allIds,
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
+
+// ---------- debug-аудит изменённых файлов ----------
+console.log("\ndebug-audit:");
+const dbgtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dbgaudit-"));
+fs.writeFileSync(path.join(dbgtmp, "clean.js"), "const x = 1;\nmodule.exports = x;\n");
+fs.writeFileSync(path.join(dbgtmp, "bad.js"), "function f(){ debugger; return 1; }\n");
+fs.writeFileSync(path.join(dbgtmp, "softy.js"), "console.log('hi');\n");
+fs.writeFileSync(path.join(dbgtmp, "bp.js"), "breakpoint();\n");
+fs.writeFileSync(path.join(dbgtmp, "bad.py"), "import pdb; pdb.set_trace()\n");
+// verify с --files: аудит сканирует именно эти файлы (без git), стеков в dbgtmp нет.
+function dbgExit(files, cfg) {
+  fs.writeFileSync(path.join(dbgtmp, "harness.config.json"), JSON.stringify(cfg || {}));
+  return verifyExitArgs(dbgtmp, ["--files", files]);
+}
+ok(dbgExit("bad.js", {}) === 1, "debug-аудит: debugger в изменённом .js -> VERIFY падает");
+ok(dbgExit("clean.js", {}) === 0, "debug-аудит: чистый изменённый файл -> VERIFY проходит");
+ok(dbgExit("bad.py", {}) === 1, "debug-аудит: pdb.set_trace в изменённом .py -> падает");
+ok(dbgExit("bp.js", {}) === 0, "debug-аудит: breakpoint в .js НЕ ловится (маркер привязан к .py) — защита от FP");
+ok(dbgExit("softy.js", {}) === 0, "debug-аудит: console.log при soft=false -> не падение");
+ok(dbgExit("softy.js", { debugAudit: { soft: true } }) === 0, "debug-аудит: console.log при soft=true -> заметка, но не падение");
+ok(dbgExit("bad.js", { debugAudit: { exclude: ["bad.js"] } }) === 0, "debug-аудит: exclude-глоб пропускает файл с hard-маркером");
+ok(dbgExit("bad.js", { debugAudit: { enabled: false } }) === 0, "debug-аудит: enabled=false отключает аудит");
+try { fs.rmSync(dbgtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- doctor ----------
 console.log("\ndoctor:");

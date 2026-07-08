@@ -27,6 +27,7 @@ Commit-lint / secret-scan / release / hook-раннер делегированы
 | VERIFY (мульти-стек lint/build/test) | *своё* | [`hooks/verify.js`](./hooks/verify.js) |
 | GUI DESIGN-гейт | *своё* | [`hooks/design-gate.js`](./hooks/design-gate.js) |
 | Agent-хук (обход/циклы/подсказки) | *своё* | [`hooks/agent/guard.js`](./hooks/agent/guard.js) |
+| Security-аудит конфигурации агента (advisory) | **ecc-agentshield** (npx, прибитая версия) | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
 
 Общие хелперы хуков (глобы, конфиг, нормализация путей) — [`hooks/_lib.js`](./hooks/_lib.js).
 
