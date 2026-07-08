@@ -56,6 +56,24 @@ Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enfo
 остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
 Pro/публичный репо.
 
+### Bootstrap PR
+
+После установки в целевой репозиторий файлы харнесса нужно закоммитить в `main`
+через отдельный bootstrap PR до того, как loop станет обязательным. Иначе инструкции
+будут требовать `node hooks/verify.js` или `cog bump --auto`, которых нет в clean
+worktree от `origin/main`.
+
+Проверка:
+
+```bash
+node hooks/doctor.js
+git ls-files hooks/verify.js cog.toml lefthook.yml AGENTS.md harness.config.json
+```
+
+Если doctor пишет `harness not bootstrapped` или файлы видны как untracked, сначала
+закрой bootstrap PR. Release из такого состояния делать нельзя: clean release
+worktree не воспроизведёт локальные untracked файлы.
+
 Про `.gitignore`: файлы харнесса (`hooks/`, `lefthook.yml`, конфиги, `.github/`,
 `harness.config.json`) **коммитятся** — иначе на свежем клоне у lefthook, CI и
 серверного ruleset не будет кода проверок. Установщик добавляет в `.gitignore`

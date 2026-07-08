@@ -205,9 +205,13 @@ function detect(root, stacks) {
 
 // ---------- run ----------
 function runStep(step, cwd) {
-  const r = spawnSync(step.run, { cwd, shell: true, stdio: "inherit" });
+  const r = spawnSync(step.run, { cwd, shell: true, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT" };
-  return { ok: r.status === 0, code: r.status };
+  return { ok: r.status === 0, code: r.status, stdout: String(r.stdout || ""), stderr: String(r.stderr || "") };
+}
+function emitStepOutput(res) {
+  if (res.stdout) process.stdout.write(res.stdout);
+  if (res.stderr) process.stderr.write(res.stderr);
 }
 
 // ---------- main ----------
@@ -266,29 +270,46 @@ function runStep(step, cwd) {
 
   let failed = null;
   const summary = [];
+  const warnings = [];
   outer:
   for (const t of targets) {
     for (const step of t.stack.steps || []) {
       const label = `${t.stack.id}/${step.name} @ ${t.rel}`;
       console.log(`\n▶ ${label}: ${step.run}`);
       const res = runStep(step, t.dir);
-      if (res.ok) { summary.push(`✓ ${label}`); continue; }
+      if (res.ok) { emitStepOutput(res); summary.push(`✓ ${label}`); continue; }
       if (res.notFound || res.code === 9009 || res.code === 127) {
-        if (step.optional) { summary.push(`⚠ ${label} (инструмент не найден — пропущено)`); continue; }
+        if (step.optional) {
+          warnings.push(`${label}: optional tool not found — step skipped`);
+          summary.push(`⚠ ${label} (инструмент не найден — пропущено)`);
+          continue;
+        }
         summary.push(`✗ ${label} (инструмент не найден)`);
+        emitStepOutput(res);
         failed = `${label}: команда не найдена — установи инструмент или переопредели шаг в harness.config.json`;
         if (failFast) break outer; else continue;
       }
       if (step.okCodes && step.okCodes[res.code] !== undefined) {
-        summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`); continue;
+        warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}`);
+        summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`);
+        continue;
       }
-      if (step.optional) { summary.push(`⚠ ${label} (optional, exit ${res.code})`); continue; }
+      if (step.optional) {
+        warnings.push(`${label}: optional step exited ${res.code}; diagnostics suppressed from final output`);
+        summary.push(`⚠ ${label} (optional, exit ${res.code})`);
+        continue;
+      }
       summary.push(`✗ ${label} (exit ${res.code})`);
+      emitStepOutput(res);
       failed = `${label}: exit ${res.code}`;
       if (failFast) break outer;
     }
   }
 
+  if (warnings.length) {
+    console.log("\n— optional warnings —");
+    for (const w of warnings) console.log("  ⚠ " + w);
+  }
   if (summary.length) {
     console.log("\n— verify summary —");
     for (const s of summary) console.log("  " + s);

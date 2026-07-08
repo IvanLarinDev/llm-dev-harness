@@ -78,6 +78,8 @@ ok(/pre-push:/.test(lh) && /verify\.js/.test(lh), "lefthook pre-push -> verify.j
 ok(/pre-push:[\s\S]*design-gate\.js/.test(lh), "lefthook pre-push -> design-gate.js");
 const cog = readRepo("cog.toml");
 ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "cog.toml на месте (bump + changelog)");
+ok(/from_latest_tag\s*=\s*true/.test(cog) && /ignore_merge_commits\s*=\s*true/.test(cog) && /tag_prefix\s*=\s*"v"/.test(cog),
+  "cog.toml release-safe: latest v* tag + merge commits ignored");
 const gl = readRepo(".gitleaks.toml");
 ok(/useDefault\s*=\s*true/.test(gl), "gitleaks расширяет дефолтный ruleset");
 let ruleset = {};
@@ -315,8 +317,15 @@ function gate(root, files) {
     return 0;
   } catch (e) { return e.status || 1; }
 }
+function gateResult(root, files) {
+  try {
+    return JSON.parse(execFileSync("node", [DESIGN_GATE, "--root", root, "--files", files.join(","), "--json"], { encoding: "utf8", stdio: "pipe" }));
+  } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
+}
 const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-"));
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "блок: UI-изменение без мокапов");
+ok((gateResult(dtmp, ["src/Dropwheel/UI/Foo.xaml"]).uiChanged || []).includes("src/Dropwheel/UI/Foo.xaml"),
+  "design-gate: UI-глобы матчятся case-insensitive (**/ui/** ловит /UI/)");
 ok(gate(dtmp, ["src/core/logic.py"]) === 0, "пропуск: не-UI изменение");
 execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
 const fdir = path.join(dtmp, "design", "mockups", "login");
@@ -347,6 +356,10 @@ function verifyExit(root) {
   try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe" }); return 0; }
   catch (e) { return e.status || 1; }
 }
+function verifyOutput(root) {
+  try { return execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe" }); }
+  catch (e) { return String(e.stdout || "") + String(e.stderr || ""); }
+}
 function verifyList(root) {
   try { return JSON.parse(execFileSync("node", [VERIFY, "--root", root, "--list", "--json"], { encoding: "utf8", stdio: "pipe" })); }
   catch { return { plan: [] }; }
@@ -362,7 +375,7 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
 fs.writeFileSync(path.join(etmp, "stepA.js"), "process.exit(0)");
-fs.writeFileSync(path.join(etmp, "stepB.js"), "require('fs').writeFileSync('ran_b','1');process.exit(2)");
+fs.writeFileSync(path.join(etmp, "stepB.js"), "require('fs').writeFileSync('ran_b','1');console.error('error WHITESPACE: fix me');process.exit(2)");
 fs.writeFileSync(path.join(etmp, "stepC.js"), "require('fs').writeFileSync('ran_c','1')");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { failFast: true, stacks: [{ id: "t", markers: ["m.txt"], steps: [
   { name: "a", run: "node stepA.js" }, { name: "b", run: "node stepB.js" }, { name: "c", run: "node stepC.js" }] }] } }));
@@ -371,6 +384,9 @@ ok(fs.existsSync(path.join(etmp, "ran_b")) && !fs.existsSync(path.join(etmp, "ra
   "fail-fast: шаг после провала не запускается");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "opt", run: "node stepB.js", optional: true }] }] } }));
 ok(verifyExit(etmp) === 0, "optional-шаг падает -> warning, не провал");
+const optOut = verifyOutput(etmp);
+ok(/optional warnings[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut) && !/error WHITESPACE/.test(optOut),
+  "verify UX: optional diagnostics suppressed, warning+summary перед финальным passed");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "допустимо" } }] }] } }));
 ok(verifyExit(etmp) === 0, "okCodes: допустимый ненулевой exit (напр. pytest 5 «нет тестов») -> warning, не провал");
 
@@ -442,6 +458,17 @@ dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
   "doctor: залипший index.lock -> WARN (детект блокера коммита)");
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
+const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
+execFileSync("git", ["init", "-q"], { cwd: bootRepo });
+execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:/.test(r.msg) && r.level === "FAIL"),
+  "doctor: untracked harness-файлы -> FAIL с bootstrap-сообщением");
+execFileSync("git", ["add", "."], { cwd: bootRepo });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
+  "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
 
 // ---------- stop-reminder ----------
 console.log("\nstop-reminder:");

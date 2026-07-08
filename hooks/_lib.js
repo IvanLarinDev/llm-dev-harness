@@ -41,7 +41,7 @@ function globToRe(g) {
   const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*\*\//g, "@@DS@@").replace(/\*\*/g, "@@SS@@").replace(/\*/g, "[^/]*")
     .replace(/@@DS@@/g, "(?:.*/)?").replace(/@@SS@@/g, ".*");
-  return new RegExp("^" + re + "$");
+  return new RegExp("^" + re + "$", "i");
 }
 
 // harness.config.json (missing/broken file → defaults; hooks stay fail-open)

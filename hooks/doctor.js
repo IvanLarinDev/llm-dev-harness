@@ -18,6 +18,7 @@ function fail(msg) { results.push({ level: "FAIL", msg }); }
 function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }).trim(); }
 function gitSafe(args) { try { return git(args); } catch { return null; } }
 function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
+function tracked(rel) { return gitSafe(["ls-files", "--error-unmatch", rel]) !== null; }
 
 // node / git
 ok("node " + process.version);
@@ -78,6 +79,38 @@ for (const t of tools) {
   inPath(t[0]) ? ok(t[0] + " найден") : warn(t[0] + " не в PATH — " + t[1]);
 }
 
+const requiredHarnessFiles = [
+  "hooks/verify.js",
+  "hooks/design-gate.js",
+  "hooks/new-mockups.js",
+  "hooks/doctor.js",
+  "hooks/_lib.js",
+  "hooks/agent/guard.js",
+  "hooks/agent/_input.js",
+  "hooks/agent/stop-reminder.js",
+  "harness.config.json",
+  "lefthook.yml",
+  "cog.toml",
+  ".gitleaks.toml",
+  "AGENTS.md",
+  "settings.example.json",
+];
+const missingHarness = [];
+const untrackedHarness = [];
+for (const f of requiredHarnessFiles) {
+  if (!fs.existsSync(path.join(ROOT, f))) missingHarness.push(f);
+  else if (inRepo && !tracked(f)) untrackedHarness.push(f);
+}
+if (missingHarness.length || untrackedHarness.length) {
+  const parts = [];
+  if (missingHarness.length) parts.push("missing: " + missingHarness.join(", "));
+  if (untrackedHarness.length) parts.push("untracked: " + untrackedHarness.join(", "));
+  fail("harness not bootstrapped into repository main — " + parts.join("; ") +
+    ". Создай bootstrap PR и закоммить эти файлы перед dev/release loop.");
+} else {
+  ok("harness bootstrap files present and tracked");
+}
+
 // config files present, LF, no NUL
 for (const f of ["lefthook.yml", "cog.toml", ".gitleaks.toml"]) {
   const p = path.join(ROOT, f);
@@ -94,6 +127,14 @@ const cfgPath = path.join(ROOT, "harness.config.json");
 if (fs.existsSync(cfgPath)) {
   try { JSON.parse(fs.readFileSync(cfgPath, "utf8")); ok("harness.config.json — валидный JSON"); }
   catch (e) { fail("harness.config.json невалиден: " + e.message); }
+}
+
+const cogPath = path.join(ROOT, "cog.toml");
+if (fs.existsSync(cogPath)) {
+  const cog = fs.readFileSync(cogPath, "utf8");
+  /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: нужен from_latest_tag=true для release bump от последнего v* tag");
+  /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: нужен ignore_merge_commits=true");
+  /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: нужен tag_prefix=\"v\"");
 }
 
 // report
