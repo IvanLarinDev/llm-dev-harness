@@ -25,7 +25,7 @@
 //   HARNESS_PROFILE=standard  — всё (default);
 //   HARNESS_PROFILE=strict    — всё + пороги циклов вдвое ниже.
 //   HARNESS_DISABLED_CHECKS=loops,entropy — точечное отключение проверок.
-// Escape одобренного обхода в block-сообщениях агенту не называется (см. README → Env).
+// Escape одобренного обхода в block-сообщениях агенту не называется (см. AGENTS.md → Env).
 // Ошибка самого хука никогда не блокирует работу (fail-open → exit 0).
 
 const fs = require("fs");
@@ -39,7 +39,7 @@ const { globToRe, loadConfig, normRel, isProtectedPath, isProtectedShellWrite,
 
 const TTL_MS = 2 * 60 * 60 * 1000;
 const SEEN_MAX = 200;
-const BYPASS_HINT = "Обход возможен только по явному одобрению пользователя — попроси его (escape описан в README → Env).";
+const BYPASS_HINT = "Обход возможен только по явному одобрению пользователя — попроси его (escape описан в AGENTS.md → Env).";
 
 // ---------- профили ----------
 const ALL_CHECKS = ["bypass", "protected", "lintconfig", "corruption", "entropy", "loops", "main-note", "design-note", "fact-force"];

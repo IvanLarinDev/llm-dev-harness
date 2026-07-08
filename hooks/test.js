@@ -415,6 +415,35 @@ function walk(dir) {
 const nulFiles = walk(__dirname).filter((f) => fs.readFileSync(f).includes(0));
 ok(nulFiles.length === 0, "нет NUL-байтов в исходниках хуков" + (nulFiles.length ? " (найдено: " + nulFiles.join(", ") + ")" : ""));
 
+// ---------- гигиена: целостность ключевых доков ----------
+// Ловит обрезанный/битый markdown (регрессия 99bf0c7: AGENTS.md обрубился посреди
+// таблицы битым UTF-8 байтом, потеряв секцию ## Env). Обрезанный многобайтный хвост
+// не переживает decode→encode roundtrip и даёт U+FFFD — проверяем оба признака.
+console.log("\ndocs integrity:");
+function docCheck(rel) {
+  let buf;
+  try { buf = fs.readFileSync(path.join(REPO, rel)); } catch { return { exists: false }; }
+  let text = "", roundtrips = false;
+  try { text = buf.toString("utf8"); roundtrips = Buffer.from(text, "utf8").equals(buf); } catch {}
+  return {
+    exists: true,
+    endsNewline: buf.length > 0 && buf[buf.length - 1] === 10,
+    noReplacement: !buf.includes(Buffer.from("�")),
+    validUtf8: roundtrips,
+    text,
+  };
+}
+for (const rel of ["AGENTS.md", "README.md"]) {
+  const d = docCheck(rel);
+  ok(d.exists, rel + ": присутствует");
+  ok(d.exists && d.endsNewline, rel + ": заканчивается переводом строки (не обрезан на полуслове)");
+  ok(d.exists && d.validUtf8, rel + ": валидный UTF-8, без обрезанного многобайтного хвоста");
+  ok(d.exists && d.noReplacement, rel + ": нет U+FFFD (маркера битых байт)");
+}
+const agentsDoc = docCheck("AGENTS.md");
+ok(agentsDoc.exists && /^##\s+Env\b/m.test(agentsDoc.text),
+  "AGENTS.md содержит секцию ## Env (референс env-переменных, на неё ссылается guard.js)");
+
 try { fs.rmSync(NEUTRAL, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail ? "FAIL" : "PASS"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
