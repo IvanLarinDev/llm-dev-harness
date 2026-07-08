@@ -66,4 +66,4 @@ jobs:
       # DESIGN-gate: UI changes require an approved mockup set touched in the same diff.
       - name: DESIGN-gate
         if: github.event_name == 'pull_request'
-        run: node hooks/design-gate.js --base ${{ github.event.pull_request.base.sha }}
+        run: node hooks/design-gate.js --strict --base ${{ github.event.pull_request.base.sha }}

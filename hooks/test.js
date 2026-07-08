@@ -105,6 +105,11 @@ ok(!!prr && prr.parameters.require_code_owner_review === false,
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
 ok(/design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет verify.js + design-gate.js");
+const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
+const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
+ok(requiredContexts.length > 0 && requiredContexts.every((ctx) => jobIds.includes(ctx)),
+  "CI/ruleset contract: required status check contexts match workflow job ids");
+ok(/design-gate\.js --strict --base/.test(ci), "CI запускает design-gate в strict mode");
 ok(/ecc-agentshield@\d/.test(ci) && /continue-on-error:\s*true/.test(ci),
   "CI: security-скан ecc-agentshield с прибитой версией, пока совещательный (continue-on-error)");
 
@@ -417,6 +422,16 @@ try {
 } catch (e) { try { gateJson = JSON.parse(String(e.stdout || "{}")); } catch {} }
 ok(gateJson.skipped === true && /гейт ПРОПУЩЕН|diff/.test(gateJson.warn || ""),
   "недоступная база diff -> fail-open с явным warning, не молчаливый пропуск");
+let strictExit = 0, strictJson = {};
+try {
+  execFileSync("node", [DESIGN_GATE, "--root", noGit, "--base", "no-such-ref", "--strict", "--json"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+} catch (e) {
+  strictExit = e.status || 1;
+  try { strictJson = JSON.parse(String(e.stdout || "{}")); } catch {}
+}
+ok(strictExit === 1 && strictJson.skipped === true && strictJson.ok === false,
+  "design-gate --strict: недоступная база diff -> fail-closed для CI");
 try { fs.rmSync(noGit, { recursive: true, force: true }); } catch {}
 try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
@@ -466,6 +481,11 @@ fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify
 ok(verifyExit(etmp) === 0, "required step с большим stdout проходит без spawnSync maxBuffer failure");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "допустимо" } }] }] } }));
 ok(verifyExit(etmp) === 0, "okCodes: допустимый ненулевой exit (напр. pytest 5 «нет тестов») -> warning, не провал");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "missing", run: "definitely_missing_harness_cmd_zzzz" }] }] } }));
+ok(verifyExit(etmp) === 1, "missing required command -> clear VERIFY failure");
+fs.writeFileSync(path.join(etmp, "slow.js"), "setTimeout(() => {}, 5000);\n");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "slow", run: "node slow.js", timeoutMs: 50 }] }] } }));
+ok(/timeout after 50ms/.test(verifyOutput(etmp)), "verify timeout: hung step is killed and reported clearly");
 
 // --changed: фильтр стеков по diff ветки (детерминированно через --files)
 function verifyListArgs(root, extra) {
@@ -479,6 +499,7 @@ function verifyExitArgs(root, extra) {
 const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifychg-"));
 fs.mkdirSync(path.join(ctmp, "py")); fs.writeFileSync(path.join(ctmp, "py", "pyproject.toml"), "[project]\n");
 fs.mkdirSync(path.join(ctmp, "js")); fs.writeFileSync(path.join(ctmp, "js", "package.json"), "{}\n");
+fs.mkdirSync(path.join(ctmp, "hooks")); fs.writeFileSync(path.join(ctmp, "hooks", "verify.js"), "console.log('fake verify');\n");
 let chg = verifyListArgs(ctmp, ["--changed", "--files", "py/app.py"]);
 ok(chg.plan.length === 1 && chg.plan[0].stack === "python" && chg.plan[0].dir === "py",
   "--changed: только затронутый стек (py) в плане, нетронутый (js) отброшен");
@@ -489,8 +510,11 @@ ok(verifyExitArgs(ctmp, ["--changed", "--files", ""]) === 0 && verifyListArgs(ct
   "--changed: пустой список изменений -> exit 0, план пуст (нечего проверять)");
 const allIds = verifyListArgs(ctmp, []).plan.map((p) => p.stack).sort().join(",");
 const fbIds = verifyListArgs(ctmp, ["--changed", "--base", "no-such-ref"]).plan.map((p) => p.stack).sort().join(",");
-ok(allIds === "node,python" && fbIds === allIds,
-  "--changed fail-safe: недоступная база diff -> проверяются ВСЕ стеки (не молчаливый пропуск)");
+ok(allIds === "node,python" && fbIds === "harness,node,python",
+  "--changed fail-safe: недоступная база diff -> все стеки + harness checks (не молчаливый пропуск)");
+chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
+ok(chg.plan.some((p) => p.stack === "harness"),
+  "--changed: изменение hooks/** запускает harness checks даже без package.json");
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
@@ -545,6 +569,11 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /AGENTS\.md: CRLF\/CR line endings/.test(r.msg) && r.level === "FAIL"),
+  "doctor: CRLF в critical harness-файле -> FAIL");
+fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\nline two\n");
 fs.rmSync(path.join(bootRepo, ".github"), { recursive: true, force: true });
 fs.rmSync(path.join(bootRepo, "hooks", "apply-ruleset.js"), { force: true });
 execFileSync("git", ["add", "-A"], { cwd: bootRepo });

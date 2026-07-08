@@ -19,6 +19,16 @@ function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "ut
 function gitSafe(args) { try { return git(args); } catch { return null; } }
 function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
 function tracked(rel) { return gitSafe(["ls-files", "--error-unmatch", rel]) !== null; }
+function checkTextFile(rel) {
+  const p = path.join(ROOT, rel);
+  let buf;
+  try { buf = fs.readFileSync(p); } catch { fail(rel + " отсутствует"); return; }
+  const text = buf.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(buf)) fail(rel + ": невалидный UTF-8 или обрезанный многобайтный символ");
+  else if (buf.includes(0)) fail(rel + " содержит NUL-байты");
+  else if (buf.includes(13)) fail(rel + ": CRLF/CR line endings (нужен LF)");
+  else ok(rel + ": LF, UTF-8, без NUL");
+}
 
 // node / git
 ok("node " + process.version);
@@ -115,16 +125,20 @@ if (missingHarness.length || untrackedHarness.length) {
   ok("harness bootstrap files present and tracked");
 }
 
-// config files present, LF, no NUL
-for (const f of ["lefthook.yml", "cog.toml", ".gitleaks.toml"]) {
-  const p = path.join(ROOT, f);
-  let buf;
-  try { buf = fs.readFileSync(p); } catch { fail(f + " отсутствует"); continue; }
-  const nl = buf.indexOf(10);
-  if (buf.includes(0)) fail(f + " содержит NUL-байты");
-  else if (buf.slice(0, nl >= 0 ? nl : buf.length).includes(13)) fail(f + ": CRLF (нужен LF)");
-  else ok(f + ": LF, без NUL");
-}
+// Critical harness files must be portable across Windows/macOS/Linux checkouts.
+const textCritical = requiredHarnessFiles.concat([
+  ".gitattributes",
+  ".gitignore",
+  "README.md",
+  "CLAUDE.md",
+  "BACKLOG.md",
+  ".github/workflows/ci.yml",
+  ".github/CODEOWNERS",
+  ".github/dependabot.yml",
+  "install.cmd",
+  "install.sh",
+]).filter((f, i, a) => a.indexOf(f) === i && fs.existsSync(path.join(ROOT, f)));
+for (const f of textCritical) checkTextFile(f);
 
 // harness.config.json valid JSON
 const cfgPath = path.join(ROOT, "harness.config.json");

@@ -16,6 +16,7 @@
 //     --changed  verify only stacks whose dir is touched in the branch diff (faster inner loop)
 //     --base     git ref to diff against for --changed (default: main; fallback master/origin/HEAD)
 //     --files    explicit comma-separated changed files (tests/CI; bypasses git)
+//     --check-harness-syntax  internal lightweight JS syntax check for harness files
 //   --changed fail-safe: if the diff can't be computed, verify ALL stacks (loud warn),
 //   never silently skip verification; empty diff = nothing to verify.
 //
@@ -148,10 +149,15 @@ const DEFAULT_STACKS = [
 
 const SKIP_DIRS = new Set([".git", "node_modules", "target", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".idea", ".vscode"]);
 const MAX_DEPTH = 6;
+const DEFAULT_STEP_TIMEOUT_MS = 15 * 60 * 1000;
+const HARNESS_CHANGED = [
+  "hooks/", "lefthook.yml", "harness.config.json", ".gitleaks.toml", "cog.toml",
+  ".github/rulesets/", ".github/workflows/", "settings.example.json", "AGENTS.md",
+];
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null };
+  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null, checkHarnessSyntax: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--stack") a.stack = argv[++i];
@@ -160,6 +166,7 @@ function parseArgs(argv) {
     else if (argv[i] === "--changed") a.changed = true;
     else if (argv[i] === "--base") a.base = argv[++i];
     else if (argv[i] === "--files") a.files = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
+    else if (argv[i] === "--check-harness-syntax") a.checkHarnessSyntax = true;
   }
   return a;
 }
@@ -175,6 +182,62 @@ function loadStacks(root) {
   } catch {
     return { stacks: DEFAULT_STACKS, failFast: true, explicit: false };
   }
+}
+
+function isHarnessChangedFile(file) {
+  const f = String(file || "").replace(/\\/g, "/");
+  return HARNESS_CHANGED.some((p) => p.endsWith("/") ? f.startsWith(p) : f === p);
+}
+
+function harnessTarget(root) {
+  const steps = [{ name: "syntax", run: "node hooks/verify.js --check-harness-syntax" }];
+  if (fs.existsSync(path.join(root, "hooks", "test.js"))) steps.push({ name: "self-test", run: "node test.js", cwdRel: "hooks" });
+  return { stack: { id: "harness", steps }, dir: root, rel: "." };
+}
+
+function maybeAddHarnessTarget(root, targets, files) {
+  if (!files.some(isHarnessChangedFile)) return targets;
+  if (!fs.existsSync(path.join(root, "hooks", "verify.js"))) return targets;
+  if (targets.some((t) => t.stack && t.stack.id === "harness")) return targets;
+  return targets.concat([harnessTarget(root)]);
+}
+
+function listHarnessJs(root) {
+  const out = [];
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile() && e.name.endsWith(".js")) out.push(p);
+    }
+  }
+  walk(path.join(root, "hooks"));
+  for (const rel of ["install.js"]) {
+    const p = path.join(root, rel);
+    try { if (fs.statSync(p).isFile()) out.push(p); } catch {}
+  }
+  return out;
+}
+
+function checkHarnessSyntax(root) {
+  const files = listHarnessJs(root);
+  let failed = false;
+  for (const file of files) {
+    const r = spawnSync(process.execPath, ["--check", file], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30 * 1000, killSignal: "SIGKILL" });
+    if (r.status !== 0 || r.error) {
+      failed = true;
+      const rel = path.relative(root, file) || file;
+      process.stderr.write(`syntax failed: ${rel}\n`);
+      if (r.stdout) process.stdout.write(r.stdout);
+      if (r.stderr) process.stderr.write(r.stderr);
+      if (r.error) process.stderr.write(String(r.error.message || r.error) + "\n");
+    }
+  }
+  if (!files.length) console.log("harness syntax: no JS files found");
+  else console.log(`harness syntax: checked ${files.length} JS file(s)`);
+  process.exit(failed ? 1 : 0);
 }
 
 // ---------- filename glob (within a directory) ----------
@@ -205,6 +268,16 @@ function detect(root, stacks) {
 }
 
 // ---------- run ----------
+function stepTimeoutMs(step) {
+  const raw = step.timeoutMs !== undefined ? step.timeoutMs : step.timeout;
+  if (raw === undefined) return DEFAULT_STEP_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_STEP_TIMEOUT_MS;
+}
+function stepCwd(step, cwd) {
+  if (!step.cwdRel) return cwd;
+  return path.resolve(cwd, step.cwdRel);
+}
 function runStep(step, cwd) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verify-step-"));
   const stdoutPath = path.join(dir, "stdout.log");
@@ -213,12 +286,12 @@ function runStep(step, cwd) {
   const errFd = fs.openSync(stderrPath, "w");
   let r;
   try {
-    r = spawnSync(step.run, { cwd, shell: true, stdio: ["ignore", outFd, errFd] });
+    r = spawnSync(step.run, { cwd: stepCwd(step, cwd), shell: true, stdio: ["ignore", outFd, errFd], timeout: stepTimeoutMs(step), killSignal: "SIGKILL" });
   } finally {
     try { fs.closeSync(outFd); } catch {}
     try { fs.closeSync(errFd); } catch {}
   }
-  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT", stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
+  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT", timedOut: r.error.code === "ETIMEDOUT", stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
   return { ok: r.status === 0, code: r.status, stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
 }
 function emitStepOutput(res) {
@@ -276,6 +349,7 @@ function cleanupStepOutput(dir) {
 // ---------- main ----------
 (function main() {
   const a = parseArgs(process.argv.slice(2));
+  if (a.checkHarnessSyntax) checkHarnessSyntax(a.root);
   let { stacks, failFast, explicit } = loadStacks(a.root);
   if (a.stack) stacks = stacks.filter((s) => s.id === a.stack);
 
@@ -287,9 +361,11 @@ function cleanupStepOutput(dir) {
     const cf = changedFiles(a.base, a.root, a.files);
     if (cf.error) {
       console.error(`⚠️ verify --changed: ${cf.error} — фильтр не применён, проверяю все обнаруженные стеки. Задай базу: --base <ref>.`);
+      targets = maybeAddHarnessTarget(a.root, targets, ["hooks/verify.js"]);
     } else {
       const files = cf.files.map((f) => f.replace(/\\/g, "/"));
       targets = files.length ? targets.filter((t) => files.some((f) => fileUnder(t.rel, f))) : [];
+      targets = maybeAddHarnessTarget(a.root, targets, files);
     }
   }
 
@@ -338,6 +414,12 @@ function cleanupStepOutput(dir) {
       const res = runStep(step, t.dir);
       try {
         if (res.ok) { emitStepOutput(res); summary.push(`✓ ${label}`); continue; }
+        if (res.timedOut) {
+          summary.push(`✗ ${label} (timeout after ${stepTimeoutMs(step)}ms)`);
+          emitStepOutput(res);
+          failed = `${label}: timeout after ${stepTimeoutMs(step)}ms`;
+          if (failFast) break outer; else continue;
+        }
         if (res.notFound || res.code === 9009 || res.code === 127) {
           if (step.optional) {
             warnings.push(`${label}: optional tool not found — step skipped`);
