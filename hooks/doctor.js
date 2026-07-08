@@ -30,34 +30,44 @@ function checkTextFile(rel) {
   else if (buf.includes(13)) fail(rel + ": CRLF/CR line endings (нужен LF)");
   else ok(rel + ": LF, UTF-8, без NUL");
 }
-function workflowJobIds(rel) {
+function yamlKeyLine(line) {
+  const m = String(line).match(/^(\s*)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*:.*$/);
+  if (!m) return null;
+  return { indent: m[1].length, key: m[2] || m[3] || m[4] };
+}
+function workflowJobs(rel) {
   const text = readText(rel);
   const lines = text.split(/\r?\n/);
-  const ids = [];
-  let inJobs = false;
+  const jobs = [];
+  let jobsIndent = null, jobIndent = null;
+  let current = null;
   for (const line of lines) {
-    if (/^jobs:\s*$/.test(line)) { inJobs = true; continue; }
-    if (inJobs && /^\S/.test(line) && !/^jobs:\s*$/.test(line)) break;
-    const m = inJobs && line.match(/^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$/);
-    if (m) ids.push(m[1]);
+    if (/^\s*(?:#.*)?$/.test(line)) {
+      if (current) current.body.push(line);
+      continue;
+    }
+    const key = yamlKeyLine(line);
+    if (jobsIndent === null) {
+      if (key && key.key === "jobs") jobsIndent = key.indent;
+      continue;
+    }
+    if (key && key.indent <= jobsIndent) break;
+    if (key && (jobIndent === null || key.indent === jobIndent)) {
+      if (jobIndent === null) jobIndent = key.indent;
+      current = { id: key.key, body: [line] };
+      jobs.push(current);
+      continue;
+    }
+    if (current) current.body.push(line);
   }
-  return ids;
+  return jobs;
+}
+function workflowJobIds(rel) {
+  return workflowJobs(rel).map((j) => j.id);
 }
 function workflowJobBody(rel, id) {
-  const text = readText(rel);
-  const lines = text.split(/\r?\n/);
-  let inJobs = false, inJob = false;
-  const body = [];
-  const startRe = new RegExp("^  " + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":\\s*(?:#.*)?$");
-  for (const line of lines) {
-    if (/^jobs:\s*$/.test(line)) { inJobs = true; continue; }
-    if (!inJobs) continue;
-    if (/^\S/.test(line)) break;
-    if (!inJob && startRe.test(line)) { inJob = true; body.push(line); continue; }
-    if (inJob && /^  [A-Za-z0-9_-]+:\s*(?:#.*)?$/.test(line)) break;
-    if (inJob) body.push(line);
-  }
-  return body.join("\n");
+  const job = workflowJobs(rel).find((j) => j.id === id);
+  return job ? job.body.join("\n") : "";
 }
 function rulesetRequiredChecks(rel) {
   let ruleset = {};
@@ -193,7 +203,19 @@ for (const f of textCritical) checkTextFile(f);
 // harness.config.json valid JSON
 const cfgPath = path.join(ROOT, "harness.config.json");
 if (fs.existsSync(cfgPath)) {
-  try { JSON.parse(fs.readFileSync(cfgPath, "utf8")); ok("harness.config.json — валидный JSON"); }
+  try {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    ok("harness.config.json — валидный JSON");
+    const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
+    const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
+    if (hasSelfTest && stacks) {
+      const harness = stacks.find((s) => s && s.id === "harness");
+      const steps = (harness && Array.isArray(harness.steps)) ? harness.steps : [];
+      const runsSelfTest = steps.some((s) => /node\s+test\.js\b/.test(String(s && s.run || "")));
+      runsSelfTest ? ok("harness.config.json: VERIFY включает harness self-test") :
+        fail("harness.config.json: verify.stacks задан, но обязательный harness self-test (node test.js) отсутствует");
+    }
+  }
   catch (e) { fail("harness.config.json невалиден: " + e.message); }
 }
 

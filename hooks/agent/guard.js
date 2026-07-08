@@ -240,13 +240,17 @@ function run(ctx, env = process.env) {
 
       // 1c) запись в файл харнесса через инлайн-eval интерпретатора (node -e/
       // python -c/bash -c…). Write-verb-детекция это не ловит (глагол/путь в
-      // строке, scrubQuotes их обнулил), поэтому проверяем СЫРУЮ команду и только
-      // напоминаем — жёстко блокировать нельзя (путь в -e может быть безобиден).
+      // строке, scrubQuotes их обнулил), поэтому проверяем СЫРУЮ команду.
       if (checkEnabled("protected", env)) {
         const ip = interpreterProtectedHint(command, cfg.protected);
-        if (ip) notes.push(`⚠️ guard: похоже на запись в файл харнесса (${ip}) через инлайн-eval интерпретатора ` +
-          `(node -e / python -c / bash -c …). Такой обход не ловится жёстким блоком — не меняй файлы харнесса так. ` +
-          `Если это не файл харнесса, игнорируй.`);
+        if (ip) {
+          if (envAllow(env, "HARNESS_ACK_BYPASS")) {
+            notes.push(`⚠️ guard: инлайн-eval запись в файл харнесса (${ip}) разрешена явно пользователем. Обоснуй в отчёте.`);
+          } else {
+            return blockRes(`🛑 guard: команда похожа на запись в файл харнесса (${ip}) через инлайн-eval интерпретатора.\n` +
+              `   Причина: node -e / python -c / bash -c скрывает write-операцию от обычной shell-детекции.\n   ${BYPASS_HINT}`);
+          }
+        }
       }
 
       // 2) сбой стриминга / мусор
