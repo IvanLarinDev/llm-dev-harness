@@ -482,6 +482,15 @@ ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён conf
 const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
 ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "install: guard вплетён в PreToolUse");
 ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "install: stop-reminder вплетён в Stop");
+// .gitignore: игнорируется ТОЛЬКО персональный settings.local.json, не файлы харнесса
+const gi = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
+ok(/\.claude\/settings\.local\.json/.test(gi), "install: .gitignore получает .claude/settings.local.json");
+ok(!/^hooks\//m.test(gi) && !/lefthook\.yml/.test(gi) && !/harness\.config/.test(gi),
+  "install: файлы харнесса в .gitignore НЕ попадают (они коммитятся)");
+installJson(itmp, []);
+const gi2 = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
+ok((gi2.match(/settings\.local\.json/g) || []).length === 1, "повторный install не дублирует строку в .gitignore");
+
 // идемпотентность: повторный install не дублирует hook-записи
 const preLen = tset.hooks.PreToolUse.length;
 installJson(itmp, []);

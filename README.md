@@ -56,6 +56,13 @@ Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enfo
 остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
 Pro/публичный репо.
 
+Про `.gitignore`: файлы харнесса (`hooks/`, `lefthook.yml`, конфиги, `.github/`,
+`harness.config.json`) **коммитятся** — иначе на свежем клоне у lefthook, CI и
+серверного ruleset не будет кода проверок. Установщик добавляет в `.gitignore`
+целевого проекта только персональный `.claude/settings.local.json` (разрешения
+раннера, у каждого свои). Состояние guard живёт в системном tmp и в репозиторий
+не пишется.
+
 Вручную то же самое: `lefthook install`, скопировать блок `hooks` из
 [`settings.example.json`](./settings.example.json) в `.claude/settings.json`,
 `node hooks/apply-ruleset.js`, `node hooks/doctor.js`.
