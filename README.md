@@ -33,17 +33,32 @@ Commit-lint / secret-scan / release / hook-раннер делегированы
 
 ## Установка
 
+В один клик — установщик [`install.js`](./install.js) кладёт хуки и конфиги в целевой
+репозиторий, генерит `harness.config.json`, вплетает agent-guard в
+`.claude/settings.json` (мержем, не затирая чужое), ставит lefthook-хуки и прогоняет
+doctor. Идемпотентно, без внешних зависимостей.
+
 ```bash
-lefthook install               # слой 1: .git/hooks/* — срабатывает для любого агента/человека
-node hooks/apply-ruleset.js    # слой 0: серверный ruleset (нужен gh + admin; Free — Pro/публичный репо)
-node hooks/doctor.js           # проверить окружение: lefthook/gitleaks/cog в PATH, конфиги
+node install.js --target ../my-project   # поставить харнесс в другой проект
+node install.js                          # или в текущий каталог
+node install.js --dry-run                # показать план, ничего не писать
 ```
 
-Слой 2 (агент, опционально): скопировать блок `hooks` из
-[`settings.example.json`](./settings.example.json) в `.claude/settings.json` —
-один хук `guard.js` на PreToolUse + условный `stop-reminder.js` на Stop.
-Контракт хуков: exit 0 = allow, exit 2 = block; notes — `hookSpecificOutput.
-additionalContext` (PreToolUse), Stop — `{"decision":"block","reason":…}`.
+Двойным кликом: `install.cmd` (Windows) или `install.sh` (POSIX) — ставят в свою папку.
+Флаги: `--force` (обновить уже существующие файлы), `--with-ci` (положить и `.github/`:
+CI-зеркало, CODEOWNERS, dependabot), `--with-ruleset` (сразу применить серверный ruleset,
+нужен gh admin), `--json` (машиночитаемый отчёт).
+
+Что делает установщик по слоям: слой 1 — `lefthook install` (git-хуки для любого
+агента/человека); слой 2 — вплетает `guard.js` на PreToolUse и `stop-reminder.js` на Stop
+(контракт: exit 0 = allow, exit 2 = block; notes — `hookSpecificOutput.additionalContext`,
+Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enforcement, серверный ruleset)
+остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
+Pro/публичный репо.
+
+Вручную то же самое: `lefthook install`, скопировать блок `hooks` из
+[`settings.example.json`](./settings.example.json) в `.claude/settings.json`,
+`node hooks/apply-ruleset.js`, `node hooks/doctor.js`.
 
 ## Проверка
 

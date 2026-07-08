@@ -457,6 +457,59 @@ stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: st
 ok(stopOut.trim() === "", "stop_hook_active=true -> молчит (защита от вечного block-цикла)");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
 
+// ---------- installer (install.js) ----------
+console.log("\ninstaller:");
+const INSTALL = path.join(REPO, "install.js");
+function installJson(target, extra) {
+  try {
+    const s = execFileSync("node", [INSTALL, "--target", target, "--json", ...extra], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return JSON.parse(s);
+  } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
+}
+const itmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-"));
+execFileSync("git", ["init", "-q"], { cwd: itmp });
+// dry-run: план есть, диск не тронут
+let plan = installJson(itmp, ["--dry-run"]);
+ok(plan.ok === true && plan.mode === "install", "install --dry-run: ok, режим install");
+ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f.rel)), "dry-run план включает hooks/agent/guard.js");
+ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ничего не пишет на диск");
+// реальная установка
+installJson(itmp, []);
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "install: dev-self-test (test.js) в target НЕ копируется");
+const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
+ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён config без self-test-пина verify (target авто-детектит стеки)");
+const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
+ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "install: guard вплетён в PreToolUse");
+ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "install: stop-reminder вплетён в Stop");
+// идемпотентность: повторный install не дублирует hook-записи
+const preLen = tset.hooks.PreToolUse.length;
+installJson(itmp, []);
+const tset2 = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
+ok(tset2.hooks.PreToolUse.length === preLen, "повторный install идемпотентен (hook-записи не дублируются)");
+// не затирает существующий файл без --force, затирает с --force
+const gp = path.join(itmp, "hooks", "agent", "guard.js");
+fs.writeFileSync(gp, "// local edit\n");
+installJson(itmp, []);
+ok(fs.readFileSync(gp, "utf8") === "// local edit\n", "install без --force не перезатирает существующий файл");
+installJson(itmp, ["--force"]);
+ok(fs.readFileSync(gp, "utf8") !== "// local edit\n", "install --force перезаписывает файлы харнесса");
+// мерж settings.json сохраняет чужие ключи
+const dstSet = path.join(itmp, ".claude", "settings.json");
+const cur = JSON.parse(fs.readFileSync(dstSet, "utf8")); cur.model = "opus"; fs.writeFileSync(dstSet, JSON.stringify(cur));
+installJson(itmp, []);
+ok(JSON.parse(fs.readFileSync(dstSet, "utf8")).model === "opus", "install мержит settings.json, сохраняя чужие ключи (не затирает)");
+// невалидный чужой settings.json — не трогаем, а сообщаем
+fs.writeFileSync(dstSet, "{ broken");
+const br = installJson(itmp, []);
+ok(br.settings && br.settings.status === "error", "невалидный .claude/settings.json → ошибка мержа, файл не тронут");
+ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "невалидный settings.json остался как был (не затёрт)");
+// не-git каталог → нота, но установка файлов проходит
+const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
+const ng = installJson(nogit, []);
+ok(Array.isArray(ng.notes) && ng.notes.some((n) => /git-репозиторий/.test(n)), "не-git target → нота про git init");
+try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
+
 // ---------- гигиена: NUL-байты ----------
 console.log("\nsource hygiene:");
 function walk(dir) {
