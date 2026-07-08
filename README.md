@@ -103,6 +103,7 @@ Windows-safe диагностика lefthook из PowerShell:
 
 ```powershell
 lefthook.cmd run pre-commit --command branch-guard --force --verbose
+$msg = Join-Path $env:TEMP "commit-msg.txt"; Set-Content $msg "fix(hooks): test"; lefthook.cmd run commit-msg $msg --command no-coauthor --force --verbose
 ```
 
 Используй `--command` (singular). Если PowerShell блокирует `lefthook.ps1`
@@ -110,6 +111,7 @@ ExecutionPolicy, запускай `lefthook.cmd` или напрямую:
 
 ```powershell
 node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run pre-commit --command branch-guard --force --verbose
+node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run commit-msg $msg --command no-coauthor --force --verbose
 ```
 
 CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).
