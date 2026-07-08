@@ -1,29 +1,30 @@
 #!/usr/bin/env node
-// install.js — установщик llm-dev-harness в целевой репозиторий «в один клик».
+// install.js — one-command installer for llm-dev-harness in a target repository.
 //
-// Что делает:
-//   1. копирует хуки и конфиги харнесса в целевой проект (не затирая существующее);
-//   2. генерит целевой harness.config.json (без self-test-пина — target авто-детектит
-//      свои стеки), если его ещё нет;
-//   3. вплетает agent-guard в .claude/settings.json МЕРЖЕМ — чужие ключи и хуки
-//      сохраняются, наши записи не дублируются при повторном запуске;
-//   4. ставит lefthook-хуки (lefthook install) и прогоняет doctor.
+// What it does:
+//   1. copies harness hooks and configs into the target project without overwriting
+//      existing files by default;
+//   2. creates a target harness.config.json when missing, without pinning the
+//      source repo self-test so the target can auto-detect its own stacks;
+//   3. merges the agent guard into .claude/settings.json while preserving foreign
+//      keys and hooks, and without duplicating our entries on repeated runs;
+//   4. installs lefthook hooks and runs doctor.
 //
-// Идемпотентно, кроссплатформенно (Windows/macOS/Linux), без внешних зависимостей.
-// Двойной клик: install.cmd (Windows) / install.sh (POSIX) — обёртки над этим файлом.
+// Idempotent, cross-platform (Windows/macOS/Linux), and dependency-light.
+// Double-click wrappers: install.cmd (Windows) / install.sh (POSIX).
 //
-// Использование:
+// Usage:
 //   node install.js [--target <dir>] [--force] [--dry-run] [--with-ci]
 //                   [--with-ruleset] [--json]
-//     --target        куда ставить (default: текущий каталог)
-//     --force         перезаписать уже существующие файлы харнесса
-//     --dry-run       показать план, ничего не писать
-//     --with-ci       также положить .github/ (CI-зеркало, CODEOWNERS, dependabot)
-//     --with-ruleset  применить серверный ruleset (нужен gh admin; см. apply-ruleset.js)
-//     --json          машиночитаемый отчёт
+//     --target        install destination (default: current directory)
+//     --force         overwrite existing harness files
+//     --dry-run       show the plan without writing
+//     --with-ci       also copy .github/ (CI mirror, CODEOWNERS, dependabot)
+//     --with-ruleset  apply the server ruleset (requires gh admin; see apply-ruleset.js)
+//     --json          machine-readable report
 //
-// Exit 0 = установка прошла (или dry-run), 1 = целевой каталог непригоден или
-//          критический шаг упал.
+// Exit 0 = installation succeeded (or dry-run), 1 = invalid target directory or
+//          a critical step failed.
 
 const fs = require("fs");
 const os = require("os");
@@ -33,9 +34,10 @@ const { spawnSync } = require("child_process");
 const SRC = __dirname;
 const { DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_lib.js"));
 
-// Файлы харнесса, которые едут в целевой репозиторий. harness.config.json НЕ здесь
-// (генерится отдельно), test.js НЕ здесь (это dev-self-test источника, завязанный на
-// его доки/CI). .github/rulesets/main.json нужен apply-ruleset.js — копируем всегда.
+// Harness files copied into the target repository. harness.config.json is not here
+// because it is generated separately. test.js is not here because it is the source
+// repo's dev self-test, tied to this repo's docs/CI. .github/rulesets/main.json is
+// needed by apply-ruleset.js, so it is always copied.
 const FILES = [
   "hooks/_lib.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
@@ -60,9 +62,9 @@ function parseArgs(argv) {
   return a;
 }
 
-// ---------- целевой harness.config.json ----------
-// Дефолты UI-глобов/мокапов переиспользуем из _lib (DRY). verify НЕ пиним — в чужом
-// проекте нужен авто-детект стеков, а не прогон нашего self-test.
+// ---------- target harness.config.json ----------
+// Reuse UI glob/mockup defaults from _lib. Do not pin verify: target projects need
+// stack auto-detection, not this source repo's self-test.
 function defaultConfig() {
   return JSON.stringify({
     ui: { globs: DEFAULT_UI_GLOBS, mockups: DEFAULT_MOCKUPS },
@@ -70,7 +72,7 @@ function defaultConfig() {
   }, null, 2) + "\n";
 }
 
-// ---------- копирование одного файла ----------
+// ---------- copy one file ----------
 function copyOne(rel, force, dryRun) {
   const src = path.join(SRC, rel), dst = path.join(a.target, rel);
   let exists = false;
@@ -80,7 +82,7 @@ function copyOne(rel, force, dryRun) {
   return { rel, action: exists ? "overwrite" : "write" };
 }
 
-// ---------- harness.config.json (генерим, если нет) ----------
+// ---------- harness.config.json (generate if missing) ----------
 function writeConfig(force, dryRun) {
   const dst = path.join(a.target, "harness.config.json");
   let exists = false;
@@ -90,12 +92,11 @@ function writeConfig(force, dryRun) {
   return { action: exists ? "overwrite" : "write" };
 }
 
-// ---------- .gitignore: только персональный файл раннера ----------
-// Файлы харнесса (hooks/, lefthook.yml, конфиги, .github/) НЕ игнорируем — они
-// КОММИТЯТСЯ: иначе lefthook (ссылается на hooks/verify.js), CI и серверный ruleset
-// не получат кода проверок на свежем клоне. Игнорируем лишь персональный
-// .claude/settings.local.json (разрешения раннера, у каждого свои). Состояние
-// guard живёт в системном tmp, в репозиторий не пишется — там игнорировать нечего.
+// ---------- .gitignore: only the personal runner file ----------
+// Do not ignore harness files (hooks/, lefthook.yml, configs, .github/): they must
+// be committed so lefthook, CI, and the server ruleset have check code on a fresh
+// clone. Only ignore .claude/settings.local.json, which holds per-user runner
+// permissions. Guard state lives in the system temp directory, not the repository.
 const GITIGNORE_LINES = [".claude/settings.local.json"];
 function ensureGitignore(dryRun) {
   const dst = path.join(a.target, ".gitignore");
@@ -113,10 +114,9 @@ function ensureGitignore(dryRun) {
   return { action: cur ? "appended" : "created", added: missing };
 }
 
-// ---------- мерж agent-хуков в .claude/settings.json ----------
-// Наши записи не дублируются: дедуп по basename скрипта (guard.js/stop-reminder.js),
-// поэтому повторный install и уже настроенный вручную .claude/settings.json — ок.
-// Чужие ключи (model, permissions, свои хуки) сохраняются.
+// ---------- merge agent hooks into .claude/settings.json ----------
+// Keep foreign keys and hooks intact, but dedupe only exact harness commands.
+// A random command ending in guard.js must not mask a missing harness guard.
 function mergeSettings(dryRun) {
   let wanted;
   try { wanted = JSON.parse(fs.readFileSync(path.join(SRC, "settings.example.json"), "utf8")).hooks; }
@@ -126,13 +126,13 @@ function mergeSettings(dryRun) {
   try { cur = JSON.parse(fs.readFileSync(dst, "utf8")); }
   catch (e) { if (e.code !== "ENOENT") return { status: "error", reason: "существующий .claude/settings.json невалиден — не трогаю" }; }
   cur.hooks = cur.hooks || {};
-  const scripts = (entry) => (entry.hooks || []).map((h) => String(h.command || "").split(/[\/\\]/).pop());
+  const commands = (entry) => (entry.hooks || []).map((h) => String(h.command || "").replace(/\\/g, "/").replace(/\s+/g, " ").trim().toLowerCase());
   let added = 0;
   for (const ev of Object.keys(wanted)) {
     cur.hooks[ev] = cur.hooks[ev] || [];
     for (const entry of wanted[ev]) {
-      const want = scripts(entry);
-      const dup = cur.hooks[ev].some((e) => scripts(e).some((s) => want.includes(s)));
+      const want = commands(entry);
+      const dup = cur.hooks[ev].some((e) => commands(e).some((s) => want.includes(s)));
       if (!dup) { cur.hooks[ev].push(entry); added++; }
     }
   }
@@ -143,7 +143,7 @@ function mergeSettings(dryRun) {
   return { status: added ? "merged" : "already", added };
 }
 
-// ---------- внешние шаги (активация) ----------
+// ---------- external activation steps ----------
 function runLefthook() {
   const r = spawnSync("lefthook", ["install"], { cwd: a.target, encoding: "utf8", shell: true });
   if (r.error) return { ok: false, reason: r.error.code === "ENOENT" ? "lefthook не в PATH" : String(r.error.message) };
@@ -165,7 +165,7 @@ const a = parseArgs(process.argv.slice(2));
 (function main() {
   const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
 
-  // целевой каталог должен существовать
+  // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
   catch { return finish(out, false, `целевой каталог не существует: ${a.target}`); }
 
@@ -175,27 +175,27 @@ const a = parseArgs(process.argv.slice(2));
   const selfInstall = path.resolve(a.target) === path.resolve(SRC);
   out.mode = selfInstall ? "bootstrap" : "install";
 
-  // 1. файлы
+  // 1. Files.
   if (!selfInstall) {
     const list = a.withCi ? FILES.concat(CI_FILES) : FILES.slice();
     for (const rel of list) out.files.push(copyOne(rel, a.force, a.dryRun));
     out.config = writeConfig(a.force, a.dryRun);
     if (a.withCi && !FILES.includes(".github/workflows/ci.yml")) {
-      // CI-зеркало положено, но активируется только пушем (нужен скоуп workflow)
+      // The CI mirror is copied, but it only activates after push and requires the workflow scope.
       out.notes.push("CI-зеркало .github/workflows/ci.yml положено, но активируется только после push (нужен gh-скоуп workflow).");
     }
   } else {
     out.notes.push("bootstrap-режим: цель совпадает с источником, файлы уже на месте — только вплетаю хуки и активирую.");
   }
 
-  // 2. agent-хуки в settings.json
+  // 2. Agent hooks in settings.json.
   out.settings = mergeSettings(a.dryRun);
   if (out.settings.status === "error") out.notes.push("settings: " + out.settings.reason);
 
-  // 2b. .gitignore: только персональный settings.local.json (файлы харнесса коммитятся)
+  // 2b. .gitignore: only personal settings.local.json; harness files are committed.
   out.gitignore = ensureGitignore(a.dryRun);
 
-  // 3. активация (кроме dry-run)
+  // 3. Activation, except in dry-run mode.
   if (!a.dryRun) {
     out.lefthook = runLefthook();
     if (!out.lefthook.ok) out.notes.push("lefthook: " + (out.lefthook.reason || `exit ${out.lefthook.code}`) + " — поставь lefthook и запусти `lefthook install`.");
