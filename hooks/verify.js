@@ -39,7 +39,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { changedFiles, globToRe } = require(path.join(__dirname, "_lib.js"));
+const { workingTreeChangedFiles, globToRe } = require(path.join(__dirname, "_lib.js"));
 
 // Файл `file` лежит под каталогом стека `rel`? Корневой стек (rel ".") владеет всем
 // деревом → матчит любой изменённый файл; глубокий стек — только свой подкаталог.
@@ -110,7 +110,7 @@ function scanFileForDebug(abs, rel, soft) {
 // массово легитимны и дали бы шум. → { hard:[], soft:[], skipped:<причина>|null }.
 function debugAudit(root, opts, base, explicitFiles) {
   if (!opts.enabled) return { hard: [], soft: [], skipped: "отключён в harness.config.json" };
-  const cf = changedFiles(base || opts.base, root, explicitFiles);
+  const cf = workingTreeChangedFiles(base || opts.base, root, explicitFiles);
   if (cf.error) return { hard: [], soft: [], skipped: cf.error };
   const excludeRe = (opts.exclude || []).map(globToRe);
   const hard = [], soft = [];
@@ -361,7 +361,7 @@ function cleanupStepOutput(dir) {
   // --changed: сузить до стеков, чьи каталоги затронуты в diff ветки. Fail-safe —
   // при ошибке diff проверяем ВСЕ стеки (громкий warn), а не молча пропускаем.
   if (a.changed) {
-    const cf = changedFiles(a.base, a.root, a.files);
+    const cf = workingTreeChangedFiles(a.base, a.root, a.files);
     if (cf.error) {
       console.error(`⚠️ verify --changed: ${cf.error} — фильтр не применён, проверяю все обнаруженные стеки. Задай базу: --base <ref>.`);
       targets = maybeAddHarnessTarget(a.root, targets, ["hooks/verify.js"]);
