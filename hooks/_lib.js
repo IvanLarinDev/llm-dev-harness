@@ -41,7 +41,7 @@ function globToRe(g) {
   const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*\*\//g, "@@DS@@").replace(/\*\*/g, "@@SS@@").replace(/\*/g, "[^/]*")
     .replace(/@@DS@@/g, "(?:.*/)?").replace(/@@SS@@/g, ".*");
-  return new RegExp("^" + re + "$");
+  return new RegExp("^" + re + "$", "i");
 }
 
 // harness.config.json (missing/broken file → defaults; hooks stay fail-open)
@@ -162,16 +162,57 @@ function interpreterProtectedHint(rawCmd, protectedList) {
 // Общий источник для design-gate.js (гейт) и verify.js (--changed фильтр стеков).
 function changedFiles(base, root, explicitFiles) {
   if (explicitFiles) return { files: explicitFiles };
-  const bases = [...new Set([base, "main", "master", "origin/HEAD"].filter(Boolean))];
+  const remoteFirst = /^origin\//.test(String(base || ""));
+  const fallbacks = remoteFirst
+    ? [base, "origin/HEAD", "main", "master"]
+    : [base, "main", "master", "origin/main", "origin/HEAD"];
+  const bases = [...new Set(fallbacks.filter(Boolean))];
   for (const b of bases) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {
         const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" });
-        return { files: out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean), base: b };
+        return { files: mergeFiles(parseFiles(out), dirtyFiles(root)), base: b };
       } catch {}
     }
   }
   return { error: `git diff не удался ни для одной базы (${bases.join(", ")})` };
+}
+
+function parseFiles(out) {
+  return String(out || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+}
+
+function gitFiles(root, args) {
+  try {
+    return parseFiles(execFileSync("git", args, {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000, killSignal: "SIGKILL",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function dirtyFiles(root) {
+  return mergeFiles(
+    gitFiles(root, ["diff", "--name-only"]),
+    gitFiles(root, ["diff", "--name-only", "--cached"]),
+    gitFiles(root, ["ls-files", "--others", "--exclude-standard"])
+  );
+}
+
+function mergeFiles(...lists) {
+  const out = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const f of list || []) {
+      const rel = String(f).replace(/\\/g, "/");
+      if (!rel || seen.has(rel)) continue;
+      seen.add(rel);
+      out.push(rel);
+    }
+  }
+  return out;
 }
 
 module.exports = {

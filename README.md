@@ -56,6 +56,28 @@ Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enfo
 остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
 Pro/публичный репо.
 
+`stop-reminder.js` — именно reminder: первый Stop при dirty tree возвращает
+`decision:block`, но повторный Stop с тем же `git status` пропускается. Это оставляет
+выход для намеренно uncommitted bootstrap/local файлов после явного отчёта.
+
+### Bootstrap PR
+
+После установки в целевой репозиторий файлы харнесса нужно закоммитить в `main`
+через отдельный bootstrap PR до того, как loop станет обязательным. Иначе инструкции
+будут требовать `node hooks/verify.js` или `cog bump --auto`, которых нет в clean
+worktree от `origin/main`.
+
+Проверка:
+
+```bash
+node hooks/doctor.js
+git ls-files hooks/verify.js cog.toml lefthook.yml AGENTS.md harness.config.json
+```
+
+Если doctor пишет `harness not bootstrapped` или файлы видны как untracked, сначала
+закрой bootstrap PR. Release из такого состояния делать нельзя: clean release
+worktree не воспроизведёт локальные untracked файлы.
+
 Про `.gitignore`: файлы харнесса (`hooks/`, `lefthook.yml`, конфиги, `.github/`,
 `harness.config.json`) **коммитятся** — иначе на свежем клоне у lefthook, CI и
 серверного ruleset не будет кода проверок. Установщик добавляет в `.gitignore`
@@ -72,9 +94,24 @@ Pro/публичный репо.
 ```bash
 node hooks/test.js                     # self-test suite харнесса
 node hooks/verify.js [--list]          # исполняемый VERIFY (авто-детект стеков)
-node hooks/design-gate.js --base main  # DESIGN-гейт по diff ветки
+node hooks/design-gate.js --base origin/main # DESIGN-гейт по diff ветки
 node hooks/doctor.js                   # окружение
 node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
+```
+
+Windows-safe диагностика lefthook из PowerShell:
+
+```powershell
+lefthook.cmd run pre-commit --command branch-guard --force --verbose
+$msg = Join-Path $env:TEMP "commit-msg.txt"; Set-Content $msg "fix(hooks): test"; lefthook.cmd run commit-msg $msg --command no-coauthor --force --verbose
+```
+
+Используй `--command` (singular). Если PowerShell блокирует `lefthook.ps1`
+ExecutionPolicy, запускай `lefthook.cmd` или напрямую:
+
+```powershell
+node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run pre-commit --command branch-guard --force --verbose
+node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run commit-msg $msg --command no-coauthor --force --verbose
 ```
 
 CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).

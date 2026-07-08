@@ -1,15 +1,15 @@
-# lefthook.yml — battle-tested git-hook RUNNER.
+# lefthook.yml - battle-tested git-hook runner.
 # Install once, fires for any agent or human that runs git in this repo:
 #     lefthook install
 #
 # Enforcement is delegated to standard tools:
-#   • gitleaks   — secret scanning
-#   • cocogitto  — Conventional Commits + release
-# The harness keeps its OWN value here: the VERIFY runner (hooks/verify.js) and the
-# GUI DESIGN-gate (hooks/design-gate.js) gate pushes.
+#   - gitleaks: secret scanning
+#   - cocogitto: Conventional Commits + release
+# The harness keeps its own value here: verify.js, design-gate.js, and small Node
+# wrappers for policies that must be Windows-safe.
 #
-# IMPORTANT: local hooks are HYGIENE, not enforcement — an agent with write access can
-# still bypass them. The real gate is the server ruleset (.github/rulesets/main.json).
+# IMPORTANT: local hooks are hygiene, not enforcement. The real gate is the server
+# ruleset (.github/rulesets/main.json).
 #
 # Escape hatch for a release/hotfix commit that legitimately lands on main:
 #     HARNESS_ALLOW_MAIN=1 git commit ...
@@ -19,42 +19,25 @@
 commit-msg:
   commands:
     conventional:
-      # Conventional Commits check via cocogitto (reads the final message file → covers -m/-F/editor).
-      run: cog verify --file {1}
+      run: cog verify --file '{1}'
     no-coauthor:
-      # "No co-authorship" policy — no off-the-shelf tool bans this, so it stays a tiny grep.
-      # Узкий паттерн: ловит AI-трейлеры, но не «generated with protoc» и не любой 🤖 в тексте.
-      run: |
-        if grep -qiE 'co-authored-by:|(generated|created|written|authored) (with|by)[^|]*(claude|copilot|chatgpt|gpt|cursor|gemini|codex|aider|an? ?(ai|llm))|🤖 generated' {1}; then
-          echo "🛑 commit-msg: запрещённый trailer (политика «без соавторства»)."
-          echo "   Убери Co-Authored-By / «Generated with Claude/…» из сообщения коммита."
-          exit 1
-        fi
+      # Keep this in Node, not a multi-line shell snippet: lefthook wraps shell
+      # commands as sh -c "..." on Windows, so quoted echo/grep lines break parsing.
+      run: node hooks/no-coauthor.js '{1}'
 
 pre-commit:
   parallel: true
   commands:
     secrets:
-      # gitleaks scans staged content; inline exception: `gitleaks:allow` (or legacy `secret-scan:allow`).
       run: gitleaks git --staged --redact --no-banner -c .gitleaks.toml
     branch-guard:
-      # Commits belong on feature branches. main advances via merged PRs (enforced server-side).
-      run: |
-        b=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
-        case "$b" in
-          main|master)
-            if [ "${HARNESS_ALLOW_MAIN:-}" = "1" ]; then exit 0; fi
-            echo "🛑 pre-commit: коммит на защищённой ветке «$b» запрещён."
-            echo "   Создай feature-ветку:  git checkout -b feat/...  (fix/…, docs/…)"
-            echo "   Релиз/hotfix на $b:  HARNESS_ALLOW_MAIN=1 git commit ..."
-            exit 1 ;;
-        esac
+      # Commits belong on feature branches. main advances via merged PRs.
+      # Keep this in Node for Windows-safe parsing.
+      run: node hooks/branch-guard.js
 
 pre-push:
   commands:
     verify:
-      # Executable VERIFY (AGENTS.md step 4): lint/build/test fail-fast before anything leaves the machine.
       run: node hooks/verify.js
     design-gate:
-      # UI-изменения без затронутого в ветке одобренного набора мокапов не уезжают с машины.
-      run: node hooks/design-gate.js --base main
+      run: node hooks/design-gate.js --base origin/main

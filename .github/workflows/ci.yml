@@ -46,6 +46,15 @@ jobs:
       - name: Conventional commits (cocogitto)
         if: github.event_name == 'pull_request'
         uses: cocogitto/cocogitto-action@v3
+        with:
+          check: false
+
+      # `cog.toml` is release-tag aware, but PR checks must also work before the
+      # first release tag exists. Use the PR base SHA explicitly instead of
+      # relying on from_latest_tag.
+      - name: Conventional commit range
+        if: github.event_name == 'pull_request'
+        run: cog check "${{ github.event.pull_request.base.sha }}..HEAD" --ignore-merge-commits
 
       # Executable VERIFY: auto-detects stacks and runs lint/build/test fail-fast.
       # For this repo that runs the harness self-test suite (node hooks/test.js).
@@ -66,4 +75,4 @@ jobs:
       # DESIGN-gate: UI changes require an approved mockup set touched in the same diff.
       - name: DESIGN-gate
         if: github.event_name == 'pull_request'
-        run: node hooks/design-gate.js --base ${{ github.event.pull_request.base.sha }}
+        run: node hooks/design-gate.js --strict --base ${{ github.event.pull_request.base.sha }}

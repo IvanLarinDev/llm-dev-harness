@@ -6,27 +6,48 @@
 // otherwise one old approval would open the gate for all future UI work forever.
 //
 // Usage:
-//   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json]
-//     --base   git ref to diff against (default: main)         [CI/local]
+//   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json] [--strict]
+//     --base   git ref to diff against (default: origin/main if available) [CI/local]
 //     --files  explicit comma-separated changed files          [tests/CI]
 //     --root   repo root to resolve config + mockups (default: cwd)
+//     --strict diff errors fail closed (CI/server enforcement)
 //
 // Exit 0 = gate satisfied (or no UI change), exit 1 = UI changed without approved mockups.
 // Internal error → exit 0 (never wedge unrelated work), но с ГРОМКИМ warning.
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { base: "main", root: process.cwd(), files: null, json: false };
+  const a = { base: null, root: process.cwd(), files: null, json: false, strict: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--base") a.base = argv[++i];
     else if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--files") a.files = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === "--json") a.json = true;
+    else if (argv[i] === "--strict") a.strict = true;
   }
   return a;
+}
+
+function refExists(root, ref) {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", ref], {
+      cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000, killSignal: "SIGKILL",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function defaultBase(root) {
+  for (const ref of ["origin/main", "origin/HEAD", "main", "master"]) {
+    if (refExists(root, ref)) return ref;
+  }
+  return "origin/main";
 }
 
 // ---------- config (общая с guard.js: hooks/_lib.js) ----------
@@ -69,18 +90,20 @@ function hasApprovedMockups(root, m, changed) {
 // ---------- main ----------
 (function main() {
   const a = parseArgs(process.argv.slice(2));
+  if (!a.base) a.base = defaultBase(a.root);
   const cfg = loadConfig(a.root);
-  const res = { ok: true, uiChanged: [], mockups: null };
+  const res = { ok: true, base: a.base, uiChanged: [], mockups: null };
 
   const uiRes = cfg.uiGlobs.map(globToRe);
   const mockRoot = cfg.mockups.dir.replace(/\\/g, "/").replace(/\/$/, "");
   const cf = changedFiles(a.base, a.root, a.files);
+  if (cf.base) res.base = cf.base;
   if (cf.error) {
-    // fail-open, но ГРОМКО: молчаливый пропуск = гейта нет.
-    const warn = `⚠️ design-gate: ${cf.error} — гейт ПРОПУЩЕН, UI-изменения не проверены. Укажи базу явно: --base <ref>.`;
-    if (a.json) console.log(JSON.stringify({ ...res, skipped: true, warn }));
+    // local default = fail-open, но ГРОМКО; strict/CI = fail-closed.
+    const warn = `⚠️ design-gate: ${cf.error} — ${a.strict ? "гейт НЕ МОЖЕТ ПРОВЕРИТЬ UI-изменения" : "гейт ПРОПУЩЕН, UI-изменения не проверены"}. Укажи базу явно: --base <ref>.`;
+    if (a.json) console.log(JSON.stringify({ ...res, ok: !a.strict, skipped: true, warn }));
     else console.error(warn);
-    process.exit(0);
+    process.exit(a.strict ? 1 : 0);
   }
   const files = cf.files.map((f) => f.replace(/\\/g, "/"));
 
