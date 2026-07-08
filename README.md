@@ -56,6 +56,10 @@ Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enfo
 остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
 Pro/публичный репо.
 
+`stop-reminder.js` — именно reminder: первый Stop при dirty tree возвращает
+`decision:block`, но повторный Stop с тем же `git status` пропускается. Это оставляет
+выход для намеренно uncommitted bootstrap/local файлов после явного отчёта.
+
 ### Bootstrap PR
 
 После установки в целевой репозиторий файлы харнесса нужно закоммитить в `main`

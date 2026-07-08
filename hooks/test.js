@@ -499,6 +499,12 @@ fs.writeFileSync(path.join(stopRepo, "wip.txt"), "x");
 stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
 ok(/VERIFY/.test(stopOut) && /wip\.txt/.test(stopOut), "грязное дерево -> напоминание + git status");
 ok(/"decision"\s*:\s*"block"/.test(stopOut), "напоминание в контракте Stop-хука (decision:block, additionalContext на Stop не работает)");
+stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
+ok(stopOut.trim() === "", "повторный Stop с тем же dirty status -> молчит (осознанное завершение)");
+fs.writeFileSync(path.join(stopRepo, "another.txt"), "x");
+stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
+ok(/another\.txt/.test(stopOut) && /"decision"\s*:\s*"block"/.test(stopOut),
+  "изменился dirty status -> stop-reminder напоминает снова");
 stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: stopRepo });
 ok(stopOut.trim() === "", "stop_hook_active=true -> молчит (защита от вечного block-цикла)");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
