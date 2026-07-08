@@ -403,6 +403,14 @@ try {
 } catch (e) { try { staleGate = JSON.parse(String(e.stdout || "{}")); } catch {} }
 ok(staleGate.base === "origin/main" && Array.isArray(staleGate.uiChanged) && staleGate.uiChanged.length === 0,
   "design-gate default prefers origin/main, so stale local main does not add upstream UI noise");
+fs.mkdirSync(path.join(staleMain, "src", "ui"), { recursive: true });
+fs.writeFileSync(path.join(staleMain, "src", "ui", "scratch.ui"), "<ui/>\n");
+staleGate = {};
+try {
+  staleGate = JSON.parse(execFileSync("node", [DESIGN_GATE, "--root", staleMain, "--json"], { encoding: "utf8", stdio: "pipe" }));
+} catch (e) { try { staleGate = JSON.parse(String(e.stdout || "{}")); } catch {} }
+ok(Array.isArray(staleGate.uiChanged) && staleGate.uiChanged.length === 0,
+  "design-gate ignores untracked local UI files; it gates branch diff, not dirty workspace noise");
 try { fs.rmSync(staleMain, { recursive: true, force: true }); } catch {}
 execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
 const fdir = path.join(dtmp, "design", "mockups", "login");
