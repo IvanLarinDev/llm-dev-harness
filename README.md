@@ -12,6 +12,10 @@ README covers the stack and installation.
 > the worktree. Real enforcement is the server-side GitHub ruleset in
 > `.github/rulesets/main.json`, where the required `verify` check is pinned to
 > GitHub Actions through `integration_id`.
+> This source repository uses a solo-maintainer ruleset: PR + pinned `verify`
+> are required, while approving/code-owner review is advisory to avoid a
+> self-approval deadlock. Target installs keep regular approving review by
+> default.
 
 ## Stack
 

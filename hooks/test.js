@@ -133,17 +133,19 @@ ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "ver
 ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "verify" && c.integration_id === 15368),
   "ruleset pins the verify check to GitHub Actions (integration_id), so API-forged statuses do not satisfy it");
 const prr = (ruleset.rules || []).find((r) => r.type === "pull_request");
-ok(!!prr && prr.parameters.required_approving_review_count >= 1 && prr.parameters.require_code_owner_review === true,
-  "configs lefthook gitleaks cocogitto ruleset ci assertion 7");
+ok(!!prr && prr.parameters.required_approving_review_count === 0 && prr.parameters.require_code_owner_review === false,
+  "source ruleset uses solo-maintainer PR policy while verify remains required");
 const liveLikeRuleset = JSON.parse(JSON.stringify(ruleset));
 const liveLikePr = liveLikeRuleset.rules.find((r) => r.type === "pull_request");
 liveLikePr.parameters.allowed_merge_methods = ["merge", "squash", "rebase"];
 ok(applyRuleset.compareRuleset(ruleset, liveLikeRuleset).length === 0,
   "apply-ruleset readback comparison ignores harmless GitHub-added rule fields");
-liveLikePr.parameters.required_approving_review_count = 0;
-liveLikePr.parameters.require_code_owner_review = false;
-ok(applyRuleset.compareRuleset(ruleset, liveLikeRuleset).some((m) => /pull_request/.test(m)),
-  "apply-ruleset readback comparison catches weakened PR review policy");
+const strictExpectedRuleset = JSON.parse(JSON.stringify(ruleset));
+const strictExpectedPr = strictExpectedRuleset.rules.find((r) => r.type === "pull_request");
+strictExpectedPr.parameters.required_approving_review_count = 1;
+strictExpectedPr.parameters.require_code_owner_review = true;
+ok(applyRuleset.compareRuleset(strictExpectedRuleset, liveLikeRuleset).some((m) => /pull_request/.test(m)),
+  "apply-ruleset readback comparison catches PR review policy drift");
 ok(applyRuleset.parseRulesetList(JSON.stringify([{ name: "a" }]) + "\n" + JSON.stringify([{ name: "b" }])).length === 2,
   "apply-ruleset parses paginated ruleset list output");
 const ci = readRepo(".github/workflows/ci.yml");
@@ -977,6 +979,8 @@ const defaultRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "ru
 const defaultPrRule = (defaultRuleset.rules || []).find((r) => r.type === "pull_request");
 ok(!/@IvanLarinDev/.test(defaultOwners) && defaultPrRule.parameters.require_code_owner_review === false,
   "install: default target CODEOWNERS does not hardcode the source maintainer and disables code-owner review");
+ok(defaultPrRule.parameters.required_approving_review_count === 1,
+  "install: default target ruleset keeps regular approving review even though source ruleset is solo-maintainer");
 ok(/Code-owner review is disabled/.test(defaultRuleset._comment || "") && !/Code-owner review is required/.test(defaultRuleset._comment || ""),
   "install: default target ruleset comment matches disabled code-owner policy");
 installJson(itmp, ["--code-owner", "@ExampleOrg/harness-maintainers"]);
@@ -985,6 +989,8 @@ const ownerPrRule = (ownerRuleset.rules || []).find((r) => r.type === "pull_requ
 ok(/@ExampleOrg\/harness-maintainers/.test(fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8")) &&
    ownerPrRule.parameters.require_code_owner_review === true,
   "install: explicit --code-owner writes CODEOWNERS and enables code-owner review");
+ok(ownerPrRule.parameters.required_approving_review_count === 1,
+  "install: explicit --code-owner target ruleset keeps regular approving review");
 ok(/Code-owner review is required/.test(ownerRuleset._comment || ""),
   "install: explicit --code-owner ruleset comment matches required code-owner policy");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");

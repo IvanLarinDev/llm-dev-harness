@@ -110,7 +110,7 @@ function checkRulesetPrReview(rel) {
   const p = (pr && pr.parameters) || {};
   const codeowners = codeownersInfo();
   if (Number(p.required_approving_review_count || 0) < 1)
-    fail("ruleset: pull_request must require at least 1 approving review");
+    warn("ruleset: pull_request does not require approving review; this is only appropriate for a solo-maintainer source repo");
   else ok("ruleset: pull_request requires approving review");
   if (p.require_code_owner_review === true) {
     ok("ruleset: code-owner review required");

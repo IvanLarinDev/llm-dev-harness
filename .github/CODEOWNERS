@@ -1,5 +1,6 @@
 # Code owners (BACKLOG P1-9). Auto-requests review from the owner on PRs.
-# On GitHub Free + private this is advisory (required reviews need Pro/Team or public).
+# In this solo-maintainer source repo this is advisory; target installs can make
+# CODEOWNERS required with: node install.js --code-owner @org/team
 
 *                    @IvanLarinDev
 /hooks/              @IvanLarinDev

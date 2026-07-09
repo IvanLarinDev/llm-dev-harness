@@ -160,6 +160,7 @@ function configureCodeOwnersAndRuleset(dryRun) {
     ruleset._comment = rulesetComment(owner);
     const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
     if (pr && pr.parameters) {
+      pr.parameters.required_approving_review_count = 1;
       pr.parameters.require_code_owner_review = !!owner;
       if (!dryRun) fs.writeFileSync(rulesetPath, JSON.stringify(ruleset, null, 2) + "\n");
       out.ruleset = owner ? "code-owner-required" : "code-owner-disabled";
