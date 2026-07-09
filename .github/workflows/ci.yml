@@ -57,11 +57,19 @@ jobs:
           gitleaks detect --source . --config "$GITLEAKS_CONFIG" --redact --no-banner
 
       # Conventional Commits across the PR's commits - cocogitto (`cog check`).
-      - name: Conventional commits (cocogitto)
+      # cocogitto-action is Linux-only; install the Windows binary explicitly.
+      - name: Install cocogitto
         if: github.event_name == 'pull_request'
-        uses: cocogitto/cocogitto-action@c7a74f5406bab86da17da0f0e460a69f8219a68c # cocogitto/cocogitto-action@v3
-        with:
-          check: false
+        shell: bash
+        env:
+          COG_VERSION: "7.0.0"
+          COG_SHA256: "074f68f05d270da5c0d69d3e234ec362bec4c6e3189c21d1c948d038603655d7"
+        run: |
+          curl -fsSL -o cog.tar.gz "https://github.com/cocogitto/cocogitto/releases/download/$COG_VERSION/cocogitto-$COG_VERSION-x86_64-pc-windows-msvc.tar.gz"
+          echo "$COG_SHA256  cog.tar.gz" | sha256sum -c -
+          tar -xzf cog.tar.gz
+          echo "$PWD/x86_64-pc-windows-msvc" >> "$GITHUB_PATH"
+          "$PWD/x86_64-pc-windows-msvc/cog.exe" --version
 
       # `cog.toml` is release-tag aware, but PR checks must also work before the
       # first release tag exists. Use the PR base SHA explicitly instead of
