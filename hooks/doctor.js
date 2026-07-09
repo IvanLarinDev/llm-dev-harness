@@ -94,22 +94,35 @@ function rulesetRequiredChecks(rel) {
   const rsc = (ruleset.rules || []).find((r) => r.type === "required_status_checks");
   return (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context).filter(Boolean);
 }
+function codeownersInfo(rel = ".github/CODEOWNERS") {
+  const abs = path.join(ROOT, rel);
+  const exists = fs.existsSync(abs);
+  const text = exists ? readText(rel) : "";
+  const ownerLines = text.split(/\r?\n/)
+    .map((line) => line.replace(/\s+#.*$/, "").trim())
+    .filter((line) => line && !line.startsWith("#") && /\s@[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?\b/.test(line));
+  return { rel, exists, hasOwner: ownerLines.length > 0, tracked: !inRepo || tracked(rel) };
+}
 function checkRulesetPrReview(rel) {
   let ruleset = {};
   try { ruleset = JSON.parse(readText(rel)); } catch { return; }
   const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
   const p = (pr && pr.parameters) || {};
+  const codeowners = codeownersInfo();
   if (Number(p.required_approving_review_count || 0) < 1)
-    fail("ruleset: pull_request must require at least 1 approving review");
+    warn("ruleset: pull_request does not require approving review; this is only appropriate for a solo-maintainer source repo");
   else ok("ruleset: pull_request requires approving review");
   if (p.require_code_owner_review === true) {
     ok("ruleset: code-owner review required");
-    const codeowners = ".github/CODEOWNERS";
-    if (!fs.existsSync(path.join(ROOT, codeowners))) fail("ruleset: code-owner review requires .github/CODEOWNERS");
-    else if (inRepo && !tracked(codeowners)) fail("ruleset: .github/CODEOWNERS must be tracked");
-    else ok("ruleset: CODEOWNERS present and tracked");
+    if (!codeowners.exists) fail("ruleset: code-owner review requires .github/CODEOWNERS");
+    else if (!codeowners.tracked) fail("ruleset: .github/CODEOWNERS must be tracked");
+    else if (!codeowners.hasOwner) fail("ruleset: code-owner review is enabled but .github/CODEOWNERS has no owner entries");
+    else ok("ruleset: CODEOWNERS has owner entries and is tracked");
   } else {
-    warn("ruleset: code-owner review is not required; configure a real CODEOWNERS reviewer before enabling it");
+    if (codeowners.exists && codeowners.hasOwner)
+      warn("ruleset: CODEOWNERS has owner entries but required code-owner review is disabled");
+    else
+      ok("ruleset: code-owner review disabled and CODEOWNERS has no required owner configured");
   }
 }
 function checkVerifyJobContract(workflowPath, required) {

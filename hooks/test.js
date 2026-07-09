@@ -62,12 +62,14 @@ const STOP = path.join(__dirname, "agent", "stop-reminder.js");
 const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
+const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
 const sharedLib = require(path.join(__dirname, "_lib.js"));
 const verifyCore = require(path.join(__dirname, "verify-core.js"));
+const applyRuleset = require(APPLY_RULESET);
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -131,8 +133,21 @@ ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "ver
 ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "verify" && c.integration_id === 15368),
   "ruleset pins the verify check to GitHub Actions (integration_id), so API-forged statuses do not satisfy it");
 const prr = (ruleset.rules || []).find((r) => r.type === "pull_request");
-ok(!!prr && prr.parameters.required_approving_review_count >= 1 && prr.parameters.require_code_owner_review === true,
-  "configs lefthook gitleaks cocogitto ruleset ci assertion 7");
+ok(!!prr && prr.parameters.required_approving_review_count === 0 && prr.parameters.require_code_owner_review === false,
+  "source ruleset uses solo-maintainer PR policy while verify remains required");
+const liveLikeRuleset = JSON.parse(JSON.stringify(ruleset));
+const liveLikePr = liveLikeRuleset.rules.find((r) => r.type === "pull_request");
+liveLikePr.parameters.allowed_merge_methods = ["merge", "squash", "rebase"];
+ok(applyRuleset.compareRuleset(ruleset, liveLikeRuleset).length === 0,
+  "apply-ruleset readback comparison ignores harmless GitHub-added rule fields");
+const strictExpectedRuleset = JSON.parse(JSON.stringify(ruleset));
+const strictExpectedPr = strictExpectedRuleset.rules.find((r) => r.type === "pull_request");
+strictExpectedPr.parameters.required_approving_review_count = 1;
+strictExpectedPr.parameters.require_code_owner_review = true;
+ok(applyRuleset.compareRuleset(strictExpectedRuleset, liveLikeRuleset).some((m) => /pull_request/.test(m)),
+  "apply-ruleset readback comparison catches PR review policy drift");
+ok(applyRuleset.parseRulesetList(JSON.stringify([{ name: "a" }]) + "\n" + JSON.stringify([{ name: "b" }])).length === 2,
+  "apply-ruleset parses paginated ruleset list output");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/runs-on:\s*windows-latest/.test(ci), "CI: verify job runs on Windows for WPF/net*-windows targets");
 ok(/uses:\s*actions\/setup-dotnet@[0-9a-f]{40}\s*# actions\/setup-dotnet@v\d/.test(ci) && /dotnet-version:\s*"10\.0\.x"/.test(ci),
@@ -559,7 +574,7 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
 ok(dotnetPlan && dotnetPlan.steps.includes("format"), "verify runner assertion 2");
 ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify-core.js")),
-  "dotnet format --verify-no-changes staged rollout: warning-only by default");
+  "dotnet format --verify-no-changes is optional only when the tool is missing");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
 fs.writeFileSync(path.join(etmp, "stepA.js"), "process.exit(0)");
@@ -571,10 +586,9 @@ ok(verifyExit(etmp) === 1, "verify runner assertion 3");
 ok(fs.existsSync(path.join(etmp, "ran_b")) && !fs.existsSync(path.join(etmp, "ran_c")),
   "verify runner assertion 4");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "opt", run: "node stepB.js", optional: true }] }] } }));
-ok(verifyExit(etmp) === 0, "verify runner assertion 5");
 const optOut = verifyOutput(etmp);
-ok(/optional warnings[\s\S]*error WHITESPACE: fix me[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut),
-  "verify UX: optional diagnostics excerpt appears before summary/final passed");
+ok(/error WHITESPACE: fix me[\s\S]*VERIFY failed: t\/opt @ \.: optional step ran but failed with exit 2/.test(optOut),
+  "optional step failure is enforced once the command runs");
 fs.writeFileSync(path.join(etmp, "big.js"), "process.stdout.write('x'.repeat(2 * 1024 * 1024));");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "big", run: "node big.js" }] }] } }));
 ok(verifyExit(etmp) === 0, "verify runner assertion 6");
@@ -582,6 +596,9 @@ fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify
 ok(verifyExit(etmp) === 0, "okCodes: allowed non-zero exit (for example pytest 5 no tests) -> warning, not failure");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "missing", run: "definitely_missing_harness_cmd_zzzz" }] }] } }));
 ok(verifyExit(etmp) === 1, "missing required command -> clear VERIFY failure");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "missing-opt", run: "definitely_missing_harness_cmd_zzzz", optional: true }] }] } }));
+ok(/optional tool not found - step skipped[\s\S]*VERIFY passed/.test(verifyOutput(etmp)),
+  "missing optional command -> warning and skip");
 fs.writeFileSync(path.join(etmp, "slow.js"), "setTimeout(() => {}, 5000);\n");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "slow", run: "node slow.js", timeoutMs: 50 }] }] } }));
 ok(/timeout after 50ms/.test(verifyOutput(etmp)), "verify timeout: hung step is killed and reported clearly");
@@ -768,6 +785,10 @@ fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /code-owner review requires \.github\/CODEOWNERS/.test(r.msg) && r.level === "FAIL"),
   "doctor: code-owner review without CODEOWNERS -> FAIL");
+fs.writeFileSync(path.join(bootRepo, ".github", "CODEOWNERS"), "# template only\n# add an owner with install.js --code-owner @org/team\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /code-owner review is enabled but \.github\/CODEOWNERS has no owner entries/.test(r.msg) && r.level === "FAIL"),
+  "doctor: required code-owner review with template-only CODEOWNERS -> FAIL");
 fs.writeFileSync(path.join(bootRepo, ".github", "CODEOWNERS"), readRepo(".github/CODEOWNERS"));
 fs.writeFileSync(path.join(bootRepo, "hooks", "test.js"), "console.log('self-test');\n");
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "noop", run: "node -e \"0\"" }] }] } }, null, 2) + "\n");
@@ -958,12 +979,20 @@ const defaultRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "ru
 const defaultPrRule = (defaultRuleset.rules || []).find((r) => r.type === "pull_request");
 ok(!/@IvanLarinDev/.test(defaultOwners) && defaultPrRule.parameters.require_code_owner_review === false,
   "install: default target CODEOWNERS does not hardcode the source maintainer and disables code-owner review");
+ok(defaultPrRule.parameters.required_approving_review_count === 1,
+  "install: default target ruleset keeps regular approving review even though source ruleset is solo-maintainer");
+ok(/Code-owner review is disabled/.test(defaultRuleset._comment || "") && !/Code-owner review is required/.test(defaultRuleset._comment || ""),
+  "install: default target ruleset comment matches disabled code-owner policy");
 installJson(itmp, ["--code-owner", "@ExampleOrg/harness-maintainers"]);
 const ownerRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
 const ownerPrRule = (ownerRuleset.rules || []).find((r) => r.type === "pull_request");
 ok(/@ExampleOrg\/harness-maintainers/.test(fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8")) &&
    ownerPrRule.parameters.require_code_owner_review === true,
   "install: explicit --code-owner writes CODEOWNERS and enables code-owner review");
+ok(ownerPrRule.parameters.required_approving_review_count === 1,
+  "install: explicit --code-owner target ruleset keeps regular approving review");
+ok(/Code-owner review is required/.test(ownerRuleset._comment || ""),
+  "install: explicit --code-owner ruleset comment matches required code-owner policy");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
 ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.test(tcog),
   "install: cog.toml remote changelog metadata is rewritten from target origin");

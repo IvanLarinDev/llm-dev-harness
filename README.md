@@ -12,6 +12,10 @@ README covers the stack and installation.
 > the worktree. Real enforcement is the server-side GitHub ruleset in
 > `.github/rulesets/main.json`, where the required `verify` check is pinned to
 > GitHub Actions through `integration_id`.
+> This source repository uses a solo-maintainer ruleset: PR + pinned `verify`
+> are required, while approving/code-owner review is advisory to avoid a
+> self-approval deadlock. Target installs keep regular approving review by
+> default.
 
 ## Stack
 
@@ -53,7 +57,9 @@ Useful flags:
 Without `--code-owner`, the installer writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the
 regular approving-review requirement without deadlocking solo-maintainer
-repositories on an owner that does not exist in the target project.
+repositories on an owner that does not exist in the target project. The target
+ruleset comment is rewritten to match that policy; re-run with
+`--code-owner @org/team` when a real owner should become a required reviewer.
 
 ## Bootstrap PR
 

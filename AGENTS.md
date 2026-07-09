@@ -116,6 +116,9 @@ merge happened. Sync locally only from a clean tree with `git fetch origin` and
 It requires PRs, the `verify` required check, and blocks force-push/delete on
 main. It cannot be bypassed locally. Private repositories need a plan that
 supports rulesets, or the repository must be public.
+This source repository uses a solo-maintainer variant: approving/code-owner
+review is advisory, while target installs keep regular approving review by
+default through `install.js`.
 
 **Layer 1 - lefthook.** Local hygiene for humans and agents:
 commit-msg runs `cog verify` and rejects co-author trailers; pre-commit runs

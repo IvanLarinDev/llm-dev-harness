@@ -136,6 +136,14 @@ function codeOwnerFile(owner) {
   ].join("\n");
 }
 
+function rulesetComment(owner) {
+  const base = "Installed GitHub branch ruleset for llm-dev-harness: the server-side gate that local hooks cannot replace. It requires PRs, the GitHub Actions verify check pinned by integration_id, and blocks force-push/delete on main.";
+  if (owner) {
+    return base + " Code-owner review is required because install.js was run with --code-owner; keep .github/CODEOWNERS in sync with this setting.";
+  }
+  return base + " Code-owner review is disabled because install.js was run without --code-owner; the regular approving-review requirement remains enabled. Re-run install.js with --code-owner @org/team to require CODEOWNERS review.";
+}
+
 function configureCodeOwnersAndRuleset(dryRun) {
   const owner = String(a.codeOwner || "").trim();
   const codeownersPath = path.join(a.target, ".github", "CODEOWNERS");
@@ -149,8 +157,10 @@ function configureCodeOwnersAndRuleset(dryRun) {
   let ruleset = null;
   try { ruleset = JSON.parse(fs.readFileSync(rulesetPath, "utf8")); } catch {}
   if (ruleset) {
+    ruleset._comment = rulesetComment(owner);
     const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
     if (pr && pr.parameters) {
+      pr.parameters.required_approving_review_count = 1;
       pr.parameters.require_code_owner_review = !!owner;
       if (!dryRun) fs.writeFileSync(rulesetPath, JSON.stringify(ruleset, null, 2) + "\n");
       out.ruleset = owner ? "code-owner-required" : "code-owner-disabled";

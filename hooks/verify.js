@@ -23,8 +23,8 @@
 //
 // Config: harness.config.json -> "verify". If "verify.stacks" is present it REPLACES
 // the auto-detected defaults (explicit control); otherwise DEFAULT_STACKS are used.
-// Per-step: optional (missing tool -> skip), okCodes { "<exit>": "note" } - non-zero
-// exits that are warnings, not failures (e.g. pytest 5 = no tests collected).
+// Per-step: optional (missing tool -> skip only), okCodes { "<exit>": "note" }
+// - explicit non-zero exits that are warnings, not failures (e.g. pytest 5 = no tests collected).
 //
 // Debug audit: runs alongside stack checks and scans only changed files for
 // leftover debug statements. Hard markers fail VERIFY; soft markers are notes
@@ -151,6 +151,14 @@ function diagnosticExcerpt(res, maxLines = 8) {
   const lines = text.split(/\r?\n/).map((s) => s.trimEnd()).filter((s) => s.trim()).slice(0, maxLines);
   return lines.join("\n");
 }
+function commandNotFound(res) {
+  if (res.notFound || res.code === 9009 || res.code === 127) return true;
+  const text = diagnosticExcerpt(res, 8).toLowerCase();
+  return /is not recognized as an internal or external command/.test(text) ||
+    /is not recognized as the name of (?:a )?(?:cmdlet|function|script file|operable program)/.test(text) ||
+    /command not found/.test(text) ||
+    /not found:/.test(text);
+}
 function readSmallOutputFile(file, maxBytes = 64 * 1024) {
   if (!file) return "";
   try {
@@ -236,7 +244,7 @@ function cleanupStepOutput(dir) {
           failed = `${label}: timeout after ${stepTimeoutMs(step)}ms`;
           if (failFast) break outer; else continue;
         }
-        if (res.notFound || res.code === 9009 || res.code === 127) {
+        if (commandNotFound(res)) {
           if (step.optional) {
             warnings.push(`${label}: optional tool not found - step skipped`);
             summary.push(`${label} (optional tool not found; skipped)`);
@@ -253,15 +261,11 @@ function cleanupStepOutput(dir) {
           summary.push(`${label} (exit ${res.code}: ${step.okCodes[res.code] || "allowed code"})`);
           continue;
         }
-        if (step.optional) {
-          const detail = diagnosticExcerpt(res);
-          warnings.push(`${label}: optional step exited ${res.code}${detail ? "\n" + detail : "\n(no diagnostics captured)"}`);
-          summary.push(`WARN ${label} (optional, exit ${res.code})`);
-          continue;
-        }
         summary.push(`FAIL ${label} (exit ${res.code})`);
         emitStepOutput(res);
-        failed = `${label}: exit ${res.code}`;
+        failed = step.optional
+          ? `${label}: optional step ran but failed with exit ${res.code}`
+          : `${label}: exit ${res.code}`;
         if (failFast) break outer;
       } finally {
         if (res.cleanup) res.cleanup();
