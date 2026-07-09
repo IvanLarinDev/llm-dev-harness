@@ -102,9 +102,15 @@ function checkRulesetPrReview(rel) {
   if (Number(p.required_approving_review_count || 0) < 1)
     fail("ruleset: pull_request must require at least 1 approving review");
   else ok("ruleset: pull_request requires approving review");
-  p.require_code_owner_review === true
-    ? ok("ruleset: code-owner review required")
-    : fail("ruleset: code-owner review is not required");
+  if (p.require_code_owner_review === true) {
+    ok("ruleset: code-owner review required");
+    const codeowners = ".github/CODEOWNERS";
+    if (!fs.existsSync(path.join(ROOT, codeowners))) fail("ruleset: code-owner review requires .github/CODEOWNERS");
+    else if (inRepo && !tracked(codeowners)) fail("ruleset: .github/CODEOWNERS must be tracked");
+    else ok("ruleset: CODEOWNERS present and tracked");
+  } else {
+    fail("ruleset: code-owner review is not required");
+  }
 }
 function checkVerifyJobContract(workflowPath, required) {
   if (!required.includes("verify")) return;
@@ -215,6 +221,8 @@ const requiredHarnessFiles = [
   "AGENTS.md",
   "settings.example.json",
   ".github/rulesets/main.json",
+  ".github/workflows/ci.yml",
+  ".github/CODEOWNERS",
 ];
 const missingHarness = [];
 const untrackedHarness = [];
@@ -316,17 +324,21 @@ if (fs.existsSync(cogPath)) {
 
 const workflowPath = ".github/workflows/ci.yml";
 const rulesetPath = ".github/rulesets/main.json";
-if (fs.existsSync(path.join(ROOT, workflowPath)) && fs.existsSync(path.join(ROOT, rulesetPath))) {
+if (fs.existsSync(path.join(ROOT, rulesetPath))) {
   const jobs = workflowJobIds(workflowPath);
   const required = rulesetRequiredChecks(rulesetPath);
-  const missing = required.filter((ctx) => !jobs.includes(ctx));
-  if (missing.length) fail(`ruleset required check(s) not published by CI workflow: ${missing.join(", ")} (jobs: ${jobs.join(", ") || "none"})`);
-  else if (required.length) {
-    ok("ruleset required checks match CI workflow job ids");
-    checkVerifyJobContract(workflowPath, required);
+  if (required.length && !fs.existsSync(path.join(ROOT, workflowPath))) {
+    fail(`ruleset required check(s) cannot run because ${workflowPath} is missing: ${required.join(", ")}`);
+  } else if (fs.existsSync(path.join(ROOT, workflowPath))) {
+    const missing = required.filter((ctx) => !jobs.includes(ctx));
+    if (missing.length) fail(`ruleset required check(s) not published by CI workflow: ${missing.join(", ")} (jobs: ${jobs.join(", ") || "none"})`);
+    else if (required.length) {
+      ok("ruleset required checks match CI workflow job ids");
+      checkVerifyJobContract(workflowPath, required);
+    }
+    checkWorkflowSupplyChain(workflowPath);
   }
   checkRulesetPrReview(rulesetPath);
-  checkWorkflowSupplyChain(workflowPath);
 }
 
 // report

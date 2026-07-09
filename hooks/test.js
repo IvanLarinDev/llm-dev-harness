@@ -641,6 +641,10 @@ dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:.*CHANGELOG\.md/.test(r.msg) && r.level === "FAIL"),
   "doctor: untracked CHANGELOG.md -> FAIL bootstrap-проверки");
 execFileSync("git", ["add", "CHANGELOG.md"], { cwd: bootRepo });
+fs.rmSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /required check\(s\).*workflow.*missing/.test(r.msg) && /verify/.test(r.msg) && r.level === "FAIL"),
+  "doctor: ruleset verify without CI workflow -> FAIL");
 fs.mkdirSync(path.join(bootRepo, ".github", "workflows"), { recursive: true });
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
 dres = doctor(bootRepo);
@@ -660,6 +664,11 @@ fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor: valid YAML variant с quoted job id/comment -> PASS");
+fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /code-owner review requires \.github\/CODEOWNERS/.test(r.msg) && r.level === "FAIL"),
+  "doctor: code-owner review without CODEOWNERS -> FAIL");
+fs.writeFileSync(path.join(bootRepo, ".github", "CODEOWNERS"), readRepo(".github/CODEOWNERS"));
 fs.writeFileSync(path.join(bootRepo, "hooks", "test.js"), "console.log('self-test');\n");
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "noop", run: "node -e \"0\"" }] }] } }, null, 2) + "\n");
 execFileSync("git", ["add", "."], { cwd: bootRepo });
@@ -765,6 +774,8 @@ ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ни�
 // Real installation.
 installJson(itmp, []);
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
+  "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
 ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.test(tcog),
   "install: cog.toml remote changelog metadata is rewritten from target origin");

@@ -45,9 +45,9 @@ node install.js --dry-run                # показать план, ничег
 ```
 
 Двойным кликом: `install.cmd` (Windows) или `install.sh` (POSIX) — ставят в свою папку.
-Флаги: `--force` (обновить уже существующие файлы), `--with-ci` (положить и `.github/`:
-CI-зеркало, CODEOWNERS, dependabot), `--with-ruleset` (сразу применить серверный ruleset,
-нужен gh admin), `--json` (машиночитаемый отчёт).
+Флаги: `--force` (обновить уже существующие файлы), `--with-ci` (добавить опциональный
+dependabot; CI-зеркало, CODEOWNERS и ruleset ставятся по умолчанию), `--with-ruleset`
+(сразу применить серверный ruleset, нужен gh admin), `--json` (машиночитаемый отчёт).
 
 Что делает установщик по слоям: слой 1 — `lefthook install` (git-хуки для любого
 агента/человека); слой 2 — вплетает `guard.js` на PreToolUse и `stop-reminder.js` на Stop

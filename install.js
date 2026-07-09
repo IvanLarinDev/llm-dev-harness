@@ -8,7 +8,8 @@
 //      source repo self-test so the target can auto-detect its own stacks;
 //   3. merges the agent guard into .claude/settings.json while preserving foreign
 //      keys and hooks, and without duplicating our entries on repeated runs;
-//   4. installs lefthook hooks and runs doctor.
+//   4. installs the CI/ruleset mirror needed for server-side enforcement;
+//   5. installs lefthook hooks and runs doctor.
 //
 // Idempotent, cross-platform (Windows/macOS/Linux), and dependency-light.
 // Double-click wrappers: install.cmd (Windows) / install.sh (POSIX).
@@ -19,7 +20,7 @@
 //     --target        install destination (default: current directory)
 //     --force         overwrite existing harness files
 //     --dry-run       show the plan without writing
-//     --with-ci       also copy .github/ (CI mirror, CODEOWNERS, dependabot)
+//     --with-ci       also copy optional GitHub maintenance files (dependabot)
 //     --with-ruleset  apply the server ruleset (requires gh admin; see apply-ruleset.js)
 //     --json          machine-readable report
 //
@@ -43,9 +44,9 @@ const FILES = [
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",
-  ".gitattributes", "AGENTS.md", ".github/rulesets/main.json",
+  ".gitattributes", "AGENTS.md", ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/CODEOWNERS",
 ];
-const CI_FILES = [".github/workflows/ci.yml", ".github/CODEOWNERS", ".github/dependabot.yml"];
+const CI_FILES = [".github/dependabot.yml"];
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -217,9 +218,9 @@ const a = parseArgs(process.argv.slice(2));
       }
     }
     out.config = writeConfig(a.force, a.dryRun);
-    if (a.withCi && !FILES.includes(".github/workflows/ci.yml")) {
-      // The CI mirror is copied, but it only activates after push and requires the workflow scope.
-      out.notes.push("CI-зеркало .github/workflows/ci.yml положено, но активируется только после push (нужен gh-скоуп workflow).");
+    if (out.files.some((f) => f.rel === ".github/workflows/ci.yml" && f.action !== "skip")) {
+      // The CI mirror is copied, but it only activates after push and may require the workflow scope.
+      out.notes.push("CI mirror .github/workflows/ci.yml was written; it activates after push and may require the gh workflow scope.");
     }
   } else {
     out.notes.push("bootstrap-режим: цель совпадает с источником, файлы уже на месте — только вплетаю хуки и активирую.");
