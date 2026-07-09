@@ -204,6 +204,7 @@ for (const t of tools) {
 const requiredHarnessFiles = [
   "hooks/verify.js",
   "hooks/design-gate.js",
+  "hooks/release-preflight.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/apply-ruleset.js",

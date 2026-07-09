@@ -126,7 +126,9 @@ GitHub Rulesets + required status checks + required PR. Сейчас у харн
   `HARNESS_TOOLLOOP_THRESHOLD` (12). Тесты есть.
 - **P2-11. Release-автоматизация. ✅ МИГРИРОВАНО НА cocogitto.** Самописный `release.js` удалён.
   `cog bump --auto` считает next SemVer из conventional-коммитов, ставит annotated-тег и генерит
-  CHANGELOG (`cog.toml`). Push — по-прежнему gated (R3). CI-публикация (SLSA/SBOM) — опциональный workflow.
+  CHANGELOG (`cog.toml`). `hooks/release-preflight.js` закрывает ручной gap перед push: clean worktree,
+  base от `origin/main`, local tag указывает на HEAD, remote tag ещё нет, project/package versions
+  совпадают с `vX.Y.Z`. Push — по-прежнему gated (R3). CI-публикация (SLSA/SBOM) — опциональный workflow.
 - **P2-12. `harness doctor`. ✅ СДЕЛАНО.** `hooks/doctor.js` — проверка окружения: node/git,
   lefthook/gitleaks/cog в PATH + wiring в `.git/hooks`, LF + отсутствие NUL в конфигах, валидность
   `harness.config.json`, git-identity. Ловит ровно те грабли, что мы поймали (CRLF, NUL). Тесты есть.

@@ -144,7 +144,7 @@ function isLintConfigPath(rel, lintConfigs) {
 // cannot be inspected before execution.
 const INTERP_EVAL_RE = /\b(?:node|nodejs|deno|bun|python|python3|py|perl|ruby|php|pwsh|powershell|bash|sh|zsh)\b[^\n]*?(?:\s-e\b|\s--eval\b|\s-c\b|\seval\b|\s-Command\b|\s-EncodedCommand\b)/i;
 const INTERP_ENCODED_RE = /\b(?:pwsh|powershell)\b[^\n]*\s-EncodedCommand\b/i;
-const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
+const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|write_text|write_bytes|unlink\s*\(|rmtree\s*\(|remove\s*\(|replace\s*\(|rename\s*\(|shutil\.(?:rmtree|move)|os\.(?:remove|unlink|replace|rename)|path\([^)]*\)\.(?:write_text|write_bytes|unlink)|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
 function interpreterProtectedHint(rawCmd, protectedList) {
   const s = String(rawCmd);
   if (!INTERP_EVAL_RE.test(s)) return null;
