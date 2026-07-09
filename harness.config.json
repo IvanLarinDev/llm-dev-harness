@@ -20,7 +20,7 @@
       "approvalFile": "APPROVED"
     }
   },
-  "_debugAudit_note": "verify.js сканирует ТОЛЬКО изменённые в diff файлы на забытые debug-строки. hard-маркеры (debugger/breakpoint()/pdb.set_trace()/dbg!()) валят VERIFY; soft (console.log/print) — заметка, включается soft=true. exclude — глобы, которые аудит пропускает.",
+  "_debugAudit_note": "verify.js scans only changed diff files for leftover debug statements. Hard markers fail VERIFY; soft markers are notes when soft=true. exclude contains globs skipped by the audit.",
   "debugAudit": {
     "enabled": true,
     "base": "main",

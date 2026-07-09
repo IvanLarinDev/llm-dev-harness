@@ -1,11 +1,11 @@
 name: verify
-# CI mirror of the local harness — the SAME checks, server-side where local hooks and
+# CI mirror of the local harness - the SAME checks, server-side where local hooks and
 # `--no-verify` cannot skip them. The job id `verify` is the context referenced by the
 # branch ruleset (.github/rulesets/main.json -> required_status_checks). Renaming the job
 # means updating the ruleset too.
 #
 # On GitHub Free + private this workflow RUNS and reports status but cannot be *required*
-# (rulesets need Pro/Team or a public repo — see BACKLOG P0-0).
+# (rulesets need Pro/Team or a public repo - see BACKLOG P0-0).
 #
 # Actions are pinned to full commit SHAs. The trailing comment keeps Dependabot's
 # github-actions updater able to identify the source action and desired major.
@@ -20,11 +20,10 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read # gitleaks-action reads the PR commit list (GET /pulls/{n}/commits)
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
@@ -34,31 +33,50 @@ jobs:
         with:
           node-version: "22"
 
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+
       # Doctor catches bootstrap drift before the required check can go green by name only.
       - name: Doctor (harness contract)
         run: node hooks/doctor.js
 
-      # Secrets — gitleaks. Scans diff on PRs, full history otherwise.
-      # GITHUB_TOKEN is required by gitleaks-action@v2 for PR scanning.
+      # Secrets - gitleaks. Install from the Go module instead of gitleaks-action:
+      # the action's Windows asset resolver requested a non-existent .tar.gz.
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # gitleaks/gitleaks-action@v2
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: "v8.24.3"
+          GITLEAKS_CONFIG: ".gitleaks.toml"
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@$GITLEAKS_VERSION
+          gitleaks detect --source . --config "$GITLEAKS_CONFIG" --redact --no-banner
 
-      # Conventional Commits across the PR's commits — cocogitto (`cog check`).
-      - name: Conventional commits (cocogitto)
+      # Conventional Commits across the PR's commits - cocogitto (`cog check`).
+      # cocogitto-action is Linux-only; install the Windows binary explicitly.
+      - name: Install cocogitto
         if: github.event_name == 'pull_request'
-        uses: cocogitto/cocogitto-action@c7a74f5406bab86da17da0f0e460a69f8219a68c # cocogitto/cocogitto-action@v3
-        with:
-          check: false
+        shell: bash
+        env:
+          COG_VERSION: "7.0.0"
+          COG_SHA256: "074f68f05d270da5c0d69d3e234ec362bec4c6e3189c21d1c948d038603655d7"
+        run: |
+          curl -fsSL -o cog.tar.gz "https://github.com/cocogitto/cocogitto/releases/download/$COG_VERSION/cocogitto-$COG_VERSION-x86_64-pc-windows-msvc.tar.gz"
+          echo "$COG_SHA256  cog.tar.gz" | sha256sum -c -
+          tar -xzf cog.tar.gz
+          "$PWD/x86_64-pc-windows-msvc/cog.exe" --version
 
       # `cog.toml` is release-tag aware, but PR checks must also work before the
       # first release tag exists. Use the PR base SHA explicitly instead of
       # relying on from_latest_tag.
       - name: Conventional commit range
         if: github.event_name == 'pull_request'
-        run: cog check "${{ github.event.pull_request.base.sha }}..HEAD" --ignore-merge-commits
+        shell: bash
+        run: ./x86_64-pc-windows-msvc/cog.exe check "${{ github.event.pull_request.base.sha }}..HEAD" --ignore-merge-commits
 
       # Executable VERIFY: auto-detects stacks and runs lint/build/test fail-fast.
       # For this repo that runs the harness self-test suite (node hooks/test.js).
@@ -74,6 +92,7 @@ jobs:
       # Later: remove continue-on-error and add this as a second required check.
       - name: AgentShield (agent-config security scan, advisory)
         continue-on-error: true
+        shell: bash
         env:
           AGENTSHIELD_VERSION: "1.4.0"
           AGENTSHIELD_INTEGRITY: "sha512-R98OO1Ujyk2lezDLb+iQmMhF6FwTJCHajy3G4FCB6x7wkSTqR9f8+eAelC5KDzYDsGSbc0sOZvjXOOPRBtMpDg=="

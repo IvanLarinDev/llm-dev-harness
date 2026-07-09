@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// apply-ruleset.js — install the versioned branch ruleset (the REAL, server-side gate).
+// apply-ruleset.js - install the versioned branch ruleset (the REAL, server-side gate).
 //
 // Local hooks (lefthook + gitleaks + cocogitto) are HYGIENE: fast, but an agent with
 // write access can bypass them. Only a GitHub ruleset with a required status check
@@ -50,12 +50,12 @@ try {
     : ["api", "-X", "POST", `repos/${repo}/rulesets`, "--input", "-"];
 
   gh(apiArgs, { input: body });
-  console.log(`✅ ruleset "${raw.name}" ${existingId ? "updated" : "created"} on ${repo} (branches: main/master).`);
-  console.log("   Enforced: require PR + code-owner review, required check «verify», block force-push & deletion.");
+  console.log(`OK ruleset "${raw.name}" ${existingId ? "updated" : "created"} on ${repo} (branches: main/master).`);
+  console.log("   Enforced: require PR + code-owner review, required check \"verify\", block force-push & deletion.");
   process.exit(0);
 } catch (e) {
-  console.error("❌ apply-ruleset failed:", e.message);
+  console.error("FAIL apply-ruleset failed:", e.message);
   console.error("   Need: gh CLI (authenticated, repo admin) and a plan that supports rulesets");
-  console.error("   (private repos → Pro/Team/Enterprise; or make the repo public). See BACKLOG P0-0.");
+  console.error("   (private repos need Pro/Team/Enterprise; or make the repo public). See BACKLOG P0-0.");
   process.exit(1);
 }

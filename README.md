@@ -1,120 +1,91 @@
 # llm-dev-harness
 
-Экономичный dev-loop харнесс для агентных правок кода — работает с **любой LLM/раннером**.
-Каждый заход в код идёт через один цикл (EXPLORE → PLAN → IMPLEMENT+TEST → VERIFY →
-COMMIT → PR → REPORT), и цикл гарантируется исполняемыми хуками, а не инструкциями.
-**Канонический документ — [`AGENTS.md`](./AGENTS.md)**: loop, правила этапов, слои,
-release flow, env-переменные. Здесь — только стек и установка.
+A compact dev-loop harness for agent-assisted code changes. It works with any
+LLM runner that can execute git hooks and, optionally, agent adapter hooks.
 
-> **Честная граница.** Локальные хуки — **гигиена** (ловят ошибки и небрежность до
-> коммита), а не защита от состязательного агента: у агента write-доступ к рабочему
-> дереву, и намеренный обход (подстановки переменных, кавычки-конкатенация) regex-слоем
-> не ловится. **Настоящий enforcement — только серверный ruleset**
-> (`.github/rulesets/main.json`; required-check запинен на GitHub Actions через
-> `integration_id`, иначе статус подделывается через API).
+The canonical operating contract is [AGENTS.md](./AGENTS.md): loop stages,
+bootstrap, release flow, enforcement layers, and environment variables. This
+README covers the stack and installation.
 
-## Стек
+> Honest boundary: local hooks are hygiene. They catch mistakes before commit,
+> but they are not a defense against an adversarial actor with write access to
+> the worktree. Real enforcement is the server-side GitHub ruleset in
+> `.github/rulesets/main.json`, where the required `verify` check is pinned to
+> GitHub Actions through `integration_id`.
 
-Commit-lint / secret-scan / release / hook-раннер делегированы зрелым инструментам.
-Своё — только то, чего у них нет: verify-раннер, design-гейт и agent-хук.
+## Stack
 
-| Задача | Инструмент | Конфиг |
-|--------|-----------|--------|
-| Git-hook раннер | **lefthook** | [`lefthook.yml`](./lefthook.yml) |
-| Секреты | **gitleaks** | [`.gitleaks.toml`](./.gitleaks.toml) |
-| Conventional Commits + SemVer + CHANGELOG | **cocogitto** (`cog`) | [`cog.toml`](./cog.toml) |
-| **Реальный enforcement** (require PR + check, block force-push) | **GitHub ruleset** | [`.github/rulesets/main.json`](./.github/rulesets/main.json) |
-| VERIFY (мульти-стек lint/build/test) | *своё* | [`hooks/verify.js`](./hooks/verify.js) |
-| GUI DESIGN-гейт | *своё* | [`hooks/design-gate.js`](./hooks/design-gate.js) |
-| Release preflight (tag/worktree/version) | *своё* | [`hooks/release-preflight.js`](./hooks/release-preflight.js) |
-| Agent-хук (обход/циклы/подсказки) | *своё* | [`hooks/agent/guard.js`](./hooks/agent/guard.js) |
-| Security-аудит конфигурации агента (advisory) | **ecc-agentshield** (npx, прибитая версия) | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
+| Task | Tool | Config |
+|---|---|---|
+| Git hook runner | lefthook | [lefthook.yml](./lefthook.yml) |
+| Secret scanning | gitleaks | [.gitleaks.toml](./.gitleaks.toml) |
+| Conventional Commits, SemVer, changelog | cocogitto | [cog.toml](./cog.toml) |
+| Server enforcement | GitHub ruleset | [.github/rulesets/main.json](./.github/rulesets/main.json) |
+| Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
+| GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
+| Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
+| Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
+| Agent config security audit | ecc-agentshield | [.github/workflows/ci.yml](./.github/workflows/ci.yml) |
 
-Общие хелперы хуков (глобы, конфиг, нормализация путей) — [`hooks/_lib.js`](./hooks/_lib.js).
+Shared helpers live in [hooks/_lib.js](./hooks/_lib.js).
 
-## Установка
-
-В один клик — установщик [`install.js`](./install.js) кладёт хуки и конфиги в целевой
-репозиторий, генерит `harness.config.json`, вплетает agent-guard в
-`.claude/settings.json` (мержем, не затирая чужое), ставит lefthook-хуки и прогоняет
-doctor. Идемпотентно, без внешних зависимостей.
+## Install
 
 ```bash
-node install.js --target ../my-project   # поставить харнесс в другой проект
-node install.js                          # или в текущий каталог
-node install.js --dry-run                # показать план, ничего не писать
+node install.js --target ../my-project
+node install.js
+node install.js --dry-run
 ```
 
-Двойным кликом: `install.cmd` (Windows) или `install.sh` (POSIX) — ставят в свою папку.
-Флаги: `--force` (обновить уже существующие файлы), `--with-ci` (добавить опциональный
-dependabot; CI-зеркало, CODEOWNERS и ruleset ставятся по умолчанию), `--with-ruleset`
-(сразу применить серверный ruleset, нужен gh admin), `--json` (машиночитаемый отчёт).
+Double-click wrappers are also available: `install.cmd` on Windows and
+`install.sh` on POSIX.
 
-Что делает установщик по слоям: слой 1 — `lefthook install` (git-хуки для любого
-агента/человека); слой 2 — вплетает `guard.js` на PreToolUse и `stop-reminder.js` на Stop
-(контракт: exit 0 = allow, exit 2 = block; notes — `hookSpecificOutput.additionalContext`,
-Stop — `{"decision":"block","reason":…}`). Слой 0 (реальный enforcement, серверный ruleset)
-остаётся ручным шагом `node hooks/apply-ruleset.js` — нужен gh с admin-правами и план
-Pro/публичный репо.
+Useful flags:
 
-`stop-reminder.js` — именно reminder: первый Stop при dirty tree возвращает
-`decision:block`, но повторный Stop с тем же `git status` пропускается. Это оставляет
-выход для намеренно uncommitted bootstrap/local файлов после явного отчёта.
+- `--force`: overwrite existing harness files.
+- `--with-ci`: add optional Dependabot; CI, CODEOWNERS, and ruleset templates are installed by default.
+- `--code-owner @org/team`: write a real CODEOWNERS owner and enable required code-owner review in the target ruleset.
+- `--with-ruleset`: apply the server ruleset immediately; requires `gh` admin access and a plan/repo that supports rulesets.
+- `--json`: emit a machine-readable report.
 
-### Bootstrap PR
+Without `--code-owner`, the installer writes a CODEOWNERS template but keeps
+`require_code_owner_review=false` in the target ruleset. This preserves the
+regular approving-review requirement without deadlocking solo-maintainer
+repositories on an owner that does not exist in the target project.
 
-После установки в целевой репозиторий файлы харнесса нужно закоммитить в `main`
-через отдельный bootstrap PR до того, как loop станет обязательным. Иначе инструкции
-будут требовать `node hooks/verify.js` или `cog bump --auto`, которых нет в clean
-worktree от `origin/main`.
+## Bootstrap PR
 
-Проверка:
+After installation, commit the harness into the target repository through a
+separate bootstrap PR before treating the loop as mandatory. At minimum, commit
+`hooks/`, `AGENTS.md`, `harness.config.json`, `lefthook.yml`, `cog.toml`,
+`.gitleaks.toml`, `settings.example.json`, and `.github/` when CI/rulesets are
+enabled.
+
+`node hooks/doctor.js` checks both presence and git tracking. If harness files
+are local but untracked, a clean worktree from `origin/main` cannot run
+`node hooks/verify.js`, `design-gate.js`, or `cog bump --auto`.
+
+## Verify
 
 ```bash
+node hooks/test.js
+node hooks/verify.js [--list]
+node hooks/verify.js --changed --base origin/main
+node hooks/design-gate.js --base origin/main
+node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/doctor.js
-git ls-files hooks/verify.js cog.toml lefthook.yml AGENTS.md harness.config.json
+node hooks/apply-ruleset.js --dry-run
 ```
 
-Если doctor пишет `harness not bootstrapped` или файлы видны как untracked, сначала
-закрой bootstrap PR. Release из такого состояния делать нельзя: clean release
-worktree не воспроизведёт локальные untracked файлы.
-
-Про `.gitignore`: файлы харнесса (`hooks/`, `lefthook.yml`, конфиги, `.github/`,
-`harness.config.json`) **коммитятся** — иначе на свежем клоне у lefthook, CI и
-серверного ruleset не будет кода проверок. Установщик добавляет в `.gitignore`
-целевого проекта только персональный `.claude/settings.local.json` (разрешения
-раннера, у каждого свои). Состояние guard живёт в системном tmp и в репозиторий
-не пишется.
-
-Вручную то же самое: `lefthook install`, скопировать блок `hooks` из
-[`settings.example.json`](./settings.example.json) в `.claude/settings.json`,
-`node hooks/apply-ruleset.js`, `node hooks/doctor.js`.
-
-## Проверка
-
-```bash
-node hooks/test.js                     # self-test suite харнесса
-node hooks/verify.js [--list]          # исполняемый VERIFY (авто-детект стеков)
-node hooks/design-gate.js --base origin/main # DESIGN-гейт по diff ветки
-node hooks/release-preflight.js --tag vX.Y.Z --base origin/main # release gate
-node hooks/doctor.js                   # окружение
-node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
-```
-
-Windows-safe диагностика lefthook из PowerShell:
+PowerShell-safe lefthook diagnostics:
 
 ```powershell
 lefthook.cmd run pre-commit --command branch-guard --force --verbose
 $msg = Join-Path $env:TEMP "commit-msg.txt"; Set-Content $msg "fix(hooks): test"; lefthook.cmd run commit-msg $msg --command no-coauthor --force --verbose
 ```
 
-Используй `--command` (singular). Если PowerShell блокирует `lefthook.ps1`
-ExecutionPolicy, запускай `lefthook.cmd` или напрямую:
+Use `--command` singular. If PowerShell blocks `lefthook.ps1`, run
+`lefthook.cmd` or invoke the installed Node entrypoint directly.
 
-```powershell
-node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run pre-commit --command branch-guard --force --verbose
-node "$env:APPDATA\npm\node_modules\lefthook\bin\index.js" run commit-msg $msg --command no-coauthor --force --verbose
-```
-
-CI: `.github/workflows/ci.yml` (job `verify` = required-check контекст в ruleset).
-Слои, DESIGN-стадия, release flow и env-переменные — в [`AGENTS.md`](./AGENTS.md).
+CI uses `.github/workflows/ci.yml`; the `verify` job name is the required-check
+context in the ruleset.

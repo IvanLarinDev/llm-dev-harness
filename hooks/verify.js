@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// verify.js — executable, multi-stack VERIFY runner (BACKLOG P1-8).
+// verify.js - executable, multi-stack VERIFY runner (BACKLOG P1-8).
 //
 // Makes AGENTS.md step 4 (VERIFY) an actual command instead of prose. Auto-detects
 // which stacks live in the repo by marker files and runs lint -> build -> test for
@@ -23,18 +23,15 @@
 //
 // Config: harness.config.json -> "verify". If "verify.stacks" is present it REPLACES
 // the auto-detected defaults (explicit control); otherwise DEFAULT_STACKS are used.
-// Per-step: optional (missing tool → skip), okCodes { "<exit>": "note" } — non-zero
+// Per-step: optional (missing tool -> skip), okCodes { "<exit>": "note" } - non-zero
 // exits that are warnings, not failures (e.g. pytest 5 = no tests collected).
 //
-// Debug-аудит: параллельно со стеками verify сканирует ТОЛЬКО изменённые в diff
-// файлы на забытые отладочные строки. hard-маркеры (debugger; / breakpoint() /
-// pdb.set_trace() / dbg!()) валят VERIFY; soft (console.log / print) — заметка,
-// включается harness.config.json -> debugAudit.soft. Область — diff (база = --base
-// или debugAudit.base); без diff аудит пропускается (не сканируем весь репо, иначе
-// массовые легитимные console.log/print дали бы шум). exclude-глобы — пропуск путей.
+// Debug audit: runs alongside stack checks and scans only changed files for
+// leftover debug statements. Hard markers fail VERIFY; soft markers are notes
+// only when harness.config.json -> debugAudit.soft is true.
 //
 // Exit 0 = all steps passed (or nothing to verify), exit 1 = a required step failed
-//          ИЛИ debug-аудит нашёл hard-находку.
+//          or the debug audit found a hard marker.
 
 const fs = require("fs");
 const os = require("os");
@@ -42,8 +39,7 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { workingTreeChangedFiles, globToRe } = require(path.join(__dirname, "_lib.js"));
 
-// Файл `file` лежит под каталогом стека `rel`? Корневой стек (rel ".") владеет всем
-// деревом → матчит любой изменённый файл; глубокий стек — только свой подкаталог.
+// Does changed `file` belong to stack directory `rel`?
 function fileUnder(rel, file) {
   const r = String(rel).replace(/\\/g, "/");
   const f = String(file).replace(/\\/g, "/");
@@ -51,12 +47,9 @@ function fileUnder(rel, file) {
   return f === r || f.startsWith(r + "/");
 }
 
-// ---------- debug-leftover audit (только изменённые файлы) ----------
-// Маркеры «никогда не коммить». Точные по синтаксису (требуют `;`/`()`), поэтому
-// строковые определения ниже и regex-литералы НЕ матчат сами себя (self-FP).
-// `what` намеренно без реального синтаксиса (без точки/скобок) — та же причина.
-// Привязка к расширениям: `breakpoint()`/`set_trace` — только .py, `dbg!` — только
-// .rs; иначе слово-омоним в чужом языке дал бы ложную тревогу.
+// ---------- debug-leftover audit (changed files only) ----------
+// These markers should never be committed. Patterns are syntax-specific to avoid
+// matching their own regex literals or string fixtures.
 const DEBUG_HARD = [
   { ext: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"], re: /(?:^|[^.\w])debugger\s*;/, what: "debugger statement" },
   { ext: [".py"], re: /(?:^|[^.\w])breakpoint\s*\(\s*\)/, what: "breakpoint call" },
@@ -69,7 +62,7 @@ const DEBUG_SOFT = [
   { ext: [".py"], re: /(?:^|[^.\w])print\s*\(/, what: "print()" },
 ];
 
-// harness.config.json → debugAudit (дефолты: включён, база main, soft off, без exclude).
+// harness.config.json -> debugAudit defaults.
 function loadDebugAudit(root) {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(root, "harness.config.json"), "utf8"));
@@ -108,7 +101,7 @@ function stripCommentTail(line, ext) {
   return line;
 }
 
-// Один файл → массив находок. Бинарь/крупный/нечитаемый → пропуск (не ошибка).
+// One file -> findings. Binary/large/unreadable files are skipped.
 function scanFileForDebug(abs, rel, soft) {
   let text;
   try {
@@ -130,11 +123,11 @@ function scanFileForDebug(abs, rel, soft) {
   return hits;
 }
 
-// Аудит изменённых файлов. Область — ТОЛЬКО diff (в отличие от стеков, где fail-safe
-// = проверить всё): без diff НЕ сканируем весь репозиторий, т.к. console.log/print
-// массово легитимны и дали бы шум. → { hard:[], soft:[], skipped:<причина>|null }.
+// Audit changed files only. Unlike stack checks, debug audit does not scan the
+// whole repository when diff scope is unavailable because console.log/print can
+// be legitimate in existing code.
 function debugAudit(root, opts, base, explicitFiles) {
-  if (!opts.enabled) return { hard: [], soft: [], skipped: "отключён в harness.config.json" };
+  if (!opts.enabled) return { hard: [], soft: [], skipped: "disabled in harness.config.json" };
   const cf = workingTreeChangedFiles(base || opts.base, root, explicitFiles);
   if (cf.error) return { hard: [], soft: [], skipped: cf.error };
   const excludeRe = (opts.exclude || []).map(globToRe);
@@ -165,8 +158,8 @@ const DEFAULT_STACKS = [
   { id: "python", markers: ["pyproject.toml", "requirements.txt", "setup.py"], steps: [
     { name: "lint", run: "ruff check ." },
     { name: "format", run: "ruff format --check .", optional: true },
-    // pytest exit 5 = «тесты не собраны»: проект без тестов — warning, не вечно-красный VERIFY
-    { name: "test", run: "pytest -q", okCodes: { 5: "pytest: тесты не найдены — добавь хотя бы smoke-тест" } },
+    // pytest exit 5 means no tests collected; warn instead of making new repos permanently red.
+    { name: "test", run: "pytest -q", okCodes: { 5: "pytest: no tests collected; add at least a smoke test" } },
   ] },
   { id: "node", markers: ["package.json"], steps: [
     { name: "lint", run: "npm run lint --if-present" },
@@ -219,14 +212,42 @@ function isHarnessChangedFile(file) {
 }
 
 function harnessTarget(root) {
-  const steps = [{ name: "syntax", run: "node hooks/verify.js --check-harness-syntax" }];
+  const steps = [];
   if (fs.existsSync(path.join(root, "hooks", "test.js"))) steps.push({ name: "self-test", run: "node test.js", cwdRel: "hooks" });
   return { stack: { id: "harness", steps }, dir: root, rel: "." };
+}
+
+function harnessSyntaxTarget(root) {
+  return { stack: { id: "harness-syntax", steps: [{ name: "syntax", run: "node hooks/verify.js --check-harness-syntax" }] }, dir: root, rel: "." };
+}
+
+function ensureHarnessSyntaxTarget(root, targets) {
+  if (!fs.existsSync(path.join(root, "hooks", "verify.js"))) return targets;
+  if (targets.some((t) => t.stack && t.stack.id === "harness-syntax")) return targets;
+  return targets.concat([harnessSyntaxTarget(root)]);
+}
+
+function isGitRepo(root) {
+  const r = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5000, killSignal: "SIGKILL",
+  });
+  return r.status === 0 && String(r.stdout || "").trim() === "true";
+}
+
+function ensureGitHygieneTarget(root, targets) {
+  if (!isGitRepo(root)) return targets;
+  if (targets.some((t) => t.stack && t.stack.id === "git-hygiene")) return targets;
+  return targets.concat([{ stack: { id: "git-hygiene", steps: [
+    { name: "diff-check", run: "git diff --check && git diff --cached --check" },
+  ] }, dir: root, rel: "." }]);
 }
 
 function maybeAddHarnessTarget(root, targets, files) {
   if (!files.some(isHarnessChangedFile)) return targets;
   if (!fs.existsSync(path.join(root, "hooks", "verify.js"))) return targets;
+  targets = ensureHarnessSyntaxTarget(root, targets);
+  if (!fs.existsSync(path.join(root, "hooks", "test.js"))) return targets;
   if (targets.some((t) => t.stack && t.stack.id === "harness")) return targets;
   return targets.concat([harnessTarget(root)]);
 }
@@ -384,18 +405,21 @@ function cleanupStepOutput(dir) {
 
   let targets = detect(a.root, stacks);
 
-  // --changed: сузить до стеков, чьи каталоги затронуты в diff ветки. Fail-safe —
-  // при ошибке diff проверяем ВСЕ стеки (громкий warn), а не молча пропускаем.
+  // --changed narrows checks to stacks touched by the branch diff. If diff
+  // scope cannot be computed, run all detected stacks loudly instead of skipping.
   if (a.changed) {
     const cf = workingTreeChangedFiles(a.base, a.root, a.files);
     if (cf.error) {
-      console.error(`⚠️ verify --changed: ${cf.error} — фильтр не применён, проверяю все обнаруженные стеки. Задай базу: --base <ref>.`);
+      console.error(`verify --changed: ${cf.error}; filter not applied, checking all detected stacks. Pass --base <ref> to choose a base.`);
       targets = maybeAddHarnessTarget(a.root, targets, ["hooks/verify.js"]);
     } else {
       const files = cf.files.map((f) => f.replace(/\\/g, "/"));
       targets = files.length ? targets.filter((t) => files.some((f) => fileUnder(t.rel, f))) : [];
       targets = maybeAddHarnessTarget(a.root, targets, files);
     }
+  } else {
+    targets = ensureHarnessSyntaxTarget(a.root, targets);
+    targets = ensureGitHygieneTarget(a.root, targets);
   }
 
   if (a.list) {
@@ -403,33 +427,32 @@ function cleanupStepOutput(dir) {
     if (a.json) console.log(JSON.stringify({ explicit, plan }));
     else {
       console.log(`design of VERIFY (${explicit ? "config" : "auto-detect"}):`);
-      if (!plan.length) console.log("  (стеки не обнаружены)");
-      for (const p of plan) console.log(`  • ${p.stack} @ ${p.dir}: ${p.steps.join(" → ")}`);
+      if (!plan.length) console.log("  (no stacks detected)");
+      for (const p of plan) console.log(`  - ${p.stack} @ ${p.dir}: ${p.steps.join(" -> ")}`);
     }
     process.exit(0);
   }
 
-  // debug-аудит изменённых файлов: до раннего выхода — работает даже без стеков.
-  // hard-находки валят VERIFY; soft (только при soft=true) — заметка без падения.
+  // Debug audit runs before the early no-target exit, so it still works without stacks.
   const da = loadDebugAudit(a.root);
   const audit = debugAudit(a.root, da, a.base, a.files);
   let auditFailed = null;
   if (audit.skipped) {
-    if (da.enabled) console.log(`\n· debug-аудит пропущен: ${audit.skipped}`);
-    if (da.enabled && (a.strictAudit || da.strict)) auditFailed = `debug-аудит strict: ${audit.skipped}`;
+    if (da.enabled) console.log(`\n- debug audit skipped: ${audit.skipped}`);
+    if (da.enabled && (a.strictAudit || da.strict)) auditFailed = `debug audit strict: ${audit.skipped}`;
   } else {
-    for (const h of audit.soft) console.log(`  ⚠ debug-строка (soft): ${h.rel}:${h.line} — ${h.what}`);
+    for (const h of audit.soft) console.log(`  debug line (soft): ${h.rel}:${h.line} - ${h.what}`);
     if (audit.hard.length) {
-      console.error("\n❌ debug-аудит — забытые отладочные строки в изменённых файлах:");
-      for (const h of audit.hard) console.error(`  ✗ ${h.rel}:${h.line} — ${h.what}`);
-      auditFailed = `debug-аудит: ${audit.hard.length} hard-находок (debugger/breakpoint/set_trace/dbg!)`;
+      console.error("\ndebug audit: leftover debug statements in changed files:");
+      for (const h of audit.hard) console.error(`  - ${h.rel}:${h.line} - ${h.what}`);
+      auditFailed = `debug audit: ${audit.hard.length} hard finding(s)`;
     }
   }
 
   if (!targets.length && !auditFailed) {
     console.log(a.changed
-      ? "✅ verify --changed: изменённые файлы не затрагивают ни один стек — проверять нечего."
-      : "✅ verify: стеки не обнаружены — проверять нечего.");
+      ? "verify --changed: changed files do not touch any detected stack; nothing to check."
+      : "verify: no stacks detected; nothing to check.");
     process.exit(0);
   }
 
@@ -440,40 +463,40 @@ function cleanupStepOutput(dir) {
   for (const t of targets) {
     for (const step of t.stack.steps || []) {
       const label = `${t.stack.id}/${step.name} @ ${t.rel}`;
-      console.log(`\n▶ ${label}: ${step.run}`);
+      console.log(`\n> ${label}: ${step.run}`);
       const res = runStep(step, t.dir);
       try {
-        if (res.ok) { emitStepOutput(res); summary.push(`✓ ${label}`); continue; }
+        if (res.ok) { emitStepOutput(res); summary.push(`OK ${label}`); continue; }
         if (res.timedOut) {
-          summary.push(`✗ ${label} (timeout after ${stepTimeoutMs(step)}ms)`);
+          summary.push(`FAIL ${label} (timeout after ${stepTimeoutMs(step)}ms)`);
           emitStepOutput(res);
           failed = `${label}: timeout after ${stepTimeoutMs(step)}ms`;
           if (failFast) break outer; else continue;
         }
         if (res.notFound || res.code === 9009 || res.code === 127) {
           if (step.optional) {
-            warnings.push(`${label}: optional tool not found — step skipped`);
-            summary.push(`⚠ ${label} (инструмент не найден — пропущено)`);
+            warnings.push(`${label}: optional tool not found - step skipped`);
+            summary.push(`${label} (optional tool not found; skipped)`);
             continue;
           }
-          summary.push(`✗ ${label} (инструмент не найден)`);
+          summary.push(`${label} (tool not found)`);
           emitStepOutput(res);
-          failed = `${label}: команда не найдена — установи инструмент или переопредели шаг в harness.config.json`;
+          failed = `${label}: command not found; install the tool or override the step in harness.config.json`;
           if (failFast) break outer; else continue;
         }
         if (step.okCodes && step.okCodes[res.code] !== undefined) {
           const detail = diagnosticExcerpt(res);
-          warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"}${detail ? "\n" + detail : ""}`);
-          summary.push(`⚠ ${label} (exit ${res.code}: ${step.okCodes[res.code] || "допустимый код"})`);
+          warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "allowed code"}${detail ? "\n" + detail : ""}`);
+          summary.push(`${label} (exit ${res.code}: ${step.okCodes[res.code] || "allowed code"})`);
           continue;
         }
         if (step.optional) {
           const detail = diagnosticExcerpt(res);
           warnings.push(`${label}: optional step exited ${res.code}${detail ? "\n" + detail : "\n(no diagnostics captured)"}`);
-          summary.push(`⚠ ${label} (optional, exit ${res.code})`);
+          summary.push(`WARN ${label} (optional, exit ${res.code})`);
           continue;
         }
-        summary.push(`✗ ${label} (exit ${res.code})`);
+        summary.push(`FAIL ${label} (exit ${res.code})`);
         emitStepOutput(res);
         failed = `${label}: exit ${res.code}`;
         if (failFast) break outer;
@@ -484,17 +507,17 @@ function cleanupStepOutput(dir) {
   }
 
   if (warnings.length) {
-    console.log("\n— optional warnings —");
-    for (const w of warnings) console.log("  ⚠ " + w.replace(/\n/g, "\n    "));
+    console.log("\n-- optional warnings --");
+    for (const w of warnings) console.log("  WARN " + w.replace(/\n/g, "\n    "));
   }
   if (summary.length) {
-    console.log("\n— verify summary —");
+    console.log("\n-- verify summary --");
     for (const s of summary) console.log("  " + s);
   }
   if (failed || auditFailed) {
-    console.error(`\n❌ VERIFY failed: ${[failed, auditFailed].filter(Boolean).join(" | ")}`);
+    console.error(`\nVERIFY failed: ${[failed, auditFailed].filter(Boolean).join(" | ")}`);
     process.exit(1);
   }
-  console.log("\n✅ VERIFY passed.");
+  console.log("\nVERIFY passed.");
   process.exit(0);
 })();

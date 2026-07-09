@@ -199,6 +199,14 @@ function checkTag(a, res, version) {
   } else {
     pass(res, `local tag ${a.tag} points at HEAD`);
   }
+  const tagType = gitOut(a.root, ["cat-file", "-t", `refs/tags/${a.tag}`]);
+  if (!tagType) {
+    if (!a.allowMissingTag) fail(res, `cannot inspect local tag object: ${a.tag}`);
+  } else if (tagType !== "tag") {
+    fail(res, `local tag ${a.tag} must be annotated`, { type: tagType });
+  } else {
+    pass(res, `local tag ${a.tag} is annotated`);
+  }
 
   const remote = gitResult(a.root, ["remote", "get-url", "origin"]);
   if (!remote.ok || !remote.out) {
@@ -230,9 +238,9 @@ function checkVersions(a, res, version) {
 function checkChangelog(a, res) {
   const p = path.join(a.root, "CHANGELOG.md");
   let text = "";
-  try { text = fs.readFileSync(p, "utf8"); } catch { warn(res, "CHANGELOG.md not found"); return; }
+  try { text = fs.readFileSync(p, "utf8"); } catch { fail(res, "CHANGELOG.md not found"); return; }
   if (text.includes(a.tag) || text.includes(semverFromTag(a.tag))) pass(res, "CHANGELOG.md mentions the release version");
-  else warn(res, "CHANGELOG.md does not mention the release version");
+  else fail(res, "CHANGELOG.md does not mention the release version");
 }
 
 function main() {

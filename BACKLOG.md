@@ -1,148 +1,101 @@
-# BACKLOG — llm-dev-harness
+# BACKLOG - llm-dev-harness
 
-> **Миграция (2026-07):** commit-lint/secret-scan/release/git-hook-раннер выпилены и заменены
-> боевыми стандартами — **lefthook** (`lefthook.yml`), **gitleaks** (`.gitleaks.toml`),
-> **cocogitto** (`cog.toml`). Своим осталась AGENTS.md-петля, agent-хук и loop/design-гейты.
-> Реальный enforcement вынесен в серверный ruleset (`.github/rulesets/main.json`, `hooks/apply-ruleset.js`).
->
-> **Lean-rewrite (7cbf0e8):** три отдельных agent-хука (bypass/design/tool-loop-guard) слиты в
-> один `hooks/agent/guard.js`; отдельные helper'ы `quality-gate.js` и `setup-signing.js` убраны.
-> Статусы ниже с пометкой «✅ СДЕЛАНО» отражают это состояние, а не исходные имена файлов.
+This backlog tracks engineering risk for the harness itself. P0 closes holes in
+the enforcement model, P1 improves quality materially, and P2 is maturity or
+automation.
 
-Что не хватает харнессу, сверено с практикой топовых GitHub-проектов (2026). Приоритеты:
-**P0** — закрывает реальную дыру в текущей модели; **P1** — сильно повышает качество;
-**P2** — зрелость/автоматизация.
+## Current Review Merge
 
-> **Плановое ограничение (важно).** Репозиторий приватный, а на **GitHub Free приватные
-> репо не получают branch protection / rulesets с required status checks** — это Pro/Team/
-> Enterprise или публичный репо. Пока план Free+private, серверное принуждение недоступно,
-> и «защита main» остаётся только совещательной (локальные хуки). См. P0-0.
+The latest Color Team review for the Dropwheel-installed harness was folded into
+this source repository only. Do not patch the generated copy in
+`C:\Users\poweruser\projects\csharp\dropwheel`; reinstall from this repo after
+merge.
 
----
+Resolved in this hardening pass:
 
-## P0 — серверный слой (сейчас его нет, а без него всё обходится)
+- CI now targets `windows-latest`, installs .NET `10.0.x`, and keeps AgentShield
+  explicitly on `bash`, so WPF targets are not verified on an incompatible Linux
+  runner.
+- `node hooks/verify.js` always includes harness syntax when harness files are
+  present and adds git whitespace hygiene through `git diff --check` plus
+  `git diff --cached --check`.
+- `--changed` now runs harness syntax for changed harness files even when
+  `hooks/test.js` is not tracked in a target install.
+- Release preflight now requires annotated tags and fails when `CHANGELOG.md`
+  does not mention the release version.
+- Target installs no longer hardcode the source maintainer in CODEOWNERS and no
+  longer enable required code-owner review unless `--code-owner` is provided.
+- Guard path handling covers common file-tool aliases and quoted shell paths, so
+  protected harness writes cannot slip through `filename`, `target_file`, or
+  quoted `rm "hooks/..."` style commands.
+- Tracked repo text was converted to English/ASCII to avoid mixed-language
+  instructions and Windows mojibake.
 
-Локальные git-хуки — это **inner loop**: быстро, но обходится одним `git commit --no-verify`
-и защищает только локального пользователя. Настоящее принуждение — **outer loop на сервере**:
-GitHub Rulesets + required status checks + required PR. Сейчас у харнесса есть только слой 1
-(локальный) и слой 2 (agent-adapter). Серверного слоя нет.
+Remaining watch items:
 
-- **P0-0. План/приватность. 🔄 ПЕРЕСМОТРЕНО (2026-07): делаем репозиторий ПУБЛИЧНЫМ.**
-  Публичный репо на Free получает rulesets/required-checks — это разблокирует серверный слой 0
-  (P0-2) без оплаты Pro. Предусловие (опасная операция, необратимо): прогнать `gitleaks detect`
-  по ВСЕЙ истории коммитов до публикации — в открытый доступ уходит вся история, отозвать нельзя
-  (форки/кэши). Порядок: чистый history-scan → `gh repo edit --visibility public` →
-  `node hooks/apply-ruleset.js` → проверить через `gh` что ruleset активен. Прежнее решение
-  (Free+private, только локальная защита) — отменено.
+- Keep AgentShield advisory until false positives are measured; then decide
+  whether to make it a required check.
+- Source-repo ruleset may still require code-owner review; target installs should
+  enable it only with a real second maintainer or team.
+- Release artifact verification remains a manual R6 step.
 
-- **P0-1. CI-зеркало проверок. ⏳ АВТОРИЗОВАНО, ждёт пуша workflow.** Готовы: `.github/workflows/ci.yml`
-  (gitleaks + cocogitto `cog check` + `node hooks/verify.js` + `design-gate.js` на push/PR) —
-  серверный бэкстоп против `--no-verify` (перепроверяет каждый коммит PR через cocogitto-action).
-  `cog check` (в CI через cocogitto-action) — серверный бэкстоп против `--no-verify`. **Файл workflow не запушен из этой сессии**: у gh-токена нет
-  скоупа `workflow`, а SSH к GitHub из окружения заблокирован (порты 22 и 443). Добавить workflow:
-  `gh auth refresh -s workflow -h github.com` → закоммитить `.github/workflows/ci.yml` → push;
-  либо добавить файл через веб-UI GitHub. На Free+private он **не станет required** (см. P0-0).
+## P0 - Server Enforcement
 
-- **P0-2. Ruleset на `main`** *(перенос из прошлого предложения — «branch protection»)*.
-  Хранить как versioned JSON + инсталлятор `gh api`. Правила: require PR, require CI-check из P0-1,
-  block прямого push/force-push/deletion, require conversation resolution. Прямой push в main
-  остаётся только через bootstrap/hotfix (наш hatch), на сервере — через bypass «for PRs only».
+Local git hooks are an inner loop. They are fast, but `git commit --no-verify`
+can bypass them. Real enforcement is the outer loop on GitHub: rulesets,
+required status checks, required PRs, and blocked force-push/delete.
 
-- **P0-3. Ответ на «как пушить в main?» → PR-flow + эргономика.** Раздел в AGENTS.md:
-  feature → PR → CI зелёный (required) → review/CODEOWNERS → **squash-merge**. Хелпер
-  `gh pr create` (тело из conventional-коммитов), `.github/pull_request_template.md` с чеклистом
-  loop'а (VERIFY сделан, тесты, мокапы для GUI). Для solo: ruleset «bypass for PRs only» +
-  самоапрув, но required CI обязателен.
+- **P0-0. Repository plan and visibility.** Private repositories need a GitHub
+  plan that supports required rulesets/checks, or the repo must be public. Before
+  publishing any repo, run a full-history `gitleaks detect`; public history and
+  forks cannot be reliably recalled.
+- **P0-1. CI mirror. Done.** `.github/workflows/ci.yml` runs doctor, gitleaks,
+  cocogitto, `node hooks/verify.js`, strict `design-gate.js`, and advisory
+  AgentShield. Current hardening makes the job Windows/.NET compatible for WPF
+  targets.
+- **P0-2. Ruleset on `main`. Done as versioned JSON.** It requires PRs, the
+  pinned `verify` check, conversation resolution, and blocks force-push/delete.
+  Apply with `node hooks/apply-ruleset.js`.
+- **P0-3. PR flow ergonomics. Open.** Add a pull request template and optional
+  `gh pr create` helper that reflects the loop: VERIFY, tests, DESIGN approval
+  when GUI files changed, and release notes if relevant.
+- **P0-4. Agent anti-bypass guard. Done.** `hooks/agent/guard.js` blocks
+  no-verify, hook path rewrites, lefthook uninstall, `.git/hooks` writes,
+  protected harness writes, lint-config weakening, degenerate loops, and
+  malformed payloads. This pass adds path alias and quoted-path regressions.
 
-- **P0-4. Анти-чит агента (специфично для AI-харнесса). ✅ СДЕЛАНО.** `hooks/agent/guard.js`
-  блокирует `git commit --no-verify`, `git push --no-verify`, `git commit -n`, правку
-  `core.hooksPath`, `lefthook uninstall`, `LEFTHOOK=0` (варианты имени `git`/`git.exe`/`git.cmd`;
-  обход только через `HARNESS_ACK_BYPASS=1`). Строки в кавычках обнуляются, чтобы сообщение
-  коммита с «-n» не было ложным срабатыванием. Покрыто self-test'ами.
-  Настоящий backstop против `--no-verify` — серверный required-check (P0-1), пока недоступен на Free.
+## P1 - Quality
 
----
+- **P1-5. GUI design-gate. Done.** GUI work requires at least four mockups plus
+  `APPROVED`, touched in the same branch diff.
+- **P1-6. Secret scanning. Done via gitleaks.**
+- **P1-7. Signed commits. Deferred.** If it becomes mandatory, enforce it through
+  the server ruleset rather than a local helper.
+- **P1-8. Executable VERIFY. Done.** Multi-stack auto-detect, config overrides,
+  `--changed`, debug audit, harness syntax, and git whitespace hygiene are
+  covered by tests.
+- **P1-9. CODEOWNERS and Dependabot. Updated.** Source repos can keep strict
+  owners. Target installs default to a non-deadlocking template and require
+  `--code-owner @org/team` to enable code-owner review.
+- **P1-10. AgentShield audit. Advisory.** Keep `continue-on-error: true` until
+  false positives are known.
+- **P1-11. Debug audit. Done.** Changed files are scanned for hard debug markers
+  and optional soft markers.
 
-## P1 — качество и твои требования
+## P2 - Maturity
 
-- **P1-5. GUI design-gate (твоё требование: 4 мокапа). ✅ СДЕЛАНО.** Стадия **DESIGN** (2.5) в loop
-  между PLAN и IMPLEMENT, обязательная для GUI. Реализация:
-  - `harness.config.json` — UI-globs (`*.ui`/`*.qml`/`ui/`/`views/`/`widgets/`…), `min=4`, каталог мокапов.
-  - `hooks/design-gate.js` — **жёсткий** гейт (exit 1) для VERIFY/CI: UI-изменения проходят,
-    только если одобренный набор ≥4 мокапов с файлом `APPROVED` **затронут в diff этой же ветки**
-    (иначе один старый approval открывал бы гейт навсегда).
-  - `hooks/agent/guard.js` — warn при правке UI-файла (design-note, часть единого agent-хука).
-  - `hooks/new-mockups.js` — генерит 4 стилистически разных HTML-мокапа под фичу.
-  - Покрыто self-test'ами. Возможное усиление (позже): поддержать `Design-Approved:` trailer
-    как альтернативу файлу APPROVED.
+- **P2-10. Loop guard for non-shell tools. Done.**
+- **P2-11. Release automation. Done via cocogitto plus preflight.** This pass
+  hardens annotated-tag and changelog-version checks.
+- **P2-12. Doctor. Done.** Checks environment, tracked bootstrap files, line
+  endings, required CI/ruleset contract, and release config.
+- **P2-13. Quality-gate helper. Removed.** Prefer real linters/tests and git diff
+  self-review over bespoke heuristics.
+- **P2-14. Commit helper. Removed.** Use `cog commit`.
 
-- **P1-6. Secret scanning. ✅ МИГРИРОВАНО НА gitleaks.** Самописный `secret-scan.js` удалён; секреты
-  ловит **gitleaks** (`.gitleaks.toml`, `useDefault=true` → 100+ детекторов), встроен в lefthook
-  `pre-commit` и в CI. Инлайн-исключение `gitleaks:allow` (+ legacy `secret-scan:allow` в allowlist).
+## Covered Practices
 
-- **P1-7. Signed commits. ⏸️ Helper убран в lean-rewrite.** Отдельный `setup-signing.js` удалён как
-  редко нужный: SSH-подпись включается вручную (`git config commit.gpgsign true` + allowed_signers).
-  «Require signed» как жёсткий гейт — это ruleset (нужен Pro/public, см. P0-0).
-
-- **P1-8. Исполняемый VERIFY. ✅ СДЕЛАНО.** `hooks/verify.js` — мульти-стек авто-детект
-  (Python/Qt: `ruff`+`pytest`; C#/WPF: `dotnet format`+`build -warnaserror`+`test`;
-  Rust/Tauri: `cargo fmt`+`clippy -D warnings`+`test`; Node: `npm lint/build/test`), fail-fast,
-  warnings-as-errors по умолчанию, монорепо (шаги в каталоге маркера), `--list`/`--stack`/`--json`.
-  Переопределение через `harness.config.json` → `verify`. Покрыто self-test'ами; сам харнесс
-  прогоняет свой `node test.js` через verify. Это же — команда для CI (P0-1).
-  `--changed`/`--base` (верифицировать только тронутые стеки для скорости) — ✅ добавлено (99bf0c7).
-  Возможное усиление (позже): baseline-diff warning'ов вместо доверия к `-Werror`-флагам.
-
-- **P1-9. CODEOWNERS + Dependabot. ✅ СДЕЛАНО (SHA-пиннинг — опционально).** `.github/CODEOWNERS`
-  (owner на `*`, `/hooks/`, `/.github/`) и `.github/dependabot.yml` (github-actions, weekly) — в `main`
-  и **уже работают**: Dependabot сразу открыл PR на апдейт экшенов (checkout→v7, setup-node→v6).
-  `ci.yml` (добавлен пользователем, PR #6) сейчас на `@v4`-тегах. Строгий SHA-пиннинг опционален:
-  запинить на commit-SHA (checkout `9c091bb…`=v7.0.0, setup-node `48b55a…`=v6.4.0) и дать Dependabot
-  их поддерживать, либо просто мёржить его версионные PR. Пуш workflow — только из твоей сессии
-  (скоуп `workflow`). На Free+private review по CODEOWNERS — совещательны (см. P0-0).
-
-- **P1-10. Security-аудит конфигурации агента. ✅ СДЕЛАНО (advisory).** Идея из харнесса ECC
-  (AgentShield). В CI добавлен шаг `npx ecc-agentshield@1.4.0 scan --path .` — офлайн pattern-скан
-  конфигов агента (секреты, широкие tool/MCP-разрешения, инъекции в хуках, небезопасные паттерны
-  в CLAUDE.md/AGENTS.md), exit 2 на critical. Версия прибита (supply-chain, ср. P1-9); НЕ готовый
-  Action и НЕ `--opus` (тот требует `ANTHROPIC_API_KEY`). Пока `continue-on-error: true` —
-  **совещательный**, копим статистику ложных срабатываний. Дальше: снять `continue-on-error`
-  и добавить вторым required-check в ruleset (после публикации репо, P0-0).
-
-- **P1-11. Debug-аудит изменённых файлов. ✅ СДЕЛАНО.** `hooks/verify.js` сканирует ТОЛЬКО diff-файлы
-  на забытые отладочные строки: hard-маркеры (`debugger;`/`breakpoint()`/`pdb.set_trace()`/`dbg!()`/
-  `Debugger.Break()`) валят VERIFY, soft (`console.log`/`print`) — заметка (`debugAudit.soft`).
-  Маркеры привязаны к расширениям (защита от омонимов), self-FP исключён точным синтаксисом +
-  `debugAudit.exclude` (тут `hooks/**`). Заменяет ручной шаг «grep debug-строк» из git-diff
-  self-review. Покрыто self-test'ами (8 кейсов).
-
----
-
-## P2 — зрелость
-
-- **P2-10. loop-guard для не-Bash tool'ов. ✅ СДЕЛАНО.** Часть единого `hooks/agent/guard.js` — блок
-  дегенеративных серий не-Bash tool'ов: считает ТОЧНЫЕ повторы (tool+target) подряд, любой другой
-  target сбрасывает streak (нулевой FP на нормальном редактировании). Порог
-  `HARNESS_TOOLLOOP_THRESHOLD` (12). Тесты есть.
-- **P2-11. Release-автоматизация. ✅ МИГРИРОВАНО НА cocogitto.** Самописный `release.js` удалён.
-  `cog bump --auto` считает next SemVer из conventional-коммитов, ставит annotated-тег и генерит
-  CHANGELOG (`cog.toml`). `hooks/release-preflight.js` закрывает ручной gap перед push: clean worktree,
-  base от `origin/main`, local tag указывает на HEAD, remote tag ещё нет, project/package versions
-  совпадают с `vX.Y.Z`. Push — по-прежнему gated (R3). CI-публикация (SLSA/SBOM) — опциональный workflow.
-- **P2-12. `harness doctor`. ✅ СДЕЛАНО.** `hooks/doctor.js` — проверка окружения: node/git,
-  lefthook/gitleaks/cog в PATH + wiring в `.git/hooks`, LF + отсутствие NUL в конфигах, валидность
-  `harness.config.json`, git-identity. Ловит ровно те грабли, что мы поймали (CRLF, NUL). Тесты есть.
-- **P2-13. Quality-gate для AI-кода. ⏸️ Убран в lean-rewrite.** Отдельный `quality-gate.js` (маркеры
-  merge-конфликта, переросшие файлы, TODO) удалён как дублирующий VERIFY + git diff self-review из
-  loop-шага 4. При возврате — делать через тест-раннеры (реальное покрытие/сложность per-language),
-  а не самописным эвристическим гейтом.
-- **P2-14. Интерактивный commit-хелпер. ✅ МИГРИРОВАНО НА cocogitto.** Самописный `hooks/commit.js`
-  удалён — его заменяет `cog commit <type> <scope> <subject>` (идёт в комплекте cocogitto). Одной зависимостью меньше.
-
----
-
-## Практики, которые харнесс УЖЕ покрывает (для полноты)
-Conventional Commits (git-native `commit-msg`, не обходится через `-F`/editor), запрет
-со-авторства, защита main локально, защита от прямого push тегов-vs-веток, runaway-loop guard,
-portable-контракт под любой раннер, self-test suite. Это соответствует связке
-commitlint+husky, но без `node_modules` и не привязано к JS/Claude.
+Conventional Commits, co-author trailer rejection, local main protection,
+tag-vs-branch release discipline, runaway-loop guard, portable runner contract,
+self-test suite, debug audit, GUI design approval, release preflight, and
+server-side ruleset enforcement.

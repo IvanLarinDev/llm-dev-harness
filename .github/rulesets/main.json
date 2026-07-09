@@ -1,5 +1,5 @@
 {
-  "_comment": "Versioned GitHub branch ruleset — the REAL enforcement layer (server-side, cannot be skipped by `git ... --no-verify` or by editing local hooks). Apply with: node hooks/apply-ruleset.js. NOTE: private repos need GitHub Pro/Team/Enterprise for rulesets; on Free make the repo public or upgrade (BACKLOG P0-0). Code-owner review is required so PRs that edit the self-verifying harness cannot approve themselves silently. integration_id 15368 pins the required check to GitHub Actions: without it ANYONE with write access can satisfy the check by posting a fake commit status named 'verify' via the API.",
+  "_comment": "Versioned GitHub branch ruleset - the REAL enforcement layer (server-side, cannot be skipped by `git ... --no-verify` or by editing local hooks). Apply with: node hooks/apply-ruleset.js. NOTE: private repos need GitHub Pro/Team/Enterprise for rulesets; on Free make the repo public or upgrade (BACKLOG P0-0). Code-owner review is required so PRs that edit the self-verifying harness cannot approve themselves silently. integration_id 15368 pins the required check to GitHub Actions: without it ANYONE with write access can satisfy the check by posting a fake commit status named 'verify' via the API.",
   "name": "protect-main",
   "target": "branch",
   "enforcement": "active",

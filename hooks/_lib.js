@@ -1,5 +1,5 @@
-// _lib.js — shared helpers for the harness hooks (guard.js, design-gate.js).
-// Single source of truth for: glob→regex, harness.config.json loading, path
+// _lib.js - shared helpers for the harness hooks (guard.js, design-gate.js).
+// Single source of truth for: glob-to-regex, harness.config.json loading, path
 // normalization. No CLI, no side effects.
 
 const fs = require("fs");
@@ -37,7 +37,7 @@ const DEFAULT_LINT_CONFIGS = [
   ".markdownlint.json", ".markdownlint.yaml", ".markdownlintrc", ".shellcheckrc",
 ];
 
-// glob → RegExp (supports **, *, literal)
+// glob to RegExp (supports **, *, literal)
 function globToRe(g) {
   const re = g.replace(/[.+^${}()|[\]\\]/g, "\\$&")
     .replace(/\*\*\//g, "@@DS@@").replace(/\*\*/g, "@@SS@@").replace(/\*/g, "[^/]*")
@@ -45,7 +45,7 @@ function globToRe(g) {
   return new RegExp("^" + re + "$", "i");
 }
 
-// harness.config.json (missing/broken file → defaults; hooks stay fail-open)
+// harness.config.json (missing/broken file -> defaults; hooks stay fail-open)
 function loadConfig(root) {
   let c = {};
   try { c = JSON.parse(fs.readFileSync(path.join(root, "harness.config.json"), "utf8")); } catch {}
@@ -58,8 +58,8 @@ function loadConfig(root) {
   };
 }
 
-// Absolute/relative path → normalized repo-relative posix path.
-// Collapses ./ and ..; strips the project prefix case-insensitively — WITHOUT
+// Absolute/relative path -> normalized repo-relative posix path.
+// Collapses ./ and ..; strips the project prefix case-insensitively - WITHOUT
 // normalization "./lefthook.yml" or "design/../hooks/x" would dodge prefix checks.
 function normRel(fp, projectDir) {
   let f = String(fp).replace(/\\/g, "/");
@@ -182,7 +182,7 @@ function changedFiles(base, root, explicitFiles, opts = {}) {
       } catch {}
     }
   }
-  return { error: `git diff не удался ни для одной базы (${bases.join(", ")})` };
+  return { error: `git diff failed for every base (${bases.join(", ")})` };
 }
 
 function workingTreeChangedFiles(base, root, explicitFiles) {
