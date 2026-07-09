@@ -104,12 +104,20 @@ function shellWriteHit(scrubbed, alt, lb, dirPrefixInRedirect) {
   return res.some((re) => re.test(scrubbed));
 }
 
+function normalizePathFragments(text) {
+  return String(text || "").replace(
+    /[A-Za-z0-9_.-]+(?:[\/\\]+[A-Za-z0-9_.-]+)+/g,
+    (frag) => path.posix.normalize(frag.replace(/\\/g, "/"))
+  );
+}
+
 // SEP is a path separator: `/` or `\`. PowerShell/cmd often use backslashes, so
 // `del hooks\agent\guard.js` must match the same way as `rm hooks/...`.
 const SEP = "[\\/\\\\]";
 
 // Writes to protected harness paths, expressed as repo-root prefixes.
 function isProtectedShellWrite(scrubbed, protectedList) {
+  const scanned = normalizePathFragments(scrubbed);
   // Order matters: replace slashes with SEP before escaping dots. Otherwise dot
   // escaping inserts backslashes that the slash replacement would later corrupt.
   const esc = (str) => str.replace(/[\/\\]/g, SEP).replace(/\./g, "\\.");
@@ -118,14 +126,15 @@ function isProtectedShellWrite(scrubbed, protectedList) {
     p.endsWith("/") ? esc(p.slice(0, -1)) + "(?:" + SEP + "|[\\s;&|]|$)" : esc(p) + "\\b"
   ).join("|") + ")";
   // Lookbehind without a path separator keeps src/hooks/useAuth.ts from matching.
-  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(])", false);
+  return shellWriteHit(scanned, alt, "(?<=^|[\\s=:'\"(])", false);
 }
 
 // Writes to lint/format config files by basename, in any directory, with / or \.
 function isLintConfigShellWrite(scrubbed, lintConfigs) {
+  const scanned = normalizePathFragments(scrubbed);
   const names = lintConfigs.map((n) => n.replace(/\./g, "\\.")).join("|");
   const alt = `(?:[^\\s;|&<>]*${SEP})?(?:${names})\\b`;
-  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(/\\\\])", true);
+  return shellWriteHit(scanned, alt, "(?<=^|[\\s=:'\"(/\\\\])", true);
 }
 
 // rel is normalized; compare by basename, case-insensitively.
@@ -144,16 +153,16 @@ function isLintConfigPath(rel, lintConfigs) {
 // cannot be inspected before execution.
 const INTERP_EVAL_RE = /\b(?:node|nodejs|deno|bun|python|python3|py|perl|ruby|php|pwsh|powershell|bash|sh|zsh)\b[^\n]*?(?:\s-e\b|\s--eval\b|\s-c\b|\seval\b|\s-Command\b|\s-EncodedCommand\b)/i;
 const INTERP_ENCODED_RE = /\b(?:pwsh|powershell)\b[^\n]*\s-EncodedCommand\b/i;
-const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|write_text|write_bytes|unlink\s*\(|rmtree\s*\(|remove\s*\(|replace\s*\(|rename\s*\(|shutil\.(?:rmtree|move)|os\.(?:remove|unlink|replace|rename)|path\([^)]*\)\.(?:write_text|write_bytes|unlink)|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
+const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|write_text|write_bytes|unlink\s*\(|rmtree\s*\(|\brm(?:sync)?\s*\(|remove\s*\(|replace\s*\(|rename\s*\(|shutil\.(?:rmtree|move)|os\.(?:remove|unlink|replace|rename)|path\([^)]*\)\.(?:write_text|write_bytes|unlink)|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
 function interpreterProtectedHint(rawCmd, protectedList) {
   const s = String(rawCmd);
   if (!INTERP_EVAL_RE.test(s)) return null;
   if (INTERP_ENCODED_RE.test(s)) return "encoded-command";
   if (!INTERP_WRITE_RE.test(s)) return null;
-  const low = s.replace(/\\/g, "/").toLowerCase();
+  const low = normalizePathFragments(s.replace(/\\/g, "/").toLowerCase());
   for (const p of protectedList) {
     const pref = p.toLowerCase().replace(/\/$/, "").replace(/[.]/g, "\\.");
-    if (new RegExp("(?:^|[\\s'\"(/=:])" + pref + "(?:/|\\b)").test(low)) return p;
+    if (new RegExp("(?:^|[\\s'\"(=:,])(?:\\.\\/)?" + pref + "(?:/|\\b)").test(low)) return p;
   }
   return null;
 }

@@ -69,6 +69,7 @@ are local but untracked, a clean worktree from `origin/main` cannot run
 
 ```bash
 node hooks/test.js
+node hooks/test.js --repeat 3
 node hooks/verify.js [--list]
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
