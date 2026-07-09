@@ -464,6 +464,12 @@ function gateResult(root, files) {
     return JSON.parse(execFileSync("node", [DESIGN_GATE, "--root", root, "--files", files.join(","), "--json"], { encoding: "utf8", stdio: "pipe" }));
   } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
 }
+function mockupExit(root, args) {
+  try {
+    execFileSync("node", [NEW_MOCKUPS, ...args], { env: { ...process.env, HARNESS_ROOT: root }, encoding: "utf8", stdio: "pipe" });
+    return 0;
+  } catch (e) { return e.status || 1; }
+}
 const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-"));
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "design gate assertion 1");
 ok((gateResult(dtmp, ["src/Dropwheel/UI/Foo.xaml"]).uiChanged || []).includes("src/Dropwheel/UI/Foo.xaml"),
@@ -514,17 +520,99 @@ try {
 ok(Array.isArray(staleGate.uiChanged) && staleGate.uiChanged.length === 0,
   "design-gate ignores untracked local UI files; it gates branch diff, not dirty workspace noise");
 try { fs.rmSync(staleMain, { recursive: true, force: true }); } catch {}
-execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
+ok(mockupExit(dtmp, ["missing-kind"]) === 1,
+  "new-mockups requires an explicit change kind");
+ok(mockupExit(dtmp, ["motion-missing-example", "--kind", "animation", "--fidelity", "text"]) === 1,
+  "animation evidence requires a concrete example");
+execFileSync("node", [NEW_MOCKUPS, "login", "--kind", "new-ui"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
 const fdir = path.join(dtmp, "design", "mockups", "login");
 ok(fs.readdirSync(fdir).filter((f) => f.endsWith(".html")).length === 4, "design gate assertion 4");
+let loginManifest = {};
+try { loginManifest = JSON.parse(fs.readFileSync(path.join(fdir, "DESIGN.json"), "utf8")); } catch {}
+const newUiRoots = new Set(loginManifest.variants.map((variant) => {
+  const source = fs.readFileSync(path.join(fdir, variant.file), "utf8");
+  return (source.match(/:root \{[^}]+/) || [""])[0];
+}));
+ok(loginManifest.kind === "new-ui" && loginManifest.variants.length === 4 && newUiRoots.size === 4,
+  "new-ui scaffold declares four stylistic variants");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/01-minimal-light.html"]) === 1,
   "design gate assertion 5");
 fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]) === 0,
   "design gate assertion 6");
+ok(gateResult(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]).mockups.kind === "new-ui",
+  "design gate reports the approved evidence kind");
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
   "design gate assertion 7");
 ok(gate(dtmp, ["design/mockups/login/02-dark-pro.html"]) === 0, "design gate assertion 8");
+
+const baselinePath = path.join(dtmp, "src", "ui", "current-panel.ui");
+fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
+fs.writeFileSync(baselinePath, "<ui/>\n");
+ok(mockupExit(dtmp, ["existing-no-baseline", "--kind", "existing-ui"]) === 1,
+  "existing-ui scaffold requires a baseline path");
+ok(mockupExit(dtmp, ["existing-panel", "--kind", "existing-ui", "--baseline", "src/ui/current-panel.ui"]) === 0,
+  "existing-ui scaffold accepts a current UI baseline");
+const existingDir = path.join(dtmp, "design", "mockups", "existing-panel");
+const existingManifest = JSON.parse(fs.readFileSync(path.join(existingDir, "DESIGN.json"), "utf8"));
+const existingRoots = new Set(existingManifest.variants.map((variant) => {
+  const source = fs.readFileSync(path.join(existingDir, variant.file), "utf8");
+  return (source.match(/:root \{[^}]+/) || [""])[0];
+}));
+ok(existingManifest.kind === "existing-ui" && existingManifest.baselineReferences[0] === "src/ui/current-panel.ui" &&
+   existingManifest.variants.every((variant) => /(?:inline|toolbar|side-panel|contextual)/.test(variant.file)) && existingRoots.size === 1,
+"existing-ui scaffold keeps one baseline and compares layouts");
+fs.writeFileSync(path.join(existingDir, "APPROVED"), "approved: test\n");
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 0,
+  "design gate accepts approved existing-ui layout evidence");
+fs.rmSync(baselinePath);
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 1,
+  "design gate rejects existing-ui evidence with a missing baseline");
+fs.writeFileSync(baselinePath, "<ui/>\n");
+
+ok(mockupExit(dtmp, ["reorder-motion-text", "--kind", "animation", "--fidelity", "text", "--example", "Tile A moves before Tile B"]) === 0,
+  "animation/text scaffold is generated for a concrete example");
+const motionTextDir = path.join(dtmp, "design", "mockups", "reorder-motion-text");
+const motionTextManifest = JSON.parse(fs.readFileSync(path.join(motionTextDir, "DESIGN.json"), "utf8"));
+ok(motionTextManifest.kind === "animation" && motionTextManifest.fidelity === "text" &&
+   motionTextManifest.example === "Tile A moves before Tile B" && motionTextManifest.variants.every((variant) =>
+     variant.file.endsWith(".md") && fs.readFileSync(path.join(motionTextDir, variant.file), "utf8").includes("Concrete example: Tile A moves before Tile B")),
+"animation/text uses four written variants instead of visual themes");
+fs.writeFileSync(path.join(motionTextDir, "APPROVED"), "approved: test\n");
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-text/APPROVED"]) === 0,
+  "design gate accepts approved written motion evidence");
+
+ok(mockupExit(dtmp, ["reorder-motion-js", "--kind", "animation", "--fidelity", "js", "--example", "Tile A moves before Tile B"]) === 0,
+  "animation/js scaffold is generated for a concrete example");
+const motionJsDir = path.join(dtmp, "design", "mockups", "reorder-motion-js");
+const motionJsManifest = JSON.parse(fs.readFileSync(path.join(motionJsDir, "DESIGN.json"), "utf8"));
+ok(motionJsManifest.variants.every((variant) => {
+  const source = fs.readFileSync(path.join(motionJsDir, variant.file), "utf8");
+  return /<script/.test(source) && /\.animate\s*\(/.test(source);
+}), "animation/js creates executable JavaScript motion variants");
+fs.writeFileSync(path.join(motionJsDir, "APPROVED"), "approved: test\n");
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-js/APPROVED"]) === 0,
+  "design gate accepts approved JavaScript motion evidence");
+fs.writeFileSync(path.join(motionJsDir, motionJsManifest.variants[0].file), "<!doctype html>\n");
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-js/APPROVED"]) === 1,
+  "design gate rejects a claimed JavaScript variant without executable motion");
+
+let backendOutput = "";
+try {
+  backendOutput = execFileSync("node", [NEW_MOCKUPS, "server-cache", "--kind", "backend"],
+    { env: { ...process.env, HARNESS_ROOT: dtmp }, encoding: "utf8", stdio: "pipe" });
+} catch {}
+ok(/SKIP mockups/.test(backendOutput) && !fs.existsSync(path.join(dtmp, "design", "mockups", "server-cache")),
+  "backend-only classification creates no mockup artifacts");
+ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
+  "backend classification cannot bypass a changed UI path");
+
+const legacyDir = path.join(dtmp, "design", "mockups", "legacy-set");
+fs.mkdirSync(legacyDir, { recursive: true });
+for (let i = 1; i <= 4; i++) fs.writeFileSync(path.join(legacyDir, `${i}.html`), "<!doctype html>\n");
+fs.writeFileSync(path.join(legacyDir, "APPROVED"), "approved: legacy\n");
+ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/legacy-set/APPROVED"]) === 0,
+  "design gate preserves compatibility with approved legacy sets without DESIGN.json");
 // Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};

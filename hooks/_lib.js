@@ -11,6 +11,7 @@ const DEFAULT_MOCKUPS = {
   dir: "design/mockups",
   min: 4,
   mockupExtensions: [".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".pdf"],
+  manifestFile: "DESIGN.json",
   approvalFile: "APPROVED",
 };
 const DEFAULT_PROTECTED = [
