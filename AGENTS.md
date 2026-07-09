@@ -71,10 +71,14 @@ node hooks/new-mockups.js <feature> --kind backend
 ```
 
 The generator writes `DESIGN.json`, mode-appropriate variants, and `NOTES.md`.
-After user selection, create `design/mockups/<feature>/APPROVED`. The gate checks
-the manifest and passes UI changes only when that approved set is touched in the
-same branch diff. Legacy sets without `DESIGN.json` remain valid. To reuse an old
-set, append a date/branch line to its `APPROVED` file.
+After user selection, create `design/mockups/<feature>/APPROVED` with a
+`ui: <changed-ui-path-or-glob>` line. The gate checks the manifest and passes UI
+changes only when that approved set is both touched and scoped to the changed UI
+paths in the same branch diff. Legacy sets without `DESIGN.json` remain valid
+only when `APPROVED` carries the same `ui:` scope. If the user explicitly waives
+new mockups for a UI-path change, create `design/mockups/<feature>/WAIVER.json`
+with `schemaVersion`, `feature`, `uiPaths`, `reason`, `date`, and
+`approvedBy` or `approvalSource`.
 
 **3. IMPLEMENT+TEST.** Code and tests move together. If a target project has no
 test runner, report that and propose a minimal one.
@@ -110,7 +114,7 @@ Run this only on explicit request and after merge to `main`.
 | Step | Action | Gate |
 |---|---|---|
 | R1 | Start from a clean worktree at `origin/main`; `node hooks/doctor.js` is green; read current version with `git describe --tags --abbrev=0`. | |
-| R2 | Derive SemVer from Conventional Commits: first `cog bump --auto --dry-run`, then `cog bump --auto --annotated "vX.Y.Z"` to create an annotated tag and changelog. | Show tag, diff, and notes; wait for approval. |
+| R2 | Derive SemVer from Conventional Commits with `cog bump --auto --dry-run`; run `node hooks/release-manifest-bump.js --tag vX.Y.Z`; commit that manifest bump as `chore(release): prepare vX.Y.Z`; then run `cog bump --auto --annotated "vX.Y.Z"` to create the changelog commit and annotated tag. | Show the computed tag, manifest diff, and notes; wait for approval before the commit/tag steps. |
 | R2.5 | `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`: clean tree, tag points to HEAD, remote tag absent, project/package versions match the tag. | |
 | R3 | `git push origin <branch> && git push origin vX.Y.Z`. | Only after an explicit yes. |
 | R4 | If release workflow exists: `gh run watch`; release workflow is green and has no skipped steps. | |
@@ -121,9 +125,10 @@ Run this only on explicit request and after merge to `main`.
 Hotfix: branch from the previous tag, fix, PR to `main`, then tag through R2-R6.
 A legitimate release commit on `main` can use `HARNESS_ALLOW_MAIN=1 git commit ...`.
 
-`release-preflight.js` intentionally fails if the tag/changelog are ready but a
-project manifest still reports an old version. If no version manifest exists, it
-warns; R6 still verifies the binary version.
+`release-manifest-bump.js` synchronizes known project manifests before the tag is
+created. `release-preflight.js` intentionally fails if the tag/changelog are
+ready but a project manifest still reports an old version. If no version
+manifest exists, it warns; R6 still verifies the binary version.
 
 After `gh pr merge --delete-branch`, GitHub can merge the PR server-side even if
 the local post-merge pull/rebase fails because of a dirty worktree. Verify with

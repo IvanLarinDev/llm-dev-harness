@@ -63,6 +63,7 @@ const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
+const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
@@ -537,7 +538,7 @@ ok(loginManifest.kind === "new-ui" && loginManifest.variants.length === 4 && new
   "new-ui scaffold declares four stylistic variants");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/01-minimal-light.html"]) === 1,
   "design gate assertion 5");
-fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]) === 0,
   "design gate assertion 6");
 ok(gateResult(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]).mockups.kind === "new-ui",
@@ -563,10 +564,10 @@ ok(existingManifest.kind === "existing-ui" && existingManifest.baselineReference
    existingManifest.variants.every((variant) => /(?:inline|toolbar|side-panel|contextual)/.test(variant.file)) && existingRoots.size === 1,
 "existing-ui scaffold keeps one baseline and compares layouts");
 fs.writeFileSync(path.join(existingDir, "APPROVED"), "approved: test\n");
-ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 0,
+ok(gate(dtmp, ["src/ui/current-panel.ui", "design/mockups/existing-panel/APPROVED"]) === 0,
   "design gate accepts approved existing-ui layout evidence");
 fs.rmSync(baselinePath);
-ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 1,
+ok(gate(dtmp, ["src/ui/current-panel.ui", "design/mockups/existing-panel/APPROVED"]) === 1,
   "design gate rejects existing-ui evidence with a missing baseline");
 fs.writeFileSync(baselinePath, "<ui/>\n");
 
@@ -578,7 +579,7 @@ ok(motionTextManifest.kind === "animation" && motionTextManifest.fidelity === "t
    motionTextManifest.example === "Tile A moves before Tile B" && motionTextManifest.variants.every((variant) =>
      variant.file.endsWith(".md") && fs.readFileSync(path.join(motionTextDir, variant.file), "utf8").includes("Concrete example: Tile A moves before Tile B")),
 "animation/text uses four written variants instead of visual themes");
-fs.writeFileSync(path.join(motionTextDir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(motionTextDir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-text/APPROVED"]) === 0,
   "design gate accepts approved written motion evidence");
 
@@ -590,7 +591,7 @@ ok(motionJsManifest.variants.every((variant) => {
   const source = fs.readFileSync(path.join(motionJsDir, variant.file), "utf8");
   return /<script/.test(source) && /\.animate\s*\(/.test(source);
 }), "animation/js creates executable JavaScript motion variants");
-fs.writeFileSync(path.join(motionJsDir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(motionJsDir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-js/APPROVED"]) === 0,
   "design gate accepts approved JavaScript motion evidence");
 fs.writeFileSync(path.join(motionJsDir, motionJsManifest.variants[0].file), "<!doctype html>\n");
@@ -610,9 +611,26 @@ ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
 const legacyDir = path.join(dtmp, "design", "mockups", "legacy-set");
 fs.mkdirSync(legacyDir, { recursive: true });
 for (let i = 1; i <= 4; i++) fs.writeFileSync(path.join(legacyDir, `${i}.html`), "<!doctype html>\n");
-fs.writeFileSync(path.join(legacyDir, "APPROVED"), "approved: legacy\n");
+fs.writeFileSync(path.join(legacyDir, "APPROVED"), "approved: legacy\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/legacy-set/APPROVED"]) === 0,
-  "design gate preserves compatibility with approved legacy sets without DESIGN.json");
+  "design gate preserves compatibility with scoped approved legacy sets without DESIGN.json");
+ok(gate(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/legacy-set/APPROVED"]) === 1,
+  "design gate rejects a touched approval scoped to an unrelated UI path");
+
+const waiverDir = path.join(dtmp, "design", "mockups", "tile-reorder");
+fs.mkdirSync(waiverDir, { recursive: true });
+fs.writeFileSync(path.join(waiverDir, "WAIVER.json"), JSON.stringify({
+  schemaVersion: 1,
+  feature: "tile-reorder",
+  uiPaths: ["src/ui/tile-reorder.ui"],
+  reason: "User approved skipping new mockups for a non-restyling interaction change.",
+  date: "2026-07-09",
+  approvedBy: "user",
+}, null, 2) + "\n");
+ok(gateResult(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/tile-reorder/WAIVER.json"]).mockups.kind === "waiver",
+  "design gate accepts a scoped explicit waiver for a UI-path change");
+ok(gate(dtmp, ["src/ui/other.ui", "design/mockups/tile-reorder/WAIVER.json"]) === 1,
+  "design gate rejects a waiver scoped to an unrelated UI path");
 // Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};
@@ -823,6 +841,25 @@ dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
   "doctor assertion 1");
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
+
+const linkedRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-linked-main-"));
+const linkedWorktree = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-linked-wt-"));
+fs.rmSync(linkedWorktree, { recursive: true, force: true });
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: linkedRepo });
+execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: linkedRepo });
+execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: linkedRepo });
+fs.writeFileSync(path.join(linkedRepo, "README.md"), "base\n");
+execFileSync("git", ["add", "."], { cwd: linkedRepo });
+execFileSync("git", ["commit", "-q", "-m", "chore: base"], { cwd: linkedRepo });
+for (const h of ["pre-commit", "commit-msg", "pre-push"])
+  fs.writeFileSync(path.join(linkedRepo, ".git", "hooks", h), "# lefthook\n");
+execFileSync("git", ["worktree", "add", "-q", "-b", "feature/linked", linkedWorktree], { cwd: linkedRepo });
+dres = doctor(linkedWorktree);
+ok((dres.results || []).some((r) => /lefthook wired into \.git\/hooks/.test(r.msg) && r.level === "PASS"),
+  "doctor: linked worktree absolute hooks path -> PASS");
+try { execFileSync("git", ["worktree", "remove", "--force", linkedWorktree], { cwd: linkedRepo, stdio: "ignore" }); } catch {}
+try { fs.rmSync(linkedRepo, { recursive: true, force: true }); fs.rmSync(linkedWorktree, { recursive: true, force: true }); } catch {}
+
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/IvanLarinDev/llm-dev-harness.git"], { cwd: bootRepo });
@@ -933,6 +970,15 @@ function releaseJson(root, tag, extra = []) {
     try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [] }; }
   }
 }
+function releaseBumpJson(root, tag, extra = []) {
+  try {
+    const s = execFileSync("node", [RELEASE_MANIFEST_BUMP, "--root", root, "--tag", tag, "--json", ...extra],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(s);
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [], manifests: [] }; }
+  }
+}
 function writeReleaseProject(root, version) {
   fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "App", "App.csproj"), `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>\n`);
@@ -956,11 +1002,30 @@ function releaseRepo(version, tag = "v0.10.1") {
   relGit(work, ["tag", "-a", tag, "-m", tag]);
   return { origin, work };
 }
+
 let relCase = releaseRepo("0.10.1");
 let rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
   "release-preflight: clean release with csproj version matching tag -> PASS");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.2", "v0.10.2");
+let rbump = releaseBumpJson(relCase.work, "v0.11.0");
+let releaseCsproj = fs.readFileSync(path.join(relCase.work, "src", "App", "App.csproj"), "utf8");
+ok(rbump.ok === true && rbump.manifests.some((m) => m.rel === "src/App/App.csproj" && m.from === "0.10.2" && m.to === "0.11.0" && m.changed) &&
+   /<Version>0\.11\.0<\/Version>/.test(releaseCsproj),
+  "release-manifest-bump: updates a stale C# project version before tagging");
+relGit(relCase.work, ["add", "src/App/App.csproj"]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(release): prepare v0.11.0"]);
+fs.writeFileSync(path.join(relCase.work, "CHANGELOG.md"), "# Changelog\n\n## v0.11.0\n\n- release\n");
+relGit(relCase.work, ["add", "CHANGELOG.md"]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(release): v0.11.0"]);
+relGit(relCase.work, ["tag", "-a", "v0.11.0", "-m", "v0.11.0"]);
+rpre = releaseJson(relCase.work, "v0.11.0");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release flow fixture: manifest bump plus changelog tag passes preflight");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
 relCase = releaseRepo("0.10.0");
 rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /project version\(s\) do not match/.test(r.msg) && r.mismatches && /App\.csproj/.test(JSON.stringify(r.mismatches))),
@@ -1059,7 +1124,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");

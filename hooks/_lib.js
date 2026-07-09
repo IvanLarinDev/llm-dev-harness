@@ -13,6 +13,7 @@ const DEFAULT_MOCKUPS = {
   mockupExtensions: [".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".pdf"],
   manifestFile: "DESIGN.json",
   approvalFile: "APPROVED",
+  waiverFile: "WAIVER.json",
 };
 const DEFAULT_PROTECTED = [
   "hooks/", "lefthook.yml", "harness.config.json", ".gitleaks.toml", "cog.toml",
