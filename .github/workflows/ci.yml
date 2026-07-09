@@ -53,7 +53,7 @@ jobs:
           GITLEAKS_VERSION: "v8.24.3"
           GITLEAKS_CONFIG: ".gitleaks.toml"
         run: |
-          go install github.com/gitleaks/gitleaks/v8@$GITLEAKS_VERSION
+          go install github.com/zricethezav/gitleaks/v8@$GITLEAKS_VERSION
           gitleaks detect --source . --config "$GITLEAKS_CONFIG" --redact --no-banner
 
       # Conventional Commits across the PR's commits - cocogitto (`cog check`).

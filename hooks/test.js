@@ -122,7 +122,7 @@ ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &
    /uses:\s*actions\/setup-go@[0-9a-f]{40}\s*# actions\/setup-go@v\d/.test(ci) &&
    /uses:\s*cocogitto\/cocogitto-action@[0-9a-f]{40}\s*# cocogitto\/cocogitto-action@v\d/.test(ci),
   "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
-ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/gitleaks\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
+ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/zricethezav\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
   "CI: gitleaks installs through Go on the Windows runner");
 ok(/AGENTSHIELD_INTEGRITY:\s*"sha512-/.test(ci) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*"true"/.test(ci),
   "CI: AgentShield npm package has integrity pin and install scripts disabled");
