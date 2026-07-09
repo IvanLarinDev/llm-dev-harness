@@ -1,6 +1,16 @@
 # Changelog
 
 - - -
+## [v0.2.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/5463aa53ccdf6ca19669a5594c18d26cc4b4d64d..v0.2.0) - 2026-07-09
+#### Features
+- (**design**) route mockups by UI change type - ([5463aa5](https://github.com/IvanLarinDev/llm-dev-harness/commit/5463aa53ccdf6ca19669a5594c18d26cc4b4d64d)) - agidevway
+#### Documentation
+- (**readme**) explain contextual design evidence - ([1e21ca4](https://github.com/IvanLarinDev/llm-dev-harness/commit/1e21ca45692a302c15d0b02444e0a1402c0c3166)) - agidevway
+#### Miscellaneous Chores
+- (**release**) reconcile v0.1.0 history - ([813a1aa](https://github.com/IvanLarinDev/llm-dev-harness/commit/813a1aad4b58e8a2125fd933e19633e5532f6614)) - agidevway
+
+- - -
+
 ## [v0.1.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/a56cf9ff501c4eb403b190cb24fb2ae2b2170bce..v0.1.0) - 2026-07-09
 #### Features
 - (**agent**) bypass-guard — block agent hook-skips (#1) - ([eda73ed](https://github.com/IvanLarinDev/llm-dev-harness/commit/eda73ed2fcf275ea5f5388548de963431a6c8dad)) - Ivan Larin
