@@ -332,9 +332,9 @@ if (fs.existsSync(cogPath)) {
   changelog
     ? ok("CHANGELOG.md: present")
     : fail("CHANGELOG.md is required for cog bump changelog generation");
-  /^---\s*$/m.test(changelog)
-    ? ok("CHANGELOG.md: contains Cocogitto separator ---")
-    : fail("CHANGELOG.md must contain Cocogitto separator line ---");
+  /^- - -\s*$/m.test(changelog)
+    ? ok("CHANGELOG.md: contains Cocogitto separator - - -")
+    : fail("CHANGELOG.md must contain Cocogitto separator line - - -");
 }
 
 const workflowPath = ".github/workflows/ci.yml";

@@ -118,7 +118,7 @@ ok(/template\s*=\s*"remote"/.test(cog) && /owner\s*=\s*"[^"]+"/.test(cog) && /re
   "cog.toml release-safe: remote changelog template has owner/repository");
 ok(/owner\s*=\s*"IvanLarinDev"/.test(cog) && /repository\s*=\s*"llm-dev-harness"/.test(cog),
   "cog.toml release-safe: remote changelog metadata matches source repository");
-ok(/^---\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
+ok(/^- - -\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
 const gl = readRepo(".gitleaks.toml");
 ok(/useDefault\s*=\s*true/.test(gl), "configs lefthook gitleaks cocogitto ruleset ci assertion 5");
 let ruleset = {};
@@ -811,7 +811,7 @@ ok((dres.results || []).some((r) => /branch_whitelist.*release\/\*\*/.test(r.msg
    (dres.results || []).some((r) => /CHANGELOG\.md is required/.test(r.msg) && r.level === "FAIL"),
   "doctor: release-blocking cog.toml/CHANGELOG gaps -> FAIL");
 fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml"));
-fs.writeFileSync(path.join(bootRepo, "CHANGELOG.md"), "# Changelog\n\n---\n");
+fs.writeFileSync(path.join(bootRepo, "CHANGELOG.md"), "# Changelog\n\n- - -\n");
 fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml").replace(/repository\s*=\s*"[^"]+"/, 'repository = "wrong-repo"'));
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /changelog\.repository must match origin repository/.test(r.msg) && /llm-dev-harness/.test(r.msg) && r.level === "FAIL"),
