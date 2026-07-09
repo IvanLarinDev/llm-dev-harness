@@ -104,12 +104,20 @@ function shellWriteHit(scrubbed, alt, lb, dirPrefixInRedirect) {
   return res.some((re) => re.test(scrubbed));
 }
 
+function normalizePathFragments(text) {
+  return String(text || "").replace(
+    /[A-Za-z0-9_.-]+(?:[\/\\]+[A-Za-z0-9_.-]+)+/g,
+    (frag) => path.posix.normalize(frag.replace(/\\/g, "/"))
+  );
+}
+
 // SEP is a path separator: `/` or `\`. PowerShell/cmd often use backslashes, so
 // `del hooks\agent\guard.js` must match the same way as `rm hooks/...`.
 const SEP = "[\\/\\\\]";
 
 // Writes to protected harness paths, expressed as repo-root prefixes.
 function isProtectedShellWrite(scrubbed, protectedList) {
+  const scanned = normalizePathFragments(scrubbed);
   // Order matters: replace slashes with SEP before escaping dots. Otherwise dot
   // escaping inserts backslashes that the slash replacement would later corrupt.
   const esc = (str) => str.replace(/[\/\\]/g, SEP).replace(/\./g, "\\.");
@@ -118,14 +126,15 @@ function isProtectedShellWrite(scrubbed, protectedList) {
     p.endsWith("/") ? esc(p.slice(0, -1)) + "(?:" + SEP + "|[\\s;&|]|$)" : esc(p) + "\\b"
   ).join("|") + ")";
   // Lookbehind without a path separator keeps src/hooks/useAuth.ts from matching.
-  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(])", false);
+  return shellWriteHit(scanned, alt, "(?<=^|[\\s=:'\"(])", false);
 }
 
 // Writes to lint/format config files by basename, in any directory, with / or \.
 function isLintConfigShellWrite(scrubbed, lintConfigs) {
+  const scanned = normalizePathFragments(scrubbed);
   const names = lintConfigs.map((n) => n.replace(/\./g, "\\.")).join("|");
   const alt = `(?:[^\\s;|&<>]*${SEP})?(?:${names})\\b`;
-  return shellWriteHit(scrubbed, alt, "(?<=^|[\\s=:'\"(/\\\\])", true);
+  return shellWriteHit(scanned, alt, "(?<=^|[\\s=:'\"(/\\\\])", true);
 }
 
 // rel is normalized; compare by basename, case-insensitively.
@@ -144,16 +153,16 @@ function isLintConfigPath(rel, lintConfigs) {
 // cannot be inspected before execution.
 const INTERP_EVAL_RE = /\b(?:node|nodejs|deno|bun|python|python3|py|perl|ruby|php|pwsh|powershell|bash|sh|zsh)\b[^\n]*?(?:\s-e\b|\s--eval\b|\s-c\b|\seval\b|\s-Command\b|\s-EncodedCommand\b)/i;
 const INTERP_ENCODED_RE = /\b(?:pwsh|powershell)\b[^\n]*\s-EncodedCommand\b/i;
-const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|write_text|write_bytes|unlink\s*\(|rmtree\s*\(|remove\s*\(|replace\s*\(|rename\s*\(|shutil\.(?:rmtree|move)|os\.(?:remove|unlink|replace|rename)|path\([^)]*\)\.(?:write_text|write_bytes|unlink)|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
+const INTERP_WRITE_RE = /writefile|writefilesync|appendfile|createwritestream|write_text|write_bytes|unlink\s*\(|rmtree\s*\(|\brm(?:sync)?\s*\(|remove\s*\(|replace\s*\(|rename\s*\(|shutil\.(?:rmtree|move)|os\.(?:remove|unlink|replace|rename)|path\([^)]*\)\.(?:write_text|write_bytes|unlink)|fs\.write|\.write\s*\(|\[\s*['"]write|['"]write['"]\s*\+|\+\s*['"]filesync['"]|open\s*\([^)]*['"][aw]|set-content|add-content|out-file|>{1,2}|\b(?:rm|del|erase|move|mv|remove-item|ren|rename)\b/i;
 function interpreterProtectedHint(rawCmd, protectedList) {
   const s = String(rawCmd);
   if (!INTERP_EVAL_RE.test(s)) return null;
   if (INTERP_ENCODED_RE.test(s)) return "encoded-command";
   if (!INTERP_WRITE_RE.test(s)) return null;
-  const low = s.replace(/\\/g, "/").toLowerCase();
+  const low = normalizePathFragments(s.replace(/\\/g, "/").toLowerCase());
   for (const p of protectedList) {
     const pref = p.toLowerCase().replace(/\/$/, "").replace(/[.]/g, "\\.");
-    if (new RegExp("(?:^|[\\s'\"(/=:])" + pref + "(?:/|\\b)").test(low)) return p;
+    if (new RegExp("(?:^|[\\s'\"(=:,])(?:\\.\\/)?" + pref + "(?:/|\\b)").test(low)) return p;
   }
   return null;
 }
@@ -163,11 +172,14 @@ function interpreterProtectedHint(rawCmd, protectedList) {
 // succeeds, even if the diff is empty, or {error} when no base can be used. Those
 // outcomes are intentionally distinct: empty diff means "no changes", while error
 // means "could not check". Silent fail-open would make gates ineffective in repos
-// without the expected base. explicitFiles is returned as-is for tests/CI, without git.
+// without the expected base. explicitFiles is normalized and returned without git.
 // By default this is a branch-only contract for CI/design-gate; local verify can
 // explicitly include dirty/staged/untracked files via includeDirty.
 function changedFiles(base, root, explicitFiles, opts = {}) {
-  if (explicitFiles) return { files: explicitFiles };
+  if (explicitFiles) {
+    const files = normalizeChangedFiles(root, explicitFiles);
+    return { files, explicit: true, branchFiles: files, dirtyFiles: [], includeDirty: false };
+  }
   const remoteFirst = /^origin\//.test(String(base || ""));
   const fallbacks = remoteFirst
     ? [base, "origin/HEAD", "main", "master"]
@@ -177,8 +189,16 @@ function changedFiles(base, root, explicitFiles, opts = {}) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {
         const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" });
-        const branchFiles = parseFiles(out);
-        return { files: opts.includeDirty ? mergeFiles(branchFiles, dirtyFiles(root)) : branchFiles, base: b };
+        const branchFiles = parseFiles(out, root);
+        const worktreeFiles = opts.includeDirty ? dirtyFiles(root) : [];
+        return {
+          files: opts.includeDirty ? mergeFiles(root, branchFiles, worktreeFiles) : branchFiles,
+          base: b,
+          explicit: false,
+          branchFiles,
+          dirtyFiles: worktreeFiles,
+          includeDirty: !!opts.includeDirty,
+        };
       } catch {}
     }
   }
@@ -189,8 +209,19 @@ function workingTreeChangedFiles(base, root, explicitFiles) {
   return changedFiles(base, root, explicitFiles, { includeDirty: true });
 }
 
-function parseFiles(out) {
-  return String(out || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+function normalizeChangedFile(root, fp) {
+  const rel = normRel(fp, root);
+  if (!rel || rel === "." || rel === ".." || rel.startsWith("../")) return "";
+  if (/^(?:[A-Za-z]:)?\//.test(rel) || /^[A-Za-z]:\//.test(rel)) return "";
+  return rel;
+}
+
+function normalizeChangedFiles(root, files) {
+  return mergeFiles(root, files);
+}
+
+function parseFiles(out, root) {
+  return normalizeChangedFiles(root, String(out || "").split(/\r?\n/));
 }
 
 function gitFiles(root, args) {
@@ -198,26 +229,26 @@ function gitFiles(root, args) {
     return parseFiles(execFileSync("git", args, {
       cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000, killSignal: "SIGKILL",
-    }));
+    }), root);
   } catch {
     return [];
   }
 }
 
 function dirtyFiles(root) {
-  return mergeFiles(
+  return mergeFiles(root,
     gitFiles(root, ["diff", "--name-only"]),
     gitFiles(root, ["diff", "--name-only", "--cached"]),
     gitFiles(root, ["ls-files", "--others", "--exclude-standard"])
   );
 }
 
-function mergeFiles(...lists) {
+function mergeFiles(root, ...lists) {
   const out = [];
   const seen = new Set();
   for (const list of lists) {
     for (const f of list || []) {
-      const rel = String(f).replace(/\\/g, "/");
+      const rel = normalizeChangedFile(root, f);
       if (!rel || seen.has(rel)) continue;
       seen.add(rel);
       out.push(rel);

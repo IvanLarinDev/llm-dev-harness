@@ -6,17 +6,37 @@
 // exported run() function, following the ECC dispatcher pattern; this is much
 // faster than spawning node for every case. The CLI stdin/exit-code contract is
 // covered separately with spawn-based tests.
-// Run: node hooks/test.js. Exit 0 = green, 1 = failures.
+// Run: node hooks/test.js, or node hooks/test.js --repeat 3 for flake hunting.
+// Exit 0 = green, 1 = failures.
 
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+if (process.argv.includes("--repeat")) {
+  const i = process.argv.indexOf("--repeat");
+  const raw = Number(process.argv[i + 1] || 3);
+  const count = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
+  for (let n = 1; n <= count; n++) {
+    console.log(`\nrepeat ${n}/${count}: node hooks/test.js`);
+    try {
+      execFileSync(process.execPath, [__filename], { cwd: path.join(__dirname, ".."), stdio: "inherit" });
+    } catch (e) {
+      process.exit(e.status || 1);
+    }
+  }
+  process.exit(0);
+}
+
 let pass = 0, fail = 0;
 function ok(cond, msg) {
   if (cond) { pass++; console.log("  + " + msg); }
   else { fail++; console.log("  X " + msg); }
+}
+function cases(title, list, run) {
+  console.log("\n" + title + ":");
+  for (const c of list) ok(run(c), c.name);
 }
 function runHook(hookPath, payloadObj, env = {}) {
   try {
@@ -46,6 +66,8 @@ const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
+const sharedLib = require(path.join(__dirname, "_lib.js"));
+const verifyCore = require(path.join(__dirname, "verify-core.js"));
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -335,6 +357,25 @@ ok(bp("cat ruff.toml") === 0, "guard lint config protection assertion 9");
 ok(bp("rm myruff.toml") === 0, "guard lint config protection assertion 10");
 ok(bp("echo x > src/hooks/useAuth.ts") === 0, "guard lint config protection assertion 11");
 
+cases("guard: red-team adversarial fixtures", [
+  { name: "block shell write through src/../hooks traversal", cmd: "echo x > src/../hooks/agent/guard.js", exit: 2 },
+  { name: "block shell delete through design/../hooks traversal", cmd: "rm design/../hooks/agent/guard.js", exit: 2 },
+  { name: "block PowerShell write through ./ protected path", cmd: "Set-Content ./lefthook.yml -Value x", exit: 2 },
+  { name: "block cmd copy into workflow config", cmd: "copy x .github\\workflows\\ci.yml", exit: 2 },
+  { name: "allow ordinary project path containing hooks segment", cmd: "echo x > src/hooks/useAuth.ts", exit: 0 },
+  { name: "block node -e fs.rmSync against hooks root", cmd: "node -e \"require('fs').rmSync('hooks',{recursive:true})\"", exit: 2 },
+  { name: "block python -c traversal into hooks root", cmd: "python -c \"open('src/../hooks/agent/guard.js','w').write('x')\"", exit: 2 },
+  { name: "block ruby -e File.write against protected file", cmd: "ruby -e \"File.write('lefthook.yml','x')\"", exit: 2 },
+  { name: "allow interpreter write to ordinary src/hooks project file", cmd: "python -c \"open('src/hooks/useAuth.ts','w').write('x')\"", exit: 0 },
+], (c) => bp(c.cmd, c.env || {}) === c.exit);
+
+cases("guard: red-team file path aliases", [
+  { name: "block targetFile alias with normalized protected traversal", tool: "Create", input: { targetFile: "design/../hooks/agent/guard.js" }, exit: 2 },
+  { name: "block target_file alias for ruleset", tool: "Write", input: { target_file: ".github/rulesets/main.json" }, exit: 2 },
+  { name: "block filename alias for .git/hooks write", tool: "Write", input: { filename: ".git/hooks/pre-commit" }, exit: 2 },
+  { name: "allow mixed-purpose pyproject.toml", tool: "Edit", input: { file_path: "pyproject.toml" }, exit: 0 },
+], (c) => gexit({ tool_name: c.tool, tool_input: c.input }, sess("rt-file")) === c.exit);
+
 // ---------- guard: fact-force (EXPLORE before IMPLEMENT, ECC GateGuard pattern) ----------
 console.log("\nguard: fact-force:");
 fs.writeFileSync(path.join(NEUTRAL, "existing.py"), "x = 1");
@@ -493,6 +534,8 @@ try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- verify runner ----------
 console.log("\nverify runner:");
+ok(typeof verifyCore.planVerifyTargets === "function" && typeof verifyCore.debugAudit === "function",
+  "verify-core exports planning and audit policy");
 function verifyExit(root) {
   try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe", maxBuffer: 8 * 1024 * 1024 }); return 0; }
   catch (e) { return e.status || 1; }
@@ -515,7 +558,7 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
   "verify runner assertion 1");
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
 ok(dotnetPlan && dotnetPlan.steps.includes("format"), "verify runner assertion 2");
-ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify.js")),
+ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify-core.js")),
   "dotnet format --verify-no-changes staged rollout: warning-only by default");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
@@ -576,6 +619,22 @@ ok(allIds === "harness-syntax,node,python" && fbIds === "harness-syntax,node,pyt
 chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"),
   "verify runner assertion 11");
+chg = verifyListArgs(ctmp, ["--changed", "--files", "py\\..\\js\\index.js"]);
+ok(chg.plan.length === 1 && chg.plan[0].stack === "node",
+  "--changed: explicit --files paths are normalized before stack filtering");
+{
+  const scoped = sharedLib.changedFiles("main", ctmp, [
+    "./py/app.py",
+    "py\\app.py",
+    "py/../js/index.js",
+    path.join(ctmp, "js", "abs.js"),
+    "../escape.js",
+    "C:/outside.js",
+  ]);
+  ok(scoped.explicit === true && scoped.includeDirty === false &&
+     scoped.files.join(",") === "py/app.py,js/index.js,js/abs.js",
+    "changedFiles: explicit scope is normalized, deduped, and repo-confined");
+}
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
 const dirtyTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifydirty-"));
@@ -593,6 +652,12 @@ dwrite("js/package.json", "{}\n");
 dgit(["add", "."]);
 dgit(["commit", "-q", "-m", "chore: base"]);
 dwrite("hooks/verify.js", "console.log('dirty');\n");
+{
+  const scoped = sharedLib.workingTreeChangedFiles("main", dirtyTmp, null);
+  ok(scoped.includeDirty === true && scoped.branchFiles.length === 0 &&
+     scoped.dirtyFiles.includes("hooks/verify.js") && scoped.files.includes("hooks/verify.js"),
+    "workingTreeChangedFiles: branch and dirty scopes are explicit");
+}
 chg = verifyListArgs(dirtyTmp, ["--changed"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"), "--changed: unstaged harness edit is included");
 dgit(["add", "hooks/verify.js"]);
@@ -885,7 +950,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");
