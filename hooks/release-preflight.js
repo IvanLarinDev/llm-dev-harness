@@ -125,8 +125,10 @@ function csprojVersion(abs, rel) {
   if (!rel.toLowerCase().endsWith(".csproj")) return null;
   let text = "";
   try { text = fs.readFileSync(abs, "utf8"); } catch { return null; }
-  const version = firstMatch(text, /<Version>\s*([^<\s]+)\s*<\/Version>/i) ||
-    firstMatch(text, /<VersionPrefix>\s*([^<\s]+)\s*<\/VersionPrefix>/i);
+  const explicitVersion = firstMatch(text, /<Version>\s*([^<\s]+)\s*<\/Version>/i);
+  const versionPrefix = firstMatch(text, /<VersionPrefix>\s*([^<\s]+)\s*<\/VersionPrefix>/i);
+  const versionSuffix = firstMatch(text, /<VersionSuffix>\s*([^<\s]+)\s*<\/VersionSuffix>/i);
+  const version = explicitVersion || (versionPrefix ? (versionSuffix ? `${versionPrefix}-${versionSuffix}` : versionPrefix) : "");
   return version ? { rel, kind: "csproj", version } : null;
 }
 
