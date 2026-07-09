@@ -49,7 +49,7 @@ function git(root, args) {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10000,
+    timeout: args[0] === "ls-remote" ? 60000 : 10000,
     killSignal: "SIGKILL",
   }).trim();
 }
