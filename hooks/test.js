@@ -66,6 +66,7 @@ const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
+const sharedLib = require(path.join(__dirname, "_lib.js"));
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -615,6 +616,22 @@ ok(allIds === "harness-syntax,node,python" && fbIds === "harness-syntax,node,pyt
 chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"),
   "verify runner assertion 11");
+chg = verifyListArgs(ctmp, ["--changed", "--files", "py\\..\\js\\index.js"]);
+ok(chg.plan.length === 1 && chg.plan[0].stack === "node",
+  "--changed: explicit --files paths are normalized before stack filtering");
+{
+  const scoped = sharedLib.changedFiles("main", ctmp, [
+    "./py/app.py",
+    "py\\app.py",
+    "py/../js/index.js",
+    path.join(ctmp, "js", "abs.js"),
+    "../escape.js",
+    "C:/outside.js",
+  ]);
+  ok(scoped.explicit === true && scoped.includeDirty === false &&
+     scoped.files.join(",") === "py/app.py,js/index.js,js/abs.js",
+    "changedFiles: explicit scope is normalized, deduped, and repo-confined");
+}
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
 const dirtyTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifydirty-"));
@@ -632,6 +649,12 @@ dwrite("js/package.json", "{}\n");
 dgit(["add", "."]);
 dgit(["commit", "-q", "-m", "chore: base"]);
 dwrite("hooks/verify.js", "console.log('dirty');\n");
+{
+  const scoped = sharedLib.workingTreeChangedFiles("main", dirtyTmp, null);
+  ok(scoped.includeDirty === true && scoped.branchFiles.length === 0 &&
+     scoped.dirtyFiles.includes("hooks/verify.js") && scoped.files.includes("hooks/verify.js"),
+    "workingTreeChangedFiles: branch and dirty scopes are explicit");
+}
 chg = verifyListArgs(dirtyTmp, ["--changed"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"), "--changed: unstaged harness edit is included");
 dgit(["add", "hooks/verify.js"]);

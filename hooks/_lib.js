@@ -172,11 +172,14 @@ function interpreterProtectedHint(rawCmd, protectedList) {
 // succeeds, even if the diff is empty, or {error} when no base can be used. Those
 // outcomes are intentionally distinct: empty diff means "no changes", while error
 // means "could not check". Silent fail-open would make gates ineffective in repos
-// without the expected base. explicitFiles is returned as-is for tests/CI, without git.
+// without the expected base. explicitFiles is normalized and returned without git.
 // By default this is a branch-only contract for CI/design-gate; local verify can
 // explicitly include dirty/staged/untracked files via includeDirty.
 function changedFiles(base, root, explicitFiles, opts = {}) {
-  if (explicitFiles) return { files: explicitFiles };
+  if (explicitFiles) {
+    const files = normalizeChangedFiles(root, explicitFiles);
+    return { files, explicit: true, branchFiles: files, dirtyFiles: [], includeDirty: false };
+  }
   const remoteFirst = /^origin\//.test(String(base || ""));
   const fallbacks = remoteFirst
     ? [base, "origin/HEAD", "main", "master"]
@@ -186,8 +189,16 @@ function changedFiles(base, root, explicitFiles, opts = {}) {
     for (const args of [["diff", "--name-only", `${b}...HEAD`], ["diff", "--name-only", b]]) {
       try {
         const out = execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" });
-        const branchFiles = parseFiles(out);
-        return { files: opts.includeDirty ? mergeFiles(branchFiles, dirtyFiles(root)) : branchFiles, base: b };
+        const branchFiles = parseFiles(out, root);
+        const worktreeFiles = opts.includeDirty ? dirtyFiles(root) : [];
+        return {
+          files: opts.includeDirty ? mergeFiles(root, branchFiles, worktreeFiles) : branchFiles,
+          base: b,
+          explicit: false,
+          branchFiles,
+          dirtyFiles: worktreeFiles,
+          includeDirty: !!opts.includeDirty,
+        };
       } catch {}
     }
   }
@@ -198,8 +209,19 @@ function workingTreeChangedFiles(base, root, explicitFiles) {
   return changedFiles(base, root, explicitFiles, { includeDirty: true });
 }
 
-function parseFiles(out) {
-  return String(out || "").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+function normalizeChangedFile(root, fp) {
+  const rel = normRel(fp, root);
+  if (!rel || rel === "." || rel === ".." || rel.startsWith("../")) return "";
+  if (/^(?:[A-Za-z]:)?\//.test(rel) || /^[A-Za-z]:\//.test(rel)) return "";
+  return rel;
+}
+
+function normalizeChangedFiles(root, files) {
+  return mergeFiles(root, files);
+}
+
+function parseFiles(out, root) {
+  return normalizeChangedFiles(root, String(out || "").split(/\r?\n/));
 }
 
 function gitFiles(root, args) {
@@ -207,26 +229,26 @@ function gitFiles(root, args) {
     return parseFiles(execFileSync("git", args, {
       cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
       timeout: 5000, killSignal: "SIGKILL",
-    }));
+    }), root);
   } catch {
     return [];
   }
 }
 
 function dirtyFiles(root) {
-  return mergeFiles(
+  return mergeFiles(root,
     gitFiles(root, ["diff", "--name-only"]),
     gitFiles(root, ["diff", "--name-only", "--cached"]),
     gitFiles(root, ["ls-files", "--others", "--exclude-standard"])
   );
 }
 
-function mergeFiles(...lists) {
+function mergeFiles(root, ...lists) {
   const out = [];
   const seen = new Set();
   for (const list of lists) {
     for (const f of list || []) {
-      const rel = String(f).replace(/\\/g, "/");
+      const rel = normalizeChangedFile(root, f);
       if (!rel || seen.has(rel)) continue;
       seen.add(rel);
       out.push(rel);
