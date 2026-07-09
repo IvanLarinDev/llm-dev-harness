@@ -119,9 +119,11 @@ ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push trigger only runs on 
 ok(/doctor\.js/.test(ci) && /design-gate\.js/.test(ci) && /verify\.js/.test(ci), "configs lefthook gitleaks cocogitto ruleset ci assertion 8");
 ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &&
    /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
-   /uses:\s*gitleaks\/gitleaks-action@[0-9a-f]{40}\s*# gitleaks\/gitleaks-action@v\d/.test(ci) &&
+   /uses:\s*actions\/setup-go@[0-9a-f]{40}\s*# actions\/setup-go@v\d/.test(ci) &&
    /uses:\s*cocogitto\/cocogitto-action@[0-9a-f]{40}\s*# cocogitto\/cocogitto-action@v\d/.test(ci),
   "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
+ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/gitleaks\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
+  "CI: gitleaks installs through Go on the Windows runner");
 ok(/AGENTSHIELD_INTEGRITY:\s*"sha512-/.test(ci) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*"true"/.test(ci),
   "CI: AgentShield npm package has integrity pin and install scripts disabled");
 ok(/cocogitto-action@[0-9a-f]{40}[\s\S]*check:\s*false[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
