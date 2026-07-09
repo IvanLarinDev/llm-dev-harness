@@ -27,7 +27,9 @@ README covers the stack and installation.
 | Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
 | Agent config security audit | ecc-agentshield | [.github/workflows/ci.yml](./.github/workflows/ci.yml) |
 
-Shared helpers live in [hooks/_lib.js](./hooks/_lib.js).
+Shared helpers live in [hooks/_lib.js](./hooks/_lib.js). VERIFY planning and
+debug-audit policy live in [hooks/verify-core.js](./hooks/verify-core.js), with
+[hooks/verify.js](./hooks/verify.js) kept as the CLI/runner wrapper.
 
 ## Install
 

@@ -67,6 +67,7 @@ const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
 const sharedLib = require(path.join(__dirname, "_lib.js"));
+const verifyCore = require(path.join(__dirname, "verify-core.js"));
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -533,6 +534,8 @@ try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- verify runner ----------
 console.log("\nverify runner:");
+ok(typeof verifyCore.planVerifyTargets === "function" && typeof verifyCore.debugAudit === "function",
+  "verify-core exports planning and audit policy");
 function verifyExit(root) {
   try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe", maxBuffer: 8 * 1024 * 1024 }); return 0; }
   catch (e) { return e.status || 1; }
@@ -555,7 +558,7 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
   "verify runner assertion 1");
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
 ok(dotnetPlan && dotnetPlan.steps.includes("format"), "verify runner assertion 2");
-ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify.js")),
+ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify-core.js")),
   "dotnet format --verify-no-changes staged rollout: warning-only by default");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
 fs.writeFileSync(path.join(etmp, "m.txt"), "x");
@@ -947,7 +950,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");
