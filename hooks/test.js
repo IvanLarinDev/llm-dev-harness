@@ -850,6 +850,14 @@ function writeReleaseProject(root, version) {
   fs.writeFileSync(path.join(root, "src", "App", "App.csproj"), `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>\n`);
   fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${version}\n\n- release\n`);
 }
+function writeReleaseProjectWithPrefixSuffix(root, versionPrefix, versionSuffix) {
+  fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "src", "App", "App.csproj"),
+    `<Project><PropertyGroup><VersionPrefix>${versionPrefix}</VersionPrefix><VersionSuffix>${versionSuffix}</VersionSuffix></PropertyGroup></Project>\n`
+  );
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${versionPrefix}-${versionSuffix}\n\n- release\n`);
+}
 function releaseRepo(version, tag = "v0.10.1") {
   const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-origin-"));
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-work-"));
@@ -872,6 +880,16 @@ let relCase = releaseRepo("0.10.1");
 let rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
   "release-preflight: clean release with csproj version matching tag -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("1.2.3", "v1.2.3-rc.1");
+writeReleaseProjectWithPrefixSuffix(relCase.work, "1.2.3", "rc.1");
+relGit(relCase.work, ["add", "."]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(version): v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-d", "v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-a", "v1.2.3-rc.1", "-m", "v1.2.3-rc.1"]);
+rpre = releaseJson(relCase.work, "v1.2.3-rc.1");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release-preflight: prerelease tag matches csproj VersionPrefix + VersionSuffix -> PASS");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 relCase = releaseRepo("0.10.0");
 rpre = releaseJson(relCase.work, "v0.10.1");
