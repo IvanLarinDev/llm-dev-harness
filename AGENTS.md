@@ -9,7 +9,7 @@ enforce.
 ```text
 1. EXPLORE          - read the codebase, patterns, and risks
 2. PLAN             - plan -> user approval
-2.5 DESIGN (GUI)    - >=4 mockups -> user approval -> APPROVED file
+2.5 DESIGN (GUI)    - classify UI impact -> matching variants -> approval
 3. IMPLEMENT+TEST   - code and tests together; edge cases become tests
 4. VERIFY           - node hooks/verify.js + read output + git diff self-review
    - failure/new warnings -> return to step 3
@@ -45,13 +45,36 @@ need a plan.
 implementation. The plan names the files, rationale, tests, risks, and edge
 cases.
 
-**2.5 DESIGN (GUI).** GUI work matching `harness.config.json -> ui.globs` is
-designed before code. New GUI work needs at least four stylistically distinct
-mockups from `node hooks/new-mockups.js <feature>`, user selection, and
-`design/mockups/<feature>/APPROVED`. GUI changes also need a mockup for the new
-state. `hooks/design-gate.js` passes UI changes only when the approved set is
-touched in the same branch diff; to reuse an old set, append a date/branch line
-to its `APPROVED` file.
+**2.5 DESIGN (GUI).** Classify the user-visible change before generating DESIGN
+evidence. Do not use four unrelated visual themes for every kind of UI work.
+
+- Backend-only work with no user-visible UI impact skips DESIGN. A mixed task
+  designs only its UI slice. `design-gate.js` skips automatically when no changed
+  file matches `harness.config.json -> ui.globs`.
+- Animation uses one concrete scenario. The low-cost option is at least four
+  written motion variants (`--fidelity text`); use executable HTML/JavaScript
+  variants (`--fidelity js`) when timing, gesture, or physical feel cannot be
+  judged from prose.
+- Changes to an existing UI keep its real visual language and components while
+  comparing layouts, placement, or interaction patterns. Pass at least one
+  current UI source file through `--baseline`.
+- UI created from scratch compares at least four stylistically distinct visual
+  directions.
+
+Use one explicit mode; the generator has no generic default:
+
+```text
+node hooks/new-mockups.js <feature> --kind existing-ui --baseline <repo-path>
+node hooks/new-mockups.js <feature> --kind new-ui
+node hooks/new-mockups.js <feature> --kind animation --fidelity text|js --example <scenario>
+node hooks/new-mockups.js <feature> --kind backend
+```
+
+The generator writes `DESIGN.json`, mode-appropriate variants, and `NOTES.md`.
+After user selection, create `design/mockups/<feature>/APPROVED`. The gate checks
+the manifest and passes UI changes only when that approved set is touched in the
+same branch diff. Legacy sets without `DESIGN.json` remain valid. To reuse an old
+set, append a date/branch line to its `APPROVED` file.
 
 **3. IMPLEMENT+TEST.** Code and tests move together. If a target project has no
 test runner, report that and propose a minimal one.

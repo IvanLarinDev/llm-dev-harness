@@ -35,6 +35,40 @@ Shared helpers live in [hooks/_lib.js](./hooks/_lib.js). VERIFY planning and
 debug-audit policy live in [hooks/verify-core.js](./hooks/verify-core.js), with
 [hooks/verify.js](./hooks/verify.js) kept as the CLI/runner wrapper.
 
+## DESIGN routing
+
+The DESIGN stage follows the user-visible question instead of generating four
+unrelated themes for every UI-path change.
+
+| Change type | Required evidence |
+|---|---|
+| Backend with no UI impact | None. `design-gate.js` skips when no changed path matches `ui.globs`. |
+| Animation, low cost | Four written motion variants for one concrete scenario. |
+| Animation, high fidelity | Four executable HTML/JavaScript motion prototypes. |
+| Existing UI element or flow | The current visual language with four layout, placement, or interaction alternatives. |
+| New UI from scratch | Four stylistically distinct visual directions. |
+
+Generate an explicit evidence type:
+
+```bash
+node hooks/new-mockups.js <feature> --kind existing-ui --baseline <repo-path>
+node hooks/new-mockups.js <feature> --kind new-ui
+node hooks/new-mockups.js <feature> --kind animation --fidelity text --example "<scenario>"
+node hooks/new-mockups.js <feature> --kind animation --fidelity js --example "<scenario>"
+node hooks/new-mockups.js <feature> --kind backend
+```
+
+`existing-ui` requires at least one current UI source file as its baseline.
+Animation variants share the same concrete example so timing and feedback can
+be compared directly. `backend` creates no DESIGN directory and does not bypass
+a real UI-path diff. Mixed backend/UI tasks create evidence only for their
+user-visible slice.
+
+Every non-backend set contains a `DESIGN.json` manifest, four mode-appropriate
+variants, and `NOTES.md`. Create `design/mockups/<feature>/APPROVED` only after
+the user selects a direction. Legacy approved sets without `DESIGN.json` remain
+valid for compatibility.
+
 ## Install
 
 ```bash

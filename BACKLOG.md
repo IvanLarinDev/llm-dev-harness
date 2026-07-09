@@ -66,8 +66,9 @@ required status checks, required PRs, and blocked force-push/delete.
 
 ## P1 - Quality
 
-- **P1-5. GUI design-gate. Done.** GUI work requires at least four mockups plus
-  `APPROVED`, touched in the same branch diff.
+- **P1-5. GUI design-gate. Done.** User-visible GUI work requires at least four
+  mode-appropriate DESIGN variants plus `APPROVED`, touched in the same branch
+  diff; backend-only work outside UI paths skips the gate.
 - **P1-6. Secret scanning. Done via gitleaks.**
 - **P1-7. Signed commits. Deferred.** If it becomes mandatory, enforce it through
   the server ruleset rather than a local helper.

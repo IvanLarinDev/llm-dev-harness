@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // design-gate.js - DESIGN-stage gate.
 //
-// Policy: GUI work must be preceded by design review. If a branch's changes touch UI
-// paths, the SAME branch diff must also touch an APPROVED set of >= N mockups -
-// otherwise one old approval would open the gate for all future UI work forever.
+// Policy: user-visible GUI work must be preceded by design review. If a branch's
+// changes touch UI paths, the SAME branch diff must also touch an APPROVED set of
+// mode-appropriate DESIGN evidence. Legacy sets remain valid for compatibility.
 //
 // Usage:
 //   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json] [--strict]
@@ -53,7 +53,96 @@ function defaultBase(root) {
 // ---------- config shared with guard.js and verify.js ----------
 const { globToRe, loadConfig, changedFiles } = require(path.join(__dirname, "_lib.js"));
 
-// ---------- mockups scan ----------
+// ---------- DESIGN evidence scan ----------
+function safeVariantFile(file) {
+  return typeof file === "string" && file.length > 0 && !/[\\/]/.test(file) &&
+    path.basename(file) === file && file !== "." && file !== "..";
+}
+
+function baselineCheck(root, references) {
+  if (!Array.isArray(references) || references.length === 0)
+    return { ok: false, reason: "existing-ui evidence requires baselineReferences from the current UI" };
+  for (const reference of references) {
+    if (typeof reference !== "string" || !reference.trim())
+      return { ok: false, reason: "baselineReferences must contain repo-relative file paths" };
+    const absolute = path.resolve(root, reference);
+    const relative = path.relative(root, absolute);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative))
+      return { ok: false, reason: `baseline reference is outside the repository: ${reference}` };
+    try {
+      if (!fs.statSync(absolute).isFile())
+        return { ok: false, reason: `baseline reference is not a file: ${reference}` };
+    } catch {
+      return { ok: false, reason: `baseline reference does not exist: ${reference}` };
+    }
+  }
+  return { ok: true };
+}
+
+function validateManifestSet(root, dir, files, m) {
+  const manifestFile = m.manifestFile || "DESIGN.json";
+  if (!files.includes(manifestFile)) {
+    const mockups = files.filter((file) => m.mockupExtensions.includes(path.extname(file).toLowerCase()));
+    return mockups.length >= m.min
+      ? { ok: true, count: mockups.length, kind: "legacy", legacy: true }
+      : { ok: false, reason: `legacy set has ${mockups.length}/${m.min} visual mockups` };
+  }
+
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(path.join(dir, manifestFile), "utf8")); }
+  catch { return { ok: false, reason: `${manifestFile} is not valid JSON` }; }
+  if (manifest.schemaVersion !== 1)
+    return { ok: false, reason: `${manifestFile} schemaVersion must be 1` };
+  if (!new Set(["existing-ui", "new-ui", "animation"]).has(manifest.kind))
+    return { ok: false, reason: `${manifestFile} kind must be existing-ui, new-ui, or animation` };
+  if (!Array.isArray(manifest.variants) || manifest.variants.length < m.min)
+    return { ok: false, reason: `${manifestFile} declares fewer than ${m.min} variants` };
+
+  const variantFiles = manifest.variants.map((variant) => variant && variant.file);
+  if (variantFiles.some((file) => !safeVariantFile(file)))
+    return { ok: false, reason: `${manifestFile} variants must be direct child files` };
+  if (new Set(variantFiles).size !== variantFiles.length)
+    return { ok: false, reason: `${manifestFile} variants must be unique` };
+  const missing = variantFiles.filter((file) => !files.includes(file));
+  if (missing.length)
+    return { ok: false, reason: `${manifestFile} references missing variant(s): ${missing.join(", ")}` };
+
+  if (manifest.kind === "existing-ui") {
+    const baseline = baselineCheck(root, manifest.baselineReferences);
+    if (!baseline.ok) return baseline;
+  }
+
+  if (manifest.kind === "animation") {
+    if (!new Set(["text", "js"]).has(manifest.fidelity))
+      return { ok: false, reason: "animation evidence requires fidelity text or js" };
+    if (typeof manifest.example !== "string" || !manifest.example.trim())
+      return { ok: false, reason: "animation evidence requires a concrete example" };
+    const expectedExtension = manifest.fidelity === "text" ? ".md" : ".html";
+    const wrongType = variantFiles.find((file) => path.extname(file).toLowerCase() !== expectedExtension);
+    if (wrongType)
+      return { ok: false, reason: `animation/${manifest.fidelity} variant has the wrong file type: ${wrongType}` };
+    if (manifest.fidelity === "js") {
+      for (const file of variantFiles) {
+        let source = "";
+        try { source = fs.readFileSync(path.join(dir, file), "utf8"); } catch {}
+        if (!/<script(?:\s|>)/i.test(source) || !/(?:\.animate\s*\(|requestAnimationFrame\s*\()/i.test(source))
+          return { ok: false, reason: `animation/js variant is not an executable motion prototype: ${file}` };
+      }
+    }
+  } else {
+    const wrongType = variantFiles.find((file) => !m.mockupExtensions.includes(path.extname(file).toLowerCase()));
+    if (wrongType)
+      return { ok: false, reason: `${manifest.kind} variant has an unsupported visual file type: ${wrongType}` };
+  }
+
+  return {
+    ok: true,
+    count: variantFiles.length,
+    kind: manifest.kind,
+    ...(manifest.fidelity ? { fidelity: manifest.fidelity } : {}),
+  };
+}
+
 // An approved set counts only if that same set is touched in this branch diff.
 // Otherwise one old approval would unlock future UI work forever.
 function hasApprovedMockups(root, m, changed) {
@@ -64,23 +153,30 @@ function hasApprovedMockups(root, m, changed) {
   catch { return { ok: false, reason: `missing directory ${m.dir}/` }; }
 
   const stale = [];
+  const invalid = [];
   for (const d of dirs) {
     const dir = path.join(base, d.name);
     let files;
     try { files = fs.readdirSync(dir); } catch { continue; }
-    const mockups = files.filter((f) => m.mockupExtensions.includes(path.extname(f).toLowerCase()));
     const approved = files.includes(m.approvalFile);
-    if (mockups.length < m.min || !approved) continue;
-    if (changed.some((c) => c.startsWith(`${mockRoot}/${d.name}/`)))
-      return { ok: true, feature: d.name, count: mockups.length };
+    if (!approved) continue;
+    const touched = changed.some((c) => c.startsWith(`${mockRoot}/${d.name}/`));
+    const check = validateManifestSet(root, dir, files, m);
+    if (!check.ok) {
+      if (touched) invalid.push(`${d.name}: ${check.reason}`);
+      continue;
+    }
+    if (touched) return { ok: true, feature: d.name, ...check };
     stale.push(d.name);
   }
   return {
     ok: false,
-    reason: stale.length
+    reason: invalid.length
+      ? `invalid DESIGN evidence (${invalid.join("; ")})`
+      : stale.length
       ? `approved set(s) (${stale.join(", ")}) are not touched in this branch diff; ` +
         `touch ${m.dir}/<feature>/${m.approvalFile} to bind an existing approval to this change`
-      : `no ${m.dir}/<feature>/ with >=${m.min} mockups and ${m.approvalFile} touched in this branch`,
+      : `no valid mode-aware ${m.dir}/<feature>/ with >=${m.min} variants and ${m.approvalFile} touched in this branch`,
   };
 }
 
@@ -118,7 +214,10 @@ function hasApprovedMockups(root, m, changed) {
   res.mockups = mk;
   if (mk.ok) {
     if (a.json) console.log(JSON.stringify(res));
-    else console.log(`OK design-gate: UI changes have an approved mockup set touched in this branch (${mk.feature}, ${mk.count}).`);
+    else {
+      const mode = mk.kind ? `, ${mk.kind}${mk.fidelity ? `/${mk.fidelity}` : ""}` : "";
+      console.log(`OK design-gate: UI changes have approved DESIGN evidence touched in this branch (${mk.feature}, ${mk.count}${mode}).`);
+    }
     process.exit(0);
   }
 
@@ -127,9 +226,10 @@ function hasApprovedMockups(root, m, changed) {
     `BLOCK design-gate: GUI changes require DESIGN approval.\n` +
       `   UI files: ${res.uiChanged.slice(0, 8).join(", ")}${res.uiChanged.length > 8 ? " ..." : ""}\n` +
       `   Required: ${mk.reason}.\n` +
-      `   New set: node hooks/new-mockups.js <feature>, get approval, then create ${cfg.mockups.dir}/<feature>/${cfg.mockups.approvalFile}.\n` +
+      `   Existing UI: node hooks/new-mockups.js <feature> --kind existing-ui --baseline <repo-path>.\n` +
+      `   Motion: use --kind animation --fidelity text|js --example <scenario>; new UI: use --kind new-ui.\n` +
       `   Existing set: touch its ${cfg.mockups.approvalFile} so it appears in this branch diff.\n` +
-      `   Policy: new/changed GUI needs >=${cfg.mockups.min} stylistically distinct mockups plus approval.`
+      `   Policy: DESIGN evidence must match the UI change type; backend-only diffs outside ui.globs need none.`
   );
   process.exit(1);
 })();
