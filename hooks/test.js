@@ -129,9 +129,9 @@ ok(/COG_VERSION:\s*"7\.0\.0"/.test(ci) &&
    /COG_SHA256:\s*"074f68f05d270da5c0d69d3e234ec362bec4c6e3189c21d1c948d038603655d7"/.test(ci) &&
    /cocogitto-\$COG_VERSION-x86_64-pc-windows-msvc\.tar\.gz/.test(ci) &&
    /sha256sum -c -/.test(ci) &&
-   /\$GITHUB_PATH/.test(ci),
+   /x86_64-pc-windows-msvc\/cog\.exe" --version/.test(ci),
   "CI: cocogitto installs the pinned Windows binary with checksum verification");
-ok(/Install cocogitto[\s\S]*cog check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
+ok(/Conventional commit range[\s\S]*shell:\s*bash[\s\S]*\.\/x86_64-pc-windows-msvc\/cog\.exe check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
   "CI: conventional commit check uses explicit PR range, not latest tag (works before first release tag)");
 const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
 const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
