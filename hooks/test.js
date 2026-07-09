@@ -91,6 +91,8 @@ ok(/branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog),
   "cog.toml release-safe: release/** branch whitelist is allowed");
 ok(/template\s*=\s*"remote"/.test(cog) && /owner\s*=\s*"[^"]+"/.test(cog) && /repository\s*=\s*"[^"]+"/.test(cog),
   "cog.toml release-safe: remote changelog template has owner/repository");
+ok(/owner\s*=\s*"IvanLarinDev"/.test(cog) && /repository\s*=\s*"llm-dev-harness"/.test(cog),
+  "cog.toml release-safe: remote changelog metadata matches source repository");
 ok(/^---\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
 const gl = readRepo(".gitleaks.toml");
 ok(/useDefault\s*=\s*true/.test(gl), "gitleaks расширяет дефолтный ruleset");
@@ -625,6 +627,7 @@ ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WA
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/IvanLarinDev/llm-dev-harness.git"], { cwd: bootRepo });
 try { execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" }); } catch {}
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:/.test(r.msg) && r.level === "FAIL"),
@@ -633,6 +636,15 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+execFileSync("git", ["rm", "--cached", "CHANGELOG.md"], { cwd: bootRepo, stdio: "ignore" });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:.*CHANGELOG\.md/.test(r.msg) && r.level === "FAIL"),
+  "doctor: untracked CHANGELOG.md -> FAIL bootstrap-проверки");
+execFileSync("git", ["add", "CHANGELOG.md"], { cwd: bootRepo });
+fs.rmSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /required check\(s\).*workflow.*missing/.test(r.msg) && /verify/.test(r.msg) && r.level === "FAIL"),
+  "doctor: ruleset verify without CI workflow -> FAIL");
 fs.mkdirSync(path.join(bootRepo, ".github", "workflows"), { recursive: true });
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
 dres = doctor(bootRepo);
@@ -652,6 +664,11 @@ fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor: valid YAML variant с quoted job id/comment -> PASS");
+fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /code-owner review requires \.github\/CODEOWNERS/.test(r.msg) && r.level === "FAIL"),
+  "doctor: code-owner review without CODEOWNERS -> FAIL");
+fs.writeFileSync(path.join(bootRepo, ".github", "CODEOWNERS"), readRepo(".github/CODEOWNERS"));
 fs.writeFileSync(path.join(bootRepo, "hooks", "test.js"), "console.log('self-test');\n");
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "noop", run: "node -e \"0\"" }] }] } }, null, 2) + "\n");
 execFileSync("git", ["add", "."], { cwd: bootRepo });
@@ -674,6 +691,11 @@ ok((dres.results || []).some((r) => /branch_whitelist.*release\/\*\*/.test(r.msg
   "doctor: release-blocking cog.toml/CHANGELOG gaps -> FAIL");
 fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml"));
 fs.writeFileSync(path.join(bootRepo, "CHANGELOG.md"), "# Changelog\n\n---\n");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml").replace(/repository\s*=\s*"[^"]+"/, 'repository = "wrong-repo"'));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /changelog\.repository must match origin repository/.test(r.msg) && /llm-dev-harness/.test(r.msg) && r.level === "FAIL"),
+  "doctor: changelog.repository mismatch with origin -> FAIL");
+fs.writeFileSync(path.join(bootRepo, "cog.toml"), readRepo("cog.toml"));
 fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "harness", markers: ["test.js"], steps: [{ name: "self-test", run: "node test.js" }] }] } }, null, 2) + "\n");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);
@@ -743,6 +765,7 @@ function installJson(target, extra) {
 }
 const itmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-"));
 execFileSync("git", ["init", "-q"], { cwd: itmp });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/example-target.git"], { cwd: itmp });
 // dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "install --dry-run: ok, режим install");
@@ -751,6 +774,11 @@ ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ни�
 // Real installation.
 installJson(itmp, []);
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
+  "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
+const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
+ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.test(tcog),
+  "install: cog.toml remote changelog metadata is rewritten from target origin");
 ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "install: dev-self-test (test.js) в target НЕ копируется");
 const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
 ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён config без self-test-пина verify (target авто-детектит стеки)");

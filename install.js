@@ -8,7 +8,8 @@
 //      source repo self-test so the target can auto-detect its own stacks;
 //   3. merges the agent guard into .claude/settings.json while preserving foreign
 //      keys and hooks, and without duplicating our entries on repeated runs;
-//   4. installs lefthook hooks and runs doctor.
+//   4. installs the CI/ruleset mirror needed for server-side enforcement;
+//   5. installs lefthook hooks and runs doctor.
 //
 // Idempotent, cross-platform (Windows/macOS/Linux), and dependency-light.
 // Double-click wrappers: install.cmd (Windows) / install.sh (POSIX).
@@ -19,7 +20,7 @@
 //     --target        install destination (default: current directory)
 //     --force         overwrite existing harness files
 //     --dry-run       show the plan without writing
-//     --with-ci       also copy .github/ (CI mirror, CODEOWNERS, dependabot)
+//     --with-ci       also copy optional GitHub maintenance files (dependabot)
 //     --with-ruleset  apply the server ruleset (requires gh admin; see apply-ruleset.js)
 //     --json          machine-readable report
 //
@@ -43,9 +44,9 @@ const FILES = [
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",
-  ".gitattributes", "AGENTS.md", ".github/rulesets/main.json",
+  ".gitattributes", "AGENTS.md", ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/CODEOWNERS",
 ];
-const CI_FILES = [".github/workflows/ci.yml", ".github/CODEOWNERS", ".github/dependabot.yml"];
+const CI_FILES = [".github/dependabot.yml"];
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -80,6 +81,36 @@ function copyOne(rel, force, dryRun) {
   if (exists && !force) return { rel, action: "skip" };
   if (!dryRun) { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(src, dst); }
   return { rel, action: exists ? "overwrite" : "write" };
+}
+
+function githubRepoFromUrl(url) {
+  const value = String(url || "").trim();
+  const m = value.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  return m ? { owner: m[1], repository: m[2] } : null;
+}
+
+function gitRemoteUrl(target) {
+  const r = spawnSync("git", ["remote", "get-url", "origin"], { cwd: target, encoding: "utf8" });
+  return r.status === 0 ? String(r.stdout || "").trim() : "";
+}
+
+function rewriteCogRemoteMetadata(dryRun) {
+  const dst = path.join(a.target, "cog.toml");
+  const repo = githubRepoFromUrl(gitRemoteUrl(a.target));
+  if (!repo) return { action: "skip", reason: "no GitHub origin" };
+  let text = "";
+  try { text = fs.readFileSync(dst, "utf8"); }
+  catch {
+    if (!dryRun) return { action: "skip", reason: "missing cog.toml" };
+    try { text = fs.readFileSync(path.join(SRC, "cog.toml"), "utf8"); }
+    catch { return { action: "skip", reason: "missing cog.toml" }; }
+  }
+  const next = text
+    .replace(/^owner\s*=\s*"[^"]*"\s*$/m, `owner = "${repo.owner}"`)
+    .replace(/^repository\s*=\s*"[^"]*"\s*$/m, `repository = "${repo.repository}"`);
+  if (next === text) return { action: "already", owner: repo.owner, repository: repo.repository };
+  if (!dryRun) fs.writeFileSync(dst, next);
+  return { action: "rewrite", owner: repo.owner, repository: repo.repository };
 }
 
 // ---------- harness.config.json (generate if missing) ----------
@@ -163,7 +194,7 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
 
   // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
@@ -179,10 +210,17 @@ const a = parseArgs(process.argv.slice(2));
   if (!selfInstall) {
     const list = a.withCi ? FILES.concat(CI_FILES) : FILES.slice();
     for (const rel of list) out.files.push(copyOne(rel, a.force, a.dryRun));
+    const cogFile = out.files.find((f) => f.rel === "cog.toml");
+    if (cogFile && cogFile.action !== "skip") {
+      out.cog = rewriteCogRemoteMetadata(a.dryRun);
+      if (out.cog.action === "skip") {
+        out.notes.push("cog.toml: " + out.cog.reason + " - set [changelog] owner/repository before release.");
+      }
+    }
     out.config = writeConfig(a.force, a.dryRun);
-    if (a.withCi && !FILES.includes(".github/workflows/ci.yml")) {
-      // The CI mirror is copied, but it only activates after push and requires the workflow scope.
-      out.notes.push("CI-зеркало .github/workflows/ci.yml положено, но активируется только после push (нужен gh-скоуп workflow).");
+    if (out.files.some((f) => f.rel === ".github/workflows/ci.yml" && f.action !== "skip")) {
+      // The CI mirror is copied, but it only activates after push and may require the workflow scope.
+      out.notes.push("CI mirror .github/workflows/ci.yml was written; it activates after push and may require the gh workflow scope.");
     }
   } else {
     out.notes.push("bootstrap-режим: цель совпадает с источником, файлы уже на месте — только вплетаю хуки и активирую.");
