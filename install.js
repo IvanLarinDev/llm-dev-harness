@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// install.js — one-command installer for llm-dev-harness in a target repository.
+// install.js - one-command installer for llm-dev-harness in a target repository.
 //
 // What it does:
 //   1. copies harness hooks and configs into the target project without overwriting
@@ -22,6 +22,7 @@
 //     --dry-run       show the plan without writing
 //     --with-ci       also copy optional GitHub maintenance files (dependabot)
 //     --with-ruleset  apply the server ruleset (requires gh admin; see apply-ruleset.js)
+//     --code-owner    CODEOWNERS owner such as @org/team or @user
 //     --json          machine-readable report
 //
 // Exit 0 = installation succeeded (or dry-run), 1 = invalid target directory or
@@ -50,13 +51,14 @@ const CI_FILES = [".github/dependabot.yml"];
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { target: process.cwd(), force: false, dryRun: false, withCi: false, withRuleset: false, json: false };
+  const a = { target: process.cwd(), force: false, dryRun: false, withCi: false, withRuleset: false, codeOwner: "", json: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--target") a.target = argv[++i];
     else if (argv[i] === "--force") a.force = true;
     else if (argv[i] === "--dry-run") a.dryRun = true;
     else if (argv[i] === "--with-ci") a.withCi = true;
     else if (argv[i] === "--with-ruleset") a.withRuleset = true;
+    else if (argv[i] === "--code-owner") a.codeOwner = argv[++i] || "";
     else if (argv[i] === "--json") a.json = true;
   }
   a.target = path.resolve(a.target);
@@ -113,6 +115,50 @@ function rewriteCogRemoteMetadata(dryRun) {
   return { action: "rewrite", owner: repo.owner, repository: repo.repository };
 }
 
+function codeOwnerFile(owner) {
+  if (!owner) {
+    return [
+      "# Code owners for this target repository.",
+      "# No owner is configured yet, so the installed ruleset keeps code-owner",
+      "# review disabled and relies on the regular approving-review requirement.",
+      "# Re-run install.js with --code-owner @org/team or edit this file and",
+      "# enable require_code_owner_review in .github/rulesets/main.json.",
+      "",
+    ].join("\n");
+  }
+  return [
+    "# Code owners for this target repository.",
+    `*                    ${owner}`,
+    `/hooks/              ${owner}`,
+    `/.github/            ${owner}`,
+    `/harness.config.json ${owner}`,
+    "",
+  ].join("\n");
+}
+
+function configureCodeOwnersAndRuleset(dryRun) {
+  const owner = String(a.codeOwner || "").trim();
+  const codeownersPath = path.join(a.target, ".github", "CODEOWNERS");
+  const rulesetPath = path.join(a.target, ".github", "rulesets", "main.json");
+  const out = { owner, codeowners: "skip", ruleset: "skip", requireCodeOwnerReview: !!owner };
+  if (!dryRun) {
+    fs.mkdirSync(path.dirname(codeownersPath), { recursive: true });
+    fs.writeFileSync(codeownersPath, codeOwnerFile(owner));
+  }
+  out.codeowners = owner ? "write-owner" : "write-template";
+  let ruleset = null;
+  try { ruleset = JSON.parse(fs.readFileSync(rulesetPath, "utf8")); } catch {}
+  if (ruleset) {
+    const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
+    if (pr && pr.parameters) {
+      pr.parameters.require_code_owner_review = !!owner;
+      if (!dryRun) fs.writeFileSync(rulesetPath, JSON.stringify(ruleset, null, 2) + "\n");
+      out.ruleset = owner ? "code-owner-required" : "code-owner-disabled";
+    }
+  }
+  return out;
+}
+
 // ---------- harness.config.json (generate if missing) ----------
 function writeConfig(force, dryRun) {
   const dst = path.join(a.target, "harness.config.json");
@@ -140,7 +186,7 @@ function ensureGitignore(dryRun) {
   if (!dryRun) {
     const pad = cur && !cur.endsWith("\n") ? "\n" : "";
     fs.writeFileSync(dst, cur + pad + (cur ? "\n" : "") +
-      "# agent runtime (персональные настройки раннера — не коммитим)\n" + missing.join("\n") + "\n");
+      "# agent runtime (local runner settings; do not commit)\n" + missing.join("\n") + "\n");
   }
   return { action: cur ? "appended" : "created", added: missing };
 }
@@ -151,11 +197,11 @@ function ensureGitignore(dryRun) {
 function mergeSettings(dryRun) {
   let wanted;
   try { wanted = JSON.parse(fs.readFileSync(path.join(SRC, "settings.example.json"), "utf8")).hooks; }
-  catch { return { status: "error", reason: "settings.example.json источника нечитаем" }; }
+  catch { return { status: "error", reason: "source settings.example.json is unreadable" }; }
   const dst = path.join(a.target, ".claude", "settings.json");
   let cur = {};
   try { cur = JSON.parse(fs.readFileSync(dst, "utf8")); }
-  catch (e) { if (e.code !== "ENOENT") return { status: "error", reason: "существующий .claude/settings.json невалиден — не трогаю" }; }
+  catch (e) { if (e.code !== "ENOENT") return { status: "error", reason: "existing .claude/settings.json is invalid; leaving it untouched" }; }
   cur.hooks = cur.hooks || {};
   const commands = (entry) => (entry.hooks || []).map((h) => String(h.command || "").replace(/\\/g, "/").replace(/\s+/g, " ").trim().toLowerCase());
   let added = 0;
@@ -177,7 +223,7 @@ function mergeSettings(dryRun) {
 // ---------- external activation steps ----------
 function runLefthook() {
   const r = spawnSync("lefthook", ["install"], { cwd: a.target, encoding: "utf8", shell: true });
-  if (r.error) return { ok: false, reason: r.error.code === "ENOENT" ? "lefthook не в PATH" : String(r.error.message) };
+  if (r.error) return { ok: false, reason: r.error.code === "ENOENT" ? "lefthook not found in PATH" : String(r.error.message) };
   return { ok: r.status === 0, code: r.status };
 }
 function runDoctor() {
@@ -194,14 +240,14 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, codeowners: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
 
   // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
-  catch { return finish(out, false, `целевой каталог не существует: ${a.target}`); }
+  catch { return finish(out, false, `target directory does not exist: ${a.target}`); }
 
   const isGit = fs.existsSync(path.join(a.target, ".git"));
-  if (!isGit) out.notes.push("целевой каталог — не git-репозиторий: lefthook install и branch-гейты не заработают, пока не будет `git init`.");
+  if (!isGit) out.notes.push("target directory is not a git repository: lefthook install and branch gates require `git init`.");
 
   const selfInstall = path.resolve(a.target) === path.resolve(SRC);
   out.mode = selfInstall ? "bootstrap" : "install";
@@ -218,12 +264,16 @@ const a = parseArgs(process.argv.slice(2));
       }
     }
     out.config = writeConfig(a.force, a.dryRun);
+    out.codeowners = configureCodeOwnersAndRuleset(a.dryRun);
+    if (!a.codeOwner) {
+      out.notes.push("CODEOWNERS: no --code-owner was provided, so target ruleset keeps required approving review but disables required code-owner review to avoid maintainer deadlocks.");
+    }
     if (out.files.some((f) => f.rel === ".github/workflows/ci.yml" && f.action !== "skip")) {
       // The CI mirror is copied, but it only activates after push and may require the workflow scope.
       out.notes.push("CI mirror .github/workflows/ci.yml was written; it activates after push and may require the gh workflow scope.");
     }
   } else {
-    out.notes.push("bootstrap-режим: цель совпадает с источником, файлы уже на месте — только вплетаю хуки и активирую.");
+    out.notes.push("bootstrap mode: target is the source repository; files are already present, so only wiring and activation run.");
   }
 
   // 2. Agent hooks in settings.json.
@@ -236,7 +286,7 @@ const a = parseArgs(process.argv.slice(2));
   // 3. Activation, except in dry-run mode.
   if (!a.dryRun) {
     out.lefthook = runLefthook();
-    if (!out.lefthook.ok) out.notes.push("lefthook: " + (out.lefthook.reason || `exit ${out.lefthook.code}`) + " — поставь lefthook и запусти `lefthook install`.");
+    if (!out.lefthook.ok) out.notes.push("lefthook: " + (out.lefthook.reason || `exit ${out.lefthook.code}`) + " - install lefthook and run `lefthook install`.");
     out.doctor = runDoctor();
     if (a.withRuleset) out.ruleset = runRuleset();
   }
@@ -246,7 +296,7 @@ const a = parseArgs(process.argv.slice(2));
   if (!a.dryRun && out.lefthook && !out.lefthook.ok) hardFailures.push("lefthook");
   if (!a.dryRun && out.doctor && out.doctor.ok === false) hardFailures.push("doctor");
   return finish(out, hardFailures.length === 0,
-    hardFailures.length ? "установка не fully enforceable: " + hardFailures.join(", ") + " (см. notes/doctor)" : null);
+    hardFailures.length ? "installation is not fully enforceable: " + hardFailures.join(", ") + " (see notes/doctor)" : null);
 })();
 
 function finish(out, ok, reason) {
@@ -254,27 +304,28 @@ function finish(out, ok, reason) {
   if (reason) out.reason = reason;
   if (a.json) { console.log(JSON.stringify(out)); process.exit(ok ? 0 : 1); }
 
-  const icon = (x) => (x === "write" ? "＋" : x === "overwrite" ? "↻" : "·");
-  console.log(`\nllm-dev-harness → ${out.target}  [${out.mode}${out.dryRun ? ", dry-run" : ""}]`);
+  const icon = (x) => (x === "write" ? "+" : x === "overwrite" ? "~" : "-");
+  console.log(`\nllm-dev-harness -> ${out.target}  [${out.mode}${out.dryRun ? ", dry-run" : ""}]`);
   if (out.files.length) {
     const w = out.files.filter((f) => f.action === "write").length;
     const o = out.files.filter((f) => f.action === "overwrite").length;
     const s = out.files.filter((f) => f.action === "skip").length;
-    console.log(`  файлы: +${w} новых, ↻${o} перезаписано, ·${s} уже было (--force чтобы обновить)`);
+    console.log(`  files: +${w} new, ${o} overwritten, ${s} already existed (--force to update)`);
     for (const f of out.files) if (f.action !== "skip") console.log(`    ${icon(f.action)} ${f.rel}`);
   }
-  if (out.config) console.log(`  harness.config.json: ${out.config.action === "skip" ? "уже был (не трогаю)" : out.config.action === "write" ? "сгенерён" : "перезаписан"}`);
-  if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent-хук(а) вплетено` : out.settings.status === "already" ? "agent-хуки уже вплетены" : "ошибка — " + out.settings.reason}`);
-  if (out.gitignore) console.log(`  .gitignore: ${out.gitignore.action === "already" ? "уже покрыт (.claude/settings.local.json)" : (out.gitignore.action === "created" ? "создан" : "дополнен") + " → .claude/settings.local.json"}`);
-  if (out.lefthook) console.log(`  lefthook install: ${out.lefthook.ok ? "ок" : "пропущено (" + (out.lefthook.reason || out.lefthook.code) + ")"}`);
-  if (out.doctor) console.log(`  doctor: ${out.doctor.ok ? "окружение в порядке" : "есть FAIL — запусти `node hooks/doctor.js`"}`);
-  if (out.ruleset) console.log(`  ruleset: ${out.ruleset.ok ? "применён" : "не применён (нужен gh admin + Pro/публичный репо)"}`);
-  if (out.notes.length) { console.log("\n  дальше:"); for (const n of out.notes) console.log("   • " + n); }
+  if (out.config) console.log(`  harness.config.json: ${out.config.action === "skip" ? "already present" : out.config.action === "write" ? "generated" : "overwritten"}`);
+  if (out.codeowners) console.log(`  CODEOWNERS/ruleset: ${out.codeowners.owner ? "owner " + out.codeowners.owner + " configured" : "template only, code-owner review disabled"}`);
+  if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent hook(s) merged` : out.settings.status === "already" ? "agent hooks already present" : "error - " + out.settings.reason}`);
+  if (out.gitignore) console.log(`  .gitignore: ${out.gitignore.action === "already" ? "already covers .claude/settings.local.json" : (out.gitignore.action === "created" ? "created" : "appended") + " -> .claude/settings.local.json"}`);
+  if (out.lefthook) console.log(`  lefthook install: ${out.lefthook.ok ? "ok" : "skipped (" + (out.lefthook.reason || out.lefthook.code) + ")"}`);
+  if (out.doctor) console.log(`  doctor: ${out.doctor.ok ? "environment ready" : "FAIL present - run `node hooks/doctor.js`"}`);
+  if (out.ruleset) console.log(`  ruleset: ${out.ruleset.ok ? "applied" : "not applied (requires gh admin plus Pro/public repository)"}`);
+  if (out.notes.length) { console.log("\n  next:"); for (const n of out.notes) console.log("   - " + n); }
   if (!out.dryRun && out.ok) {
-    console.log("\n  осталось вручную (по необходимости):");
-    console.log("   • серверный ruleset (реальный enforcement): node hooks/apply-ruleset.js  (gh admin, Pro/публичный репо)");
-    console.log("   • проверить: node hooks/verify.js --list  и  node hooks/doctor.js");
+    console.log("\n  manual follow-up when needed:");
+    console.log("   - server ruleset (real enforcement): node hooks/apply-ruleset.js  (gh admin, Pro/public repository)");
+    console.log("   - check: node hooks/verify.js --list and node hooks/doctor.js");
   }
-  console.log(ok ? "\n✅ установка завершена." : "\n❌ установка не завершена: " + (reason || ""));
+  console.log(ok ? "\ninstallation complete." : "\ninstallation failed: " + (reason || ""));
   process.exit(ok ? 0 : 1);
 }

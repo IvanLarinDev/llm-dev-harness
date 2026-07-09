@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// doctor.js — environment self-check (BACKLOG P2-12). Catches the classes of problem we
+// doctor.js - environment self-check (BACKLOG P2-12). Catches the classes of problem we
 // hit in development: hooks not wired, CRLF, NUL bytes, bad config, missing git identity.
 // Checks the migrated stack (lefthook + gitleaks + cocogitto). Run: node hooks/doctor.js
 //
@@ -42,12 +42,12 @@ function githubRepoFromUrl(url) {
 function checkTextFile(rel) {
   const p = path.join(ROOT, rel);
   let buf;
-  try { buf = fs.readFileSync(p); } catch { fail(rel + " отсутствует"); return; }
+  try { buf = fs.readFileSync(p); } catch { fail(rel + " is missing"); return; }
   const text = buf.toString("utf8");
-  if (!Buffer.from(text, "utf8").equals(buf)) fail(rel + ": невалидный UTF-8 или обрезанный многобайтный символ");
-  else if (buf.includes(0)) fail(rel + " содержит NUL-байты");
-  else if (buf.includes(13)) fail(rel + ": CRLF/CR line endings (нужен LF)");
-  else ok(rel + ": LF, UTF-8, без NUL");
+  if (!Buffer.from(text, "utf8").equals(buf)) fail(rel + ": invalid UTF-8 or truncated multibyte character");
+  else if (buf.includes(0)) fail(rel + " contains NUL bytes");
+  else if (buf.includes(13)) fail(rel + ": CRLF/CR line endings (LF required)");
+  else ok(rel + ": LF, UTF-8, no NUL");
 }
 function yamlKeyLine(line) {
   const m = String(line).match(/^(\s*)(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*:.*$/);
@@ -109,7 +109,7 @@ function checkRulesetPrReview(rel) {
     else if (inRepo && !tracked(codeowners)) fail("ruleset: .github/CODEOWNERS must be tracked");
     else ok("ruleset: CODEOWNERS present and tracked");
   } else {
-    fail("ruleset: code-owner review is not required");
+    warn("ruleset: code-owner review is not required; configure a real CODEOWNERS reviewer before enabling it");
   }
 }
 function checkVerifyJobContract(workflowPath, required) {
@@ -146,16 +146,16 @@ function checkWorkflowSupplyChain(workflowPath) {
 // node / git
 ok("node " + process.version);
 const gv = gitSafe(["--version"]);
-gv ? ok(gv) : fail("git не найден в PATH");
+gv ? ok(gv) : fail("git not found in PATH");
 
 // repo
 const inRepo = gitSafe(["rev-parse", "--is-inside-work-tree"]) === "true";
 if (!inRepo) {
-  fail("не git-репозиторий (запусти внутри репо)");
+  fail("not a git repository; run inside a repository");
 } else {
   const name = gitSafe(["config", "--get", "user.name"]);
   const email = gitSafe(["config", "--get", "user.email"]);
-  (name && email) ? ok("git identity: " + name + " <" + email + ">") : warn("git user.name/email не заданы");
+  (name && email) ? ok("git identity: " + name + " <" + email + ">") : warn("git user.name/email are not configured");
 
   // lefthook wired into .git/hooks? (lefthook install writes a stub referencing lefthook)
   const hooksDir = gitSafe(["rev-parse", "--git-path", "hooks"]) || ".git/hooks";
@@ -165,7 +165,7 @@ if (!inRepo) {
       if (/lefthook/i.test(fs.readFileSync(path.join(ROOT, hooksDir, h), "utf8"))) { wired = true; break; }
     } catch {}
   }
-  wired ? ok("lefthook wired into .git/hooks") : warn("хуки не установлены — запусти: lefthook install");
+  wired ? ok("lefthook wired into .git/hooks") : warn("hooks are not installed; run: lefthook install");
 
   // .git must support the full lock-file lifecycle (write + unlink): git updates
   // the index and refs through <name>.lock -> rename/unlink. On filesystems that
@@ -178,27 +178,27 @@ if (!inRepo) {
     fs.writeFileSync(probe, "x");
     try {
       fs.unlinkSync(probe);
-      ok(".git допускает атомарные lock-операции (write + unlink)");
+      ok(".git supports atomic lock operations (write + unlink)");
     } catch {
-      fail(".git запрещает удаление файлов — git не уберёт *.lock (index.lock/ref.lock); commit/checkout/rebase упадут. Проверь mount (read-delete/FUSE) или права.");
+    fail(".git cannot delete files; git cannot clean up lock files and commit/checkout/rebase will fail. Check mount or permissions.");
     }
   } catch {
-    fail(".git недоступна для записи — git add/commit/checkout работать не будут. Проверь права/mount.");
+    fail(".git is not writable; git add/commit/checkout will not work. Check permissions or mount.");
   }
   try {
     if (fs.existsSync(path.join(gitDirAbs, "index.lock")))
-      warn("залипший .git/index.lock — удали, если ни один git-процесс не запущен (иначе add/commit блокируются)");
+      warn("stale .git/index.lock detected; remove it only if no git process is running");
   } catch {}
 }
 
-// runner + delegated tools in PATH (WARN, not FAIL — CI provides them)
+// runner + delegated tools in PATH (WARN, not FAIL; CI provides them)
 const tools = [
-  ["lefthook", "git-hook раннер (lefthook install)"],
+  ["lefthook", "git hook runner (lefthook install)"],
   ["gitleaks", "secret scanning (pre-commit + CI)"],
   ["cog", "cocogitto: conventional commits + release"],
 ];
 for (const t of tools) {
-  inPath(t[0]) ? ok(t[0] + " найден") : warn(t[0] + " не в PATH — " + t[1]);
+  inPath(t[0]) ? ok(t[0] + " found") : warn(t[0] + " not in PATH - " + t[1]);
 }
 
 const requiredHarnessFiles = [
@@ -235,8 +235,8 @@ if (missingHarness.length || untrackedHarness.length) {
   const parts = [];
   if (missingHarness.length) parts.push("missing: " + missingHarness.join(", "));
   if (untrackedHarness.length) parts.push("untracked: " + untrackedHarness.join(", "));
-  fail("harness not bootstrapped into repository main — " + parts.join("; ") +
-    ". Создай bootstrap PR и закоммить эти файлы перед dev/release loop.");
+  fail("harness not bootstrapped into repository main - " + parts.join("; ") +
+    ". Create a bootstrap PR and commit these files before the dev/release loop.");
 } else {
   ok("harness bootstrap files present and tracked");
 }
@@ -261,18 +261,18 @@ const cfgPath = path.join(ROOT, "harness.config.json");
 if (fs.existsSync(cfgPath)) {
   try {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    ok("harness.config.json — валидный JSON");
+    ok("harness.config.json is valid JSON");
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
     if (hasSelfTest && stacks) {
       const harness = stacks.find((s) => s && s.id === "harness");
       const steps = (harness && Array.isArray(harness.steps)) ? harness.steps : [];
       const runsSelfTest = steps.some((s) => /node\s+test\.js\b/.test(String(s && s.run || "")));
-      runsSelfTest ? ok("harness.config.json: VERIFY включает harness self-test") :
-        fail("harness.config.json: verify.stacks задан, но обязательный harness self-test (node test.js) отсутствует");
+      runsSelfTest ? ok("harness.config.json: VERIFY includes harness self-test") :
+        fail("harness.config.json: verify.stacks is set but required harness self-test (node test.js) is missing");
     }
   }
-  catch (e) { fail("harness.config.json невалиден: " + e.message); }
+  catch (e) { fail("harness.config.json is invalid: " + e.message); }
 }
 
 const cogPath = path.join(ROOT, "cog.toml");
@@ -282,9 +282,9 @@ if (fs.existsSync(cogPath)) {
   const changelogTemplate = tomlString(changelogSection, "template");
   const changelogOwner = tomlString(changelogSection, "owner");
   const changelogRepository = tomlString(changelogSection, "repository");
-  /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: нужен from_latest_tag=true для release bump от последнего v* tag");
-  /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: нужен ignore_merge_commits=true");
-  /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: нужен tag_prefix=\"v\"");
+  /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: from_latest_tag=true is required for release bumps from the latest v* tag");
+  /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: ignore_merge_commits=true is required");
+  /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: tag_prefix=\"v\" is required");
   /branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog)
     ? ok("cog.toml: branch_whitelist includes release/**")
     : fail("cog.toml: branch_whitelist must include release/** for release worktrees");
@@ -348,8 +348,8 @@ if (process.argv.includes("--json")) {
   console.log(JSON.stringify({ ok: fails === 0, results }));
 } else {
   console.log("harness doctor:");
-  const icon = { PASS: "✓", WARN: "⚠", FAIL: "✗" };
+  const icon = { PASS: "OK", WARN: "WARN", FAIL: "FAIL" };
   for (const r of results) console.log("  " + icon[r.level] + " " + r.msg);
-  console.log(fails ? "\n❌ doctor: " + fails + " FAIL — почини перед работой." : "\n✅ doctor: окружение в порядке.");
+  console.log(fails ? "\ndoctor: " + fails + " FAIL - fix before work." : "\ndoctor: environment is ready.");
 }
 process.exit(fails ? 1 : 0);

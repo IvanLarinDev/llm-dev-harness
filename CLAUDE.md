@@ -1,38 +1,37 @@
-# CLAUDE.md — правила работы с этим репозиторием
+# CLAUDE.md - repository operating notes
 
-## Cowork mode: путь к файлам (читать до любых правок)
+## Cowork Mode File Access
 
-В Cowork у этой папки два **несогласованных** «входа»:
+In Cowork mode this folder can have two inconsistent access paths:
 
-- **Файловые инструменты (Read / Write / Edit)** — пишут напрямую в реальный диск.
-  **Это единственный источник истины о содержимом файлов.**
-- **bash (`mcp__workspace__bash`)** — работает не с диском, а с отдельным Linux-монтированием
-  песочницы. Его кэш расходится с реальным NTFS, а запись/удаление дополнительно гейтятся.
+- File tools such as Read, Write, and Edit write directly to the real disk.
+  They are the source of truth for file contents.
+- `bash` through `mcp__workspace__bash` may operate through a separate mounted
+  sandbox. Its cache can diverge from NTFS, and writes/deletes may be gated.
 
-Из-за рассинхрона этих двух видов регулярно возникают ложные «повреждения»: фантомный
-`.git/index.lock`, которого нет на диске; «обрезанные» файлы; `rm`, падающий с
-`Operation not permitted`. Это артефакты монтирования, а не состояние диска.
+That mismatch can produce false damage signals: phantom `.git/index.lock`, files
+that look truncated, or `rm` failing with `Operation not permitted`. Treat those
+as mount artifacts, not evidence that the real disk is broken.
 
-### Правила
+Rules:
 
-1. **Правь файлы репозитория только через Read / Write / Edit.** Не использовать bash для
-   записи в файлы проekта (`sed -i`, `>`/`>>`, `node fs.writeFileSync`, `cat > file`, `tee`).
-2. **bash — только для запуска и чтения** (тесты/линт: `node hooks/test.js`,
-   `node hooks/verify.js`). Не делать по bash-выводу выводов о содержимом файла —
-   сверяться через Read.
-3. **git-ёмкую работу** (commit / checkout / rebase, lefthook, cog) вести в **Code-режиме
-   или нативном терминале Windows**, а не через bash Cowork: git через монтирование видит
-   фантомы (несуществующий `index.lock`, «залипшие» файлы) и блокирует операции.
-4. Если `rm` в bash падает с `Operation not permitted` — это **гейт удаления Cowork**, а не
-   «невозможно». Запросить `mcp__cowork__allow_cowork_file_delete` для нужного пути, затем
-   удалить. Не начинать форензику.
-5. Не гонять `node hooks/doctor.js` через bash Cowork: его `.git` lock-probe пишет в `.git`
-   и засоряет её на монтировании. Запускать doctor нативно (на Windows) — там он корректен.
+1. Edit repository files through file tools, not bash writes such as `sed -i`,
+   redirects, `node fs.writeFileSync`, `cat > file`, or `tee`.
+2. Use bash only for running and reading commands, such as `node hooks/test.js`
+   or `node hooks/verify.js`. Do not infer file contents from stale bash output;
+   read the file directly.
+3. Run git-heavy work such as commit, checkout, rebase, lefthook, and cog in Code
+   mode or a native Windows terminal, not through Cowork bash.
+4. If bash `rm` fails with `Operation not permitted`, request the appropriate
+   Cowork delete permission for the path instead of doing filesystem forensics.
+5. Run `node hooks/doctor.js` natively on Windows. Its `.git` lock probe writes
+   into `.git`, and mounted bash can leave misleading artifacts.
 
-## Харнес
+## Harness
 
-Канонический документ — **[AGENTS.md](./AGENTS.md)** (loop, слои, DESIGN-стадия, env).
-Перед правкой хуков — прочитать AGENTS.md → «Слои харнесса»; файлы харнесса (`hooks/`,
-`lefthook.yml`, конфиги, workflows) защищены `guard.js` и меняются только по явной просьбе.
+Canonical instructions live in [AGENTS.md](./AGENTS.md). Before editing hooks,
+read the "Harness Layers" section. Harness files such as `hooks/`,
+`lefthook.yml`, configs, and workflows are protected by `guard.js` and should be
+changed only for explicit harness work.
 
-Проверка после изменений: `node hooks/test.js` (self-test) → `node hooks/verify.js` (VERIFY).
+After changes, run `node hooks/test.js`, then `node hooks/verify.js`.

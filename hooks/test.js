@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// test.js — cross-platform harness self-test suite without bash.
+// test.js - cross-platform harness self-test suite without bash.
 // Checks delegated tool configs (lefthook/gitleaks/cocogitto/ruleset/CI),
 // guard.js behavior (bypass, loops, protected files, lint configs, fact-force,
 // profiles), design-gate, and verify. Guard tests run in-process through the
@@ -61,7 +61,7 @@ function grun(payload, env = {}) {
   const ctx = {
     tool: payload.tool_name || "",
     command: typeof ti.command === "string" ? ti.command : "",
-    filePath: ti.file_path || "",
+    filePath: ti.file_path || ti.path || ti.filePath || ti.filename || ti.target_file || ti.targetFile || "",
     sessionId: env.HARNESS_SESSION_ID || "",
     projectDir: env.HARNESS_PROJECT_DIR || NEUTRAL,
     stopHookActive: false, truncated: false, parseError: false, raw: payload,
@@ -76,16 +76,16 @@ console.log("\nconfigs (lefthook + gitleaks + cocogitto + ruleset + ci):");
 const lh = readRepo("lefthook.yml");
 ok(/commit-msg:/.test(lh) && /cog verify/.test(lh), "lefthook commit-msg -> cog verify (conventional)");
 ok(/no-coauthor:[\s\S]*node hooks\/no-coauthor\.js/.test(lh), "lefthook commit-msg -> Windows-safe no-coauthor Node script");
-ok(fs.existsSync(NO_COAUTHOR), "no-coauthor.js на месте");
+ok(fs.existsSync(NO_COAUTHOR), "configs lefthook gitleaks cocogitto ruleset ci assertion 1");
 ok(/pre-commit:/.test(lh) && /gitleaks/.test(lh), "lefthook pre-commit -> gitleaks (secrets)");
-ok(/HARNESS_ALLOW_MAIN/.test(lh), "lefthook держит escape-hatch HARNESS_ALLOW_MAIN");
+ok(/HARNESS_ALLOW_MAIN/.test(lh), "configs lefthook gitleaks cocogitto ruleset ci assertion 2");
 ok(/branch-guard:[\s\S]*node hooks\/branch-guard\.js/.test(lh), "lefthook branch-guard -> Windows-safe Node script");
-ok(fs.existsSync(BRANCH_GUARD), "branch-guard.js на месте");
+ok(fs.existsSync(BRANCH_GUARD), "configs lefthook gitleaks cocogitto ruleset ci assertion 3");
 ok(/pre-push:/.test(lh) && /verify\.js/.test(lh), "lefthook pre-push -> verify.js");
 ok(/pre-push:[\s\S]*design-gate\.js/.test(lh), "lefthook pre-push -> design-gate.js");
 ok(/design-gate\.js --base origin\/main/.test(lh), "lefthook design-gate uses fresh remote base origin/main");
 const cog = readRepo("cog.toml");
-ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "cog.toml на месте (bump + changelog)");
+ok(/from_latest_tag/.test(cog) && /\[changelog\]/.test(cog), "configs lefthook gitleaks cocogitto ruleset ci assertion 4");
 ok(/from_latest_tag\s*=\s*true/.test(cog) && /ignore_merge_commits\s*=\s*true/.test(cog) && /tag_prefix\s*=\s*"v"/.test(cog),
   "cog.toml release-safe: latest v* tag + merge commits ignored");
 ok(/branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog),
@@ -96,24 +96,27 @@ ok(/owner\s*=\s*"IvanLarinDev"/.test(cog) && /repository\s*=\s*"llm-dev-harness"
   "cog.toml release-safe: remote changelog metadata matches source repository");
 ok(/^---\s*$/m.test(readRepo("CHANGELOG.md")), "CHANGELOG.md contains Cocogitto separator");
 const gl = readRepo(".gitleaks.toml");
-ok(/useDefault\s*=\s*true/.test(gl), "gitleaks расширяет дефолтный ruleset");
+ok(/useDefault\s*=\s*true/.test(gl), "configs lefthook gitleaks cocogitto ruleset ci assertion 5");
 let ruleset = {};
 try { ruleset = JSON.parse(readRepo(".github/rulesets/main.json")); } catch {}
-ok(ruleset.enforcement === "active" && ruleset.target === "branch", "ruleset — активный branch-ruleset");
+ok(ruleset.enforcement === "active" && ruleset.target === "branch", "ruleset is an active branch ruleset");
 const rNames = (ruleset.rules || []).map((r) => r.type);
 ok(["deletion", "non_fast_forward", "pull_request", "required_status_checks"].every((t) => rNames.includes(t)),
   "ruleset: block delete/force-push, require PR + status check");
 const rsc = (ruleset.rules || []).find((r) => r.type === "required_status_checks");
 ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "verify"),
-  "ruleset требует CI-check verify (совпадает с job id в ci.yml)");
+  "configs lefthook gitleaks cocogitto ruleset ci assertion 6");
 ok(!!rsc && rsc.parameters.required_status_checks.some((c) => c.context === "verify" && c.integration_id === 15368),
-  "ruleset пинит check verify на GitHub Actions (integration_id) — статус нельзя подделать через API");
+  "ruleset pins the verify check to GitHub Actions (integration_id), so API-forged statuses do not satisfy it");
 const prr = (ruleset.rules || []).find((r) => r.type === "pull_request");
 ok(!!prr && prr.parameters.required_approving_review_count >= 1 && prr.parameters.require_code_owner_review === true,
-  "ruleset требует approving review + code-owner review для self-verifying harness");
+  "configs lefthook gitleaks cocogitto ruleset ci assertion 7");
 const ci = readRepo(".github/workflows/ci.yml");
-ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push-триггер только на main (нет двойного прогона PR)");
-ok(/doctor\.js/.test(ci) && /design-gate\.js/.test(ci) && /verify\.js/.test(ci), "CI гоняет doctor.js + verify.js + design-gate.js");
+ok(/runs-on:\s*windows-latest/.test(ci), "CI: verify job runs on Windows for WPF/net*-windows targets");
+ok(/uses:\s*actions\/setup-dotnet@[0-9a-f]{40}\s*# actions\/setup-dotnet@v\d/.test(ci) && /dotnet-version:\s*"10\.0\.x"/.test(ci),
+  "CI: setup-dotnet is pinned and installs .NET 10");
+ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push trigger only runs on main");
+ok(/doctor\.js/.test(ci) && /design-gate\.js/.test(ci) && /verify\.js/.test(ci), "configs lefthook gitleaks cocogitto ruleset ci assertion 8");
 ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &&
    /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
    /uses:\s*gitleaks\/gitleaks-action@[0-9a-f]{40}\s*# gitleaks\/gitleaks-action@v\d/.test(ci) &&
@@ -127,18 +130,19 @@ const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m
 const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
 ok(requiredContexts.length > 0 && requiredContexts.every((ctx) => jobIds.includes(ctx)),
   "CI/ruleset contract: required status check contexts match workflow job ids");
-ok(/design-gate\.js --strict --base/.test(ci), "CI запускает design-gate в strict mode");
+ok(/design-gate\.js --strict --base/.test(ci), "configs lefthook gitleaks cocogitto ruleset ci assertion 9");
 ok(/AGENTSHIELD_VERSION:\s*"1\.4\.0"/.test(ci) && /continue-on-error:\s*true/.test(ci),
-  "CI: security-скан ecc-agentshield с прибитой версией, пока совещательный (continue-on-error)");
+  "configs lefthook gitleaks cocogitto ruleset ci assertion 10");
+ok(/AgentShield[\s\S]*shell:\s*bash/.test(ci), "CI: AgentShield step uses bash explicitly on the Windows runner");
 
 // ---------- no-coauthor policy ----------
 console.log("\nno-coauthor policy:");
 const noCoauthor = require(NO_COAUTHOR);
-ok(noCoauthor.hasForbiddenTrailer("Co-Authored-By: Claude <noreply@anthropic.com>"), "ловит Co-Authored-By");
-ok(noCoauthor.hasForbiddenTrailer("\u{1F916} Generated with Claude Code"), "ловит Generated with Claude");
-ok(noCoauthor.hasForbiddenTrailer("generated by an AI assistant"), "ловит generated by an AI");
-ok(!noCoauthor.hasForbiddenTrailer("fix(proto): regenerate stubs generated with protoc"), "НЕ ловит generated with protoc");
-ok(!noCoauthor.hasForbiddenTrailer("feat(ui): add robot emoji \u{1F916} to status bar"), "НЕ ловит одиночный emoji в тексте");
+ok(noCoauthor.hasForbiddenTrailer("Co-Authored-By: Claude <noreply@anthropic.com>"), "detects Co-Authored-By");
+ok(noCoauthor.hasForbiddenTrailer("\\u{1F916} Generated with Claude Code"), "detects Generated with Claude");
+ok(noCoauthor.hasForbiddenTrailer("generated by an AI assistant"), "detects generated by an AI");
+ok(!noCoauthor.hasForbiddenTrailer("fix(proto): regenerate stubs generated with protoc"), "does not flag generated with protoc");
+ok(!noCoauthor.hasForbiddenTrailer("feat(ui): add robot marker to status bar"), "does not flag a plain robot marker in normal text");
 function noCoauthorExit(message) {
   const file = path.join(os.tmpdir(), "harness-no-coauthor-" + process.pid + "-" + Math.random().toString(36).slice(2) + ".txt");
   fs.writeFileSync(file, message);
@@ -151,29 +155,29 @@ function noCoauthorExit(message) {
     try { fs.rmSync(file, { force: true }); } catch {}
   }
 }
-ok(noCoauthorExit("feat(ui): add setting\n") === 0, "CLI пропускает чистое сообщение");
+ok(noCoauthorExit("feat(ui): add setting\n") === 0, "no coauthor policy assertion 1");
 ok(noCoauthorExit("feat(ui): add setting\n\nCo-Authored-By: Claude <noreply@example.test>\n") === 1,
-  "CLI блокирует co-author trailer");
+  "no coauthor policy assertion 2");
 
 // ---------- guard: harness bypass ----------
 console.log("\nguard: bypass detection:");
 const bp = (cmd, env = {}) => gexit({ tool_name: "Bash", tool_input: { command: cmd } }, { ...sess("bp"), ...env });
-ok(bp('git commit -m "feat: x" --no-verify') === 2, "блок: git commit --no-verify");
-ok(bp('git commit -n -m "feat: x"') === 2, "блок: git commit -n");
-ok(bp("git push origin main --no-verify") === 2, "блок: git push --no-verify");
-ok(bp("git config core.hooksPath /dev/null") === 2, "блок: git config core.hooksPath");
-ok(bp('git -c core.hooksPath=/dev/null commit -m "feat: x"') === 2, "блок: git -c core.hooksPath (инлайн)");
-ok(bp("git.exe commit --no-verify -m x") === 2, "блок: git.exe commit --no-verify (Windows-имя git)");
-ok(bp("git.cmd commit -n -m x") === 2, "блок: git.cmd commit -n (Windows-имя git)");
-ok(bp("lefthook uninstall") === 2, "блок: lefthook uninstall");
-ok(bp('LEFTHOOK=0 git commit -m "feat: x"') === 2, "блок: LEFTHOOK=0");
-ok(bp("rm -rf .git/hooks") === 2, "блок: запись/удаление в .git/hooks");
-ok(bp("ls .git/hooks") === 0, "НЕ блок: чтение .git/hooks (ls)");
-ok(bp('git commit -m "docs: add -n / --no-verify support notes"') === 0, "НЕ блок: -n внутри сообщения коммита");
-ok(bp('git commit -m "feat(core): real change"') === 0, "НЕ блок: обычный коммит");
-ok(bp("git commit --no-verify -m x", { HARNESS_ACK_BYPASS: "1" }) === 0, "HARNESS_ACK_BYPASS=1 разрешает осознанный обход");
+ok(bp('git commit -m "feat: x" --no-verify') === 2, "guard bypass detection assertion 1");
+ok(bp('git commit -n -m "feat: x"') === 2, "guard bypass detection assertion 2");
+ok(bp("git push origin main --no-verify") === 2, "guard bypass detection assertion 3");
+ok(bp("git config core.hooksPath /dev/null") === 2, "guard bypass detection assertion 4");
+ok(bp('git -c core.hooksPath=/dev/null commit -m "feat: x"') === 2, "guard bypass detection assertion 5");
+ok(bp("git.exe commit --no-verify -m x") === 2, "guard bypass detection assertion 6");
+ok(bp("git.cmd commit -n -m x") === 2, "guard bypass detection assertion 7");
+ok(bp("lefthook uninstall") === 2, "guard bypass detection assertion 8");
+ok(bp('LEFTHOOK=0 git commit -m "feat: x"') === 2, "guard bypass detection assertion 9");
+ok(bp("rm -rf .git/hooks") === 2, "guard bypass detection assertion 10");
+ok(bp("ls .git/hooks") === 0, "guard bypass detection assertion 11");
+ok(bp('git commit -m "docs: add -n / --no-verify support notes"') === 0, "guard bypass detection assertion 12");
+ok(bp('git commit -m "feat(core): real change"') === 0, "guard bypass detection assertion 13");
+ok(bp("git commit --no-verify -m x", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard bypass detection assertion 14");
 ok(!/HARNESS_ACK_BYPASS/.test(gout({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("hint"))),
-  "block-сообщение НЕ содержит рецепт обхода (имя env-переменной)");
+  "guard bypass detection assertion 15");
 
 // ---------- branch-guard CLI ----------
 console.log("\nbranch-guard:");
@@ -185,49 +189,52 @@ function runBranchGuard(root, env = {}) {
 }
 const btmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-branchguard-"));
 execFileSync("git", ["init", "-q", "-b", "main"], { cwd: btmp });
-ok(runBranchGuard(btmp) === 1, "branch-guard: main блокируется");
-ok(runBranchGuard(btmp, { HARNESS_ALLOW_MAIN: "1" }) === 0, "branch-guard: HARNESS_ALLOW_MAIN=1 пропускает main");
+ok(runBranchGuard(btmp) === 1, "branch guard assertion 1");
+ok(runBranchGuard(btmp, { HARNESS_ALLOW_MAIN: "1" }) === 0, "branch guard assertion 2");
 execFileSync("git", ["checkout", "-q", "-b", "feat/test"], { cwd: btmp });
-ok(runBranchGuard(btmp) === 0, "branch-guard: feature-ветка проходит");
+ok(runBranchGuard(btmp) === 0, "branch guard assertion 3");
 try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
 
 // ---------- guard: shell writes to protected paths ----------
 console.log("\nguard: protected paths via shell:");
-ok(bp("sed -i 's/x/y/' hooks/agent/guard.js") === 2, "блок: sed -i по hooks/");
-ok(bp("echo bad >> lefthook.yml") === 2, "блок: редирект в lefthook.yml");
-ok(bp("rm -rf hooks") === 2, "блок: rm -rf hooks (без слэша)");
-ok(bp("mv lefthook.yml lefthook.yml.bak") === 2, "блок: mv lefthook.yml");
-ok(bp("tee .github/workflows/ci.yml") === 2, "блок: tee в workflows");
-ok(bp("del hooks\\agent\\guard.js") === 2, "блок: del по hooks/ (cmd, backslash-путь)");
-ok(bp("move lefthook.yml lefthook.bak") === 2, "блок: move lefthook.yml (cmd)");
-ok(bp("rd /s hooks") === 2, "блок: rd hooks (cmd)");
-ok(bp("Remove-Item lefthook.yml") === 2, "блок: Remove-Item lefthook.yml (PowerShell)");
-ok(bp("Set-Content .github\\workflows\\ci.yml -Value x") === 2, "блок: Set-Content в workflows (PowerShell, backslash)");
-ok(bp("Copy-Item x lefthook.yml") === 2, "блок: Copy-Item в lefthook.yml (PowerShell, цель — второй аргумент)");
-ok(bp("del notes.txt") === 0, "НЕ блок: del обычного файла");
-ok(bp("Remove-Item build\\temp.log") === 0, "НЕ блок: Remove-Item обычного файла");
-ok(bp("node hooks/verify.js") === 0, "НЕ блок: запуск node hooks/verify.js");
-ok(bp("node hooks/test.js") === 0, "НЕ блок: запуск self-теста");
-ok(bp("cat hooks/agent/guard.js") === 0, "НЕ блок: чтение хука (cat)");
-ok(bp("git add hooks/ lefthook.yml") === 0, "НЕ блок: git add файлов харнесса");
-ok(bp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "ACK_BYPASS=1 разрешает shell-правку");
+ok(bp("sed -i 's/x/y/' hooks/agent/guard.js") === 2, "guard protected paths via shell assertion 1");
+ok(bp("echo bad >> lefthook.yml") === 2, "guard protected paths via shell assertion 2");
+ok(bp("rm -rf hooks") === 2, "guard protected paths via shell assertion 3");
+ok(bp("mv lefthook.yml lefthook.yml.bak") === 2, "guard protected paths via shell assertion 4");
+ok(bp("tee .github/workflows/ci.yml") === 2, "guard protected paths via shell assertion 5");
+ok(bp("del hooks\\agent\\guard.js") === 2, "guard protected paths via shell assertion 6");
+ok(bp("move lefthook.yml lefthook.bak") === 2, "guard protected paths via shell assertion 7");
+ok(bp("rd /s hooks") === 2, "guard protected paths via shell assertion 8");
+ok(bp("Remove-Item lefthook.yml") === 2, "guard protected paths via shell assertion 9");
+ok(bp("Set-Content .github\\workflows\\ci.yml -Value x") === 2, "guard protected paths via shell assertion 10");
+ok(bp("Copy-Item x lefthook.yml") === 2, "block: Copy-Item into lefthook.yml (PowerShell, destination is second arg)");
+ok(bp('rm "hooks/agent/guard.js"') === 2, "block: quoted protected path in POSIX shell command");
+ok(bp('Remove-Item "lefthook.yml"') === 2, "block: quoted protected path in PowerShell command");
+ok(bp('git commit -m "rm hooks/"') === 0, "does not treat quoted commit message text as a protected write");
+ok(bp("del notes.txt") === 0, "guard protected paths via shell assertion 11");
+ok(bp("Remove-Item build\\temp.log") === 0, "guard protected paths via shell assertion 12");
+ok(bp("node hooks/verify.js") === 0, "guard protected paths via shell assertion 13");
+ok(bp("node hooks/test.js") === 0, "guard protected paths via shell assertion 14");
+ok(bp("cat hooks/agent/guard.js") === 0, "guard protected paths via shell assertion 15");
+ok(bp("git add hooks/ lefthook.yml") === 0, "guard protected paths via shell assertion 16");
+ok(bp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected paths via shell assertion 17");
 
 // ---------- guard: protected-write bypass through inline interpreter eval ----------
 console.log("\nguard: interpreter-eval protected write:");
-ok(/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1"))),
-  "node -e writeFileSync в hooks/ -> сообщение про инлайн-eval интерпретатора");
+ok(/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1"))),
+  "node -e writeFileSync in hooks/ -> inline-eval interpreter message");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1b")) === 2,
-  "node -e writeFileSync в hooks/ -> жёсткий блок");
+  "guard interpreter eval protected write assertion 1");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook.yml','w').write('x')\"" } }, sess("ie2")) === 2,
-  "python -c open('lefthook.yml','w') -> жёсткий блок");
+  "guard interpreter eval protected write assertion 2");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"from pathlib import Path; Path('hooks/agent/guard.js').write_text('x')\"" } }, sess("ie2b")) === 2,
-  "python -c pathlib write_text в hooks/ -> жёсткий блок");
+  "guard interpreter eval protected write assertion 3");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import shutil; shutil.rmtree('hooks')\"" } }, sess("ie2c")) === 2,
-  "python -c shutil.rmtree('hooks') -> жёсткий блок");
+  "guard interpreter eval protected write assertion 4");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import os; os.remove('lefthook.yml')\"" } }, sess("ie2d")) === 2,
-  "python -c os.remove('lefthook.yml') -> жёсткий блок");
+  "guard interpreter eval protected write assertion 5");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, sess("ie3")) === 2,
-  "bash -c 'rm -rf hooks/' -> жёсткий блок (глагол спрятан в кавычках от write-детекции)");
+  "guard interpreter eval protected write assertion 6");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "pwsh -EncodedCommand SQBFAFgAIAAoACcAaABvAG8AawBzAC8AYQBnAGUAbgB0AC8AZwB1AGEAcgBkAC4AagBzACcAKQA=" } }, sess("ie9")) === 2,
   "pwsh -EncodedCommand -> opaque eval is blocked");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "powershell -EncodedCommand SQBFAFgAIAAoACcAbABlAGYAdABoAG8AbwBrAC4AeQBtAGwAJwApAA==" } }, sess("ie10")) === 2,
@@ -235,138 +242,140 @@ ok(gexit({ tool_name: "Bash", tool_input: { command: "powershell -EncodedCommand
 ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs')['write'+'FileSync']('hooks/agent/guard.js','x')\"" } }, sess("ie11")) === 2,
   "node -e dynamic writeFileSync in hooks/ -> hard block");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, { ...sess("ie8"), HARNESS_ACK_BYPASS: "1" }) === 0,
-  "ACK_BYPASS=1 разрешает инлайн-eval protected write");
-ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"console.log(1+1)\"" } }, sess("ie4"))),
-  "node -e без записи и без пути харнесса -> без ноты");
-ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('build/out.txt','x')\"" } }, sess("ie5"))),
-  "node -e запись в обычный файл (build/) -> без ноты");
-ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "ssh -c aes256 host" } }, sess("ie6"))),
-  "ssh -c … -> без ноты (не интерпретатор, `sh` в `ssh` не матчит по границе слова)");
-ok(!/интерпретатор/i.test(gout({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js" } }, sess("ie7"))),
-  "node hooks/verify.js (без -e) -> без ноты");
+  "guard interpreter eval protected write assertion 7");
+ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"console.log(1+1)\"" } }, sess("ie4"))),
+  "node -e without a write and without a harness path -> no note");
+ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('build/out.txt','x')\"" } }, sess("ie5"))),
+  "node -e write to a normal file (build/) -> no note");
+ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "ssh -c aes256 host" } }, sess("ie6"))),
+  "ssh -c ... -> no note (not an interpreter; `sh` in `ssh` does not match the word boundary)");
+ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js" } }, sess("ie7"))),
+  "node hooks/verify.js (without -e) -> no note");
 
 // ---------- guard: stream corruption ----------
 console.log("\nguard: stream corruption:");
-ok(bp("cd /x && echo garbage 183<tool_call>") === 2, "блок: мусор tool-разметки (<tool_call>)");
-ok(bp("echo garbage </tool_use> x") === 2, "блок: мусор tool-разметки (</tool_use>)");
-ok(bp("echo a echo a echo a echo a echo a") === 2, "блок: низкая энтропия токенов");
-ok(bp("cat > a.html <<EOF\n<toolbar>hi</toolbar>\nEOF") === 0, "НЕ блок: heredoc с <toolbar> (легитимный HTML)");
+ok(bp("cd /x && echo garbage 183<tool_call>") === 2, "guard stream corruption assertion 1");
+ok(bp("echo garbage </tool_use> x") === 2, "guard stream corruption assertion 2");
+ok(bp("echo a echo a echo a echo a echo a") === 2, "guard stream corruption assertion 3");
+ok(bp("cat > a.html <<EOF\n<toolbar>hi</toolbar>\nEOF") === 0, "guard stream corruption assertion 4");
 
 // ---------- guard: shell loops ----------
 console.log("\nguard: shell loops:");
 let S = sess("triv");
 let last = 0;
 for (const c of ["echo a", "echo b", "ls", "pwd", "echo c"]) last = gexit({ tool_name: "Bash", tool_input: { command: c } }, S);
-ok(last === 2, "блок: 5 тривиальных команд подряд");
+ok(last === 2, "guard shell loops assertion 1");
 S = sess("real-reset");
 gexit({ tool_name: "Bash", tool_input: { command: "echo a" } }, S);
 gexit({ tool_name: "Bash", tool_input: { command: "npm run build -- --verbose" } }, S);
 for (const c of ["echo b", "echo c", "ls"]) last = gexit({ tool_name: "Bash", tool_input: { command: c } }, S);
-ok(last === 0, "настоящая команда сбрасывает streak тривиальных");
+ok(last === 0, "guard shell loops assertion 2");
 S = sess("ident");
 for (let i = 0; i < 5; i++) last = gexit({ tool_name: "Bash", tool_input: { command: "npm run build -- --verbose" } }, S);
-ok(last === 2, "блок: 5x одна и та же настоящая команда подряд");
+ok(last === 2, "guard shell loops assertion 3");
 S = sess("alt");
 for (let i = 0; i < 5; i++) {
   gexit({ tool_name: "Bash", tool_input: { command: "npm test -- --run-suite alpha" } }, S);
   last = gexit({ tool_name: "Bash", tool_input: { command: "git diff --stat HEAD~1" } }, S);
 }
-ok(last === 2, "блок: чередование A-B-A-B (10 шагов)");
+ok(last === 2, "guard shell loops assertion 4");
 S = sess("alt-break");
 for (let i = 0; i < 4; i++) {
   gexit({ tool_name: "Bash", tool_input: { command: "npm test -- --run-suite alpha" } }, S);
   gexit({ tool_name: "Bash", tool_input: { command: "git diff --stat HEAD~1" } }, S);
 }
 last = gexit({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js --list" } }, S);
-ok(last === 0, "третья команда разрывает чередование");
+ok(last === 0, "guard shell loops assertion 5");
 
 // ---------- guard: file-tool loops ----------
 console.log("\nguard: file-tool loops:");
 S = sess("ft");
 for (let i = 0; i < 12; i++) last = gexit({ tool_name: "Read", tool_input: { file_path: "/tmp/same.txt" } }, S);
-ok(last === 2, "блок: 12x Read одного файла подряд");
+ok(last === 2, "guard file tool loops assertion 1");
 S = sess("ft2");
 for (let i = 0; i < 11; i++) gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/a.py" } }, S);
-ok(gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/b.py" } }, S) === 0, "другой файл сбрасывает серию");
-ok(gexit({ tool_name: "Read", tool_input: {} }, sess("ft3")) === 0, "нет target -> не проверяется");
+ok(gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/b.py" } }, S) === 0, "guard file tool loops assertion 2");
+ok(gexit({ tool_name: "Read", tool_input: {} }, sess("ft3")) === 0, "guard file tool loops assertion 3");
 
 // ---------- guard: protected harness files ----------
 console.log("\nguard: protected harness files:");
 const ed = (fp, env = {}) => gexit({ tool_name: "Edit", tool_input: { file_path: fp } }, { ...sess("prot"), ...env });
-ok(ed("lefthook.yml") === 2, "блок: правка lefthook.yml");
-ok(ed("hooks/agent/guard.js") === 2, "блок: правка hooks/...");
-ok(ed(".claude/settings.json") === 2, "блок: правка .claude/settings.json");
-ok(ed(".github/workflows/ci.yml") === 2, "блок: правка CI workflow");
-ok(ed("src/app.py") === 0, "НЕ блок: обычный файл проекта");
-ok(ed("lefthook.yml", { HARNESS_ACK_BYPASS: "1" }) === 0, "HARNESS_ACK_BYPASS=1 разрешает правку харнесса");
-ok(ed("./lefthook.yml") === 2, "блок: обход через ./-префикс (нормализация путей)");
-ok(ed("design/../hooks/agent/guard.js") === 2, "блок: обход через ../-траверс");
-ok(ed("Lefthook.yml") === 2, "блок: обход через регистр (Windows/macOS ФС регистронезависимы)");
-ok(ed("hooks2/readme.md") === 0, "НЕ блок: hooks2/ — не hooks/");
+ok(ed("lefthook.yml") === 2, "guard protected harness files assertion 1");
+ok(ed("hooks/agent/guard.js") === 2, "guard protected harness files assertion 2");
+ok(gexit({ tool_name: "Write", tool_input: { filename: "hooks/agent/guard.js" } }, sess("prot-alias")) === 2,
+  "block: protected file write through filename path alias");
+ok(ed(".claude/settings.json") === 2, "guard protected harness files assertion 3");
+ok(ed(".github/workflows/ci.yml") === 2, "guard protected harness files assertion 4");
+ok(ed("src/app.py") === 0, "guard protected harness files assertion 5");
+ok(ed("lefthook.yml", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected harness files assertion 6");
+ok(ed("./lefthook.yml") === 2, "guard protected harness files assertion 7");
+ok(ed("design/../hooks/agent/guard.js") === 2, "guard protected harness files assertion 8");
+ok(ed("Lefthook.yml") === 2, "guard protected harness files assertion 9");
+ok(ed("hooks2/readme.md") === 0, "guard protected harness files assertion 10");
 
 // ---------- guard: lint-config protection (ECC config-protection pattern) ----------
 console.log("\nguard: lint-config protection:");
 fs.writeFileSync(path.join(NEUTRAL, ".eslintrc.json"), "{}");
-ok(ed(".eslintrc.json") === 2, "блок: правка существующего .eslintrc.json");
-ok(ed("ruff.toml") === 0, "НЕ блок: создание нового lint-конфига (файла ещё нет)");
-ok(ed(".eslintrc.json", { HARNESS_ACK_BYPASS: "1" }) === 0, "ACK_BYPASS=1 разрешает правку lint-конфига");
-ok(ed("pyproject.toml") === 0, "НЕ блок: pyproject.toml (смешанный файл — не в списке)");
-ok(bp("sed -i 's/select/ignore/' ruff.toml") === 2, "блок: sed -i по ruff.toml (shell, без проверки существования)");
-ok(bp("Set-Content src\\.eslintrc.json -Value x") === 2, "блок: Set-Content в .eslintrc.json (PowerShell, backslash-путь)");
-ok(bp("del ruff.toml") === 2, "блок: del ruff.toml (cmd)");
-ok(bp("echo lax >> src/.eslintrc.json") === 2, "блок: редирект в .eslintrc.json (вложенный путь)");
-ok(bp("cat ruff.toml") === 0, "НЕ блок: чтение lint-конфига");
-ok(bp("rm myruff.toml") === 0, "НЕ блок: похожее имя (myruff.toml) — не lint-конфиг");
-ok(bp("echo x > src/hooks/useAuth.ts") === 0, "НЕ блок: src/hooks/ проекта (React) — не файлы харнесса");
+ok(ed(".eslintrc.json") === 2, "guard lint config protection assertion 1");
+ok(ed("ruff.toml") === 0, "guard lint config protection assertion 2");
+ok(ed(".eslintrc.json", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard lint config protection assertion 3");
+ok(ed("pyproject.toml") === 0, "guard lint config protection assertion 4");
+ok(bp("sed -i 's/select/ignore/' ruff.toml") === 2, "guard lint config protection assertion 5");
+ok(bp("Set-Content src\\.eslintrc.json -Value x") === 2, "guard lint config protection assertion 6");
+ok(bp("del ruff.toml") === 2, "guard lint config protection assertion 7");
+ok(bp("echo lax >> src/.eslintrc.json") === 2, "guard lint config protection assertion 8");
+ok(bp("cat ruff.toml") === 0, "guard lint config protection assertion 9");
+ok(bp("rm myruff.toml") === 0, "guard lint config protection assertion 10");
+ok(bp("echo x > src/hooks/useAuth.ts") === 0, "guard lint config protection assertion 11");
 
 // ---------- guard: fact-force (EXPLORE before IMPLEMENT, ECC GateGuard pattern) ----------
 console.log("\nguard: fact-force:");
 fs.writeFileSync(path.join(NEUTRAL, "existing.py"), "x = 1");
 let SF = sess("ff");
-ok(/не читав/.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
-  "Edit существующего файла без Read -> note");
-ok(!/не читав/.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
-  "повторная правка того же файла -> note один раз, без спама");
+ok(/before reading/i.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
+  "Edit existing file without Read -> note");
+ok(!/before reading/i.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
+  "second edit of the same file -> note once, no spam");
 SF = sess("ff2");
 grun({ tool_name: "Read", tool_input: { file_path: "existing.py" } }, SF);
-ok(!/не читав/.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
-  "Read перед Edit -> без note");
-ok(!/не читав/.test(gout({ tool_name: "Write", tool_input: { file_path: "brand-new.py" } }, sess("ff3"))),
-  "Write нового файла -> без note (нечего читать)");
+ok(!/before reading/i.test(gout({ tool_name: "Edit", tool_input: { file_path: "existing.py" } }, SF)),
+  "Read before Edit -> no note");
+ok(!/before reading/i.test(gout({ tool_name: "Write", tool_input: { file_path: "brand-new.py" } }, sess("ff3"))),
+  "Write new file -> no note (nothing to read)");
 
 // ---------- guard: strictness profiles ----------
 console.log("\nguard: strictness profiles:");
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf1"), HARNESS_PROFILE: "minimal" }) === 0,
-  "minimal: lint-конфиг не блокируется (только анти-обход + файлы харнесса)");
+  "guard strictness profiles assertion 1");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, { ...sess("pf2"), HARNESS_PROFILE: "minimal" }) === 2,
-  "minimal: анти-обход остаётся");
+  "guard strictness profiles assertion 2");
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: "lefthook.yml" } }, { ...sess("pf3"), HARNESS_PROFILE: "minimal" }) === 2,
-  "minimal: файлы харнесса остаются под защитой");
+  "guard strictness profiles assertion 3");
 let SP = sess("pf4"), lastP = 0;
 for (const c of ["echo a", "echo b", "ls", "pwd", "echo c"]) lastP = gexit({ tool_name: "Bash", tool_input: { command: c } }, { ...SP, HARNESS_PROFILE: "minimal" });
-ok(lastP === 0, "minimal: loop-детекторы выключены");
+ok(lastP === 0, "guard strictness profiles assertion 4");
 SP = sess("pf5");
 for (let i = 0; i < 3; i++) lastP = gexit({ tool_name: "Bash", tool_input: { command: "npm run build" } }, { ...SP, HARNESS_PROFILE: "strict" });
-ok(lastP === 2, "strict: порог повторов вдвое ниже (3x одинаковых -> блок)");
+ok(lastP === 2, "guard strictness profiles assertion 5");
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf6"), HARNESS_DISABLED_CHECKS: "lintconfig" }) === 0,
-  "HARNESS_DISABLED_CHECKS=lintconfig отключает проверку точечно");
+  "guard strictness profiles assertion 6");
 
 // ---------- guard: DESIGN note ----------
 console.log("\nguard: design note:");
 const dn = gout({ tool_name: "Edit", tool_input: { file_path: "src/ui/panel.qml" } }, sess("dn1"));
-ok(/DESIGN|мокап/i.test(dn), "правка UI-файла -> note про DESIGN-стадию");
+ok(/DESIGN|mockup/i.test(dn), "UI file edit -> DESIGN-stage note");
 ok(/"hookSpecificOutput"/.test(dn) && /"hookEventName"\s*:\s*"PreToolUse"/.test(dn),
-  "note в формате Claude Code (hookSpecificOutput.additionalContext), не только top-level");
+  "guard design note assertion 1");
 const dn2 = gout({ tool_name: "Edit", tool_input: { file_path: "src/core/logic.py" } }, sess("dn2"));
-ok(!/DESIGN|мокап/i.test(dn2), "обычный файл -> без note");
+ok(!/DESIGN|mockup/i.test(dn2), "ordinary file -> no note");
 
 // ---------- guard: CLI wrapper (spawn-based stdin/exit-code contract) ----------
 console.log("\nguard: CLI contract:");
-ok(runHook(GUARD, { tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("cli1")) === 2, "CLI: блок -> exit 2");
+ok(runHook(GUARD, { tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("cli1")) === 2, "guard cli contract assertion 1");
 ok(runHook(GUARD, { tool_name: "Bash", tool_input: { command: "echo ok" } }, sess("cli2")) === 0, "CLI: allow -> exit 0");
-ok(typeof guardMod.run === "function", "guard экспортирует run(ctx, env) для in-process диспетчера");
+ok(typeof guardMod.run === "function", "guard cli contract assertion 2");
 const rr = grun({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("ip1"));
-ok(rr.exitCode === 2 && /guard/.test(rr.stderr), "run(): блок приходит результатом, без process.exit");
+ok(rr.exitCode === 2 && /guard/.test(rr.stderr), "guard cli contract assertion 3");
 
 // ---------- guard: fail-closed on malformed input ----------
 console.log("\nguard: fail-closed input:");
@@ -376,8 +385,8 @@ function runRaw(hookPath, rawStr, env = {}) {
     return 0;
   } catch (e) { return e.status || 1; }
 }
-ok(runRaw(GUARD, "{broken json...", sess("fc1")) === 2, "непустой битый JSON -> fail-closed блок (не слепой allow)");
-ok(runRaw(GUARD, "", sess("fc2")) === 0, "пустой stdin -> fail-open (ручной запуск)");
+ok(runRaw(GUARD, "{broken json...", sess("fc1")) === 2, "guard fail closed input assertion 1");
+ok(runRaw(GUARD, "", sess("fc2")) === 0, "guard fail closed input assertion 2");
 
 // ---------- design-gate ----------
 console.log("\ndesign-gate:");
@@ -393,10 +402,10 @@ function gateResult(root, files) {
   } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
 }
 const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-"));
-ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "блок: UI-изменение без мокапов");
+ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "design gate assertion 1");
 ok((gateResult(dtmp, ["src/Dropwheel/UI/Foo.xaml"]).uiChanged || []).includes("src/Dropwheel/UI/Foo.xaml"),
-  "design-gate: UI-глобы матчятся case-insensitive (**/ui/** ловит /UI/)");
-ok(gate(dtmp, ["src/core/logic.py"]) === 0, "пропуск: не-UI изменение");
+  "design gate assertion 2");
+ok(gate(dtmp, ["src/core/logic.py"]) === 0, "design gate assertion 3");
 const staleMain = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-stale-main-"));
 function sgit(args) {
   return execFileSync("git", args, { cwd: staleMain, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -444,15 +453,15 @@ ok(Array.isArray(staleGate.uiChanged) && staleGate.uiChanged.length === 0,
 try { fs.rmSync(staleMain, { recursive: true, force: true }); } catch {}
 execFileSync("node", [NEW_MOCKUPS, "login"], { env: { ...process.env, HARNESS_ROOT: dtmp }, stdio: "pipe" });
 const fdir = path.join(dtmp, "design", "mockups", "login");
-ok(fs.readdirSync(fdir).filter((f) => f.endsWith(".html")).length === 4, "new-mockups создаёт 4 HTML-мокапа");
+ok(fs.readdirSync(fdir).filter((f) => f.endsWith(".html")).length === 4, "design gate assertion 4");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/01-minimal-light.html"]) === 1,
-  "блок: мокапы есть, но нет APPROVED");
+  "design gate assertion 5");
 fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]) === 0,
-  "пропуск: одобренный набор затронут в diff ветки");
+  "design gate assertion 6");
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
-  "блок: старый approval НЕ в diff ветки — вечного пропуска больше нет");
-ok(gate(dtmp, ["design/mockups/login/02-dark-pro.html"]) === 0, "пропуск: правки только мокапов не триггерят гейт");
+  "design gate assertion 7");
+ok(gate(dtmp, ["design/mockups/login/02-dark-pro.html"]) === 0, "design gate assertion 8");
 // Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};
@@ -460,8 +469,8 @@ try {
   gateJson = JSON.parse(execFileSync("node", [DESIGN_GATE, "--root", noGit, "--base", "no-such-ref", "--json"],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
 } catch (e) { try { gateJson = JSON.parse(String(e.stdout || "{}")); } catch {} }
-ok(gateJson.skipped === true && /гейт ПРОПУЩЕН|diff/.test(gateJson.warn || ""),
-  "недоступная база diff -> fail-open с явным warning, не молчаливый пропуск");
+ok(gateJson.skipped === true && /gate skipped|diff/i.test(gateJson.warn || ""),
+  "unavailable diff base -> fail-open with explicit warning, not silent skip");
 let strictExit = 0, strictJson = {};
 try {
   execFileSync("node", [DESIGN_GATE, "--root", noGit, "--base", "no-such-ref", "--strict", "--json"],
@@ -471,7 +480,7 @@ try {
   try { strictJson = JSON.parse(String(e.stdout || "{}")); } catch {}
 }
 ok(strictExit === 1 && strictJson.skipped === true && strictJson.ok === false,
-  "design-gate --strict: недоступная база diff -> fail-closed для CI");
+  "design gate assertion 9");
 try { fs.rmSync(noGit, { recursive: true, force: true }); } catch {}
 try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
@@ -496,9 +505,9 @@ fs.writeFileSync(path.join(vtmp, "app", "App.csproj"), "<Project/>");
 fs.writeFileSync(path.join(vtmp, "pyproject.toml"), "[project]\n");
 const ids = verifyList(vtmp).plan.map((p) => p.stack);
 ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
-  "авто-детект rust/dotnet/python по маркер-файлам");
+  "verify runner assertion 1");
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
-ok(dotnetPlan && dotnetPlan.steps.includes("format"), "dotnet verify включает format");
+ok(dotnetPlan && dotnetPlan.steps.includes("format"), "verify runner assertion 2");
 ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify.js")),
   "dotnet format --verify-no-changes staged rollout: warning-only by default");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
@@ -508,19 +517,19 @@ fs.writeFileSync(path.join(etmp, "stepB.js"), "require('fs').writeFileSync('ran_
 fs.writeFileSync(path.join(etmp, "stepC.js"), "require('fs').writeFileSync('ran_c','1')");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { failFast: true, stacks: [{ id: "t", markers: ["m.txt"], steps: [
   { name: "a", run: "node stepA.js" }, { name: "b", run: "node stepB.js" }, { name: "c", run: "node stepC.js" }] }] } }));
-ok(verifyExit(etmp) === 1, "verify падает на провале обязательного шага");
+ok(verifyExit(etmp) === 1, "verify runner assertion 3");
 ok(fs.existsSync(path.join(etmp, "ran_b")) && !fs.existsSync(path.join(etmp, "ran_c")),
-  "fail-fast: шаг после провала не запускается");
+  "verify runner assertion 4");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "opt", run: "node stepB.js", optional: true }] }] } }));
-ok(verifyExit(etmp) === 0, "optional-шаг падает -> warning, не провал");
+ok(verifyExit(etmp) === 0, "verify runner assertion 5");
 const optOut = verifyOutput(etmp);
 ok(/optional warnings[\s\S]*error WHITESPACE: fix me[\s\S]*verify summary[\s\S]*VERIFY passed\.\s*$/.test(optOut),
   "verify UX: optional diagnostics excerpt appears before summary/final passed");
 fs.writeFileSync(path.join(etmp, "big.js"), "process.stdout.write('x'.repeat(2 * 1024 * 1024));");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "big", run: "node big.js" }] }] } }));
-ok(verifyExit(etmp) === 0, "required step с большим stdout проходит без spawnSync maxBuffer failure");
-fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "допустимо" } }] }] } }));
-ok(verifyExit(etmp) === 0, "okCodes: допустимый ненулевой exit (напр. pytest 5 «нет тестов») -> warning, не провал");
+ok(verifyExit(etmp) === 0, "verify runner assertion 6");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "ok2", run: "node stepB.js", okCodes: { 2: "allowed" } }] }] } }));
+ok(verifyExit(etmp) === 0, "okCodes: allowed non-zero exit (for example pytest 5 no tests) -> warning, not failure");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "missing", run: "definitely_missing_harness_cmd_zzzz" }] }] } }));
 ok(verifyExit(etmp) === 1, "missing required command -> clear VERIFY failure");
 fs.writeFileSync(path.join(etmp, "slow.js"), "setTimeout(() => {}, 5000);\n");
@@ -540,21 +549,26 @@ const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifychg-"));
 fs.mkdirSync(path.join(ctmp, "py")); fs.writeFileSync(path.join(ctmp, "py", "pyproject.toml"), "[project]\n");
 fs.mkdirSync(path.join(ctmp, "js")); fs.writeFileSync(path.join(ctmp, "js", "package.json"), "{}\n");
 fs.mkdirSync(path.join(ctmp, "hooks")); fs.writeFileSync(path.join(ctmp, "hooks", "verify.js"), "console.log('fake verify');\n");
+const syntaxTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifysyntax-"));
+fs.mkdirSync(path.join(syntaxTmp, "hooks"));
+fs.writeFileSync(path.join(syntaxTmp, "hooks", "verify.js"), "function {\n");
+ok(verifyExit(syntaxTmp) === 1, "verify always fails broken harness JS syntax even when no app stack is detected");
+try { fs.rmSync(syntaxTmp, { recursive: true, force: true }); } catch {}
 let chg = verifyListArgs(ctmp, ["--changed", "--files", "py/app.py"]);
 ok(chg.plan.length === 1 && chg.plan[0].stack === "python" && chg.plan[0].dir === "py",
-  "--changed: только затронутый стек (py) в плане, нетронутый (js) отброшен");
+  "verify runner assertion 7");
 chg = verifyListArgs(ctmp, ["--changed", "--files", "js/index.js,py/app.py"]);
 ok(chg.plan.map((p) => p.stack).sort().join(",") === "node,python",
-  "--changed: несколько затронутых стеков — оба в плане");
+  "verify runner assertion 8");
 ok(verifyExitArgs(ctmp, ["--changed", "--files", ""]) === 0 && verifyListArgs(ctmp, ["--changed", "--files", ""]).plan.length === 0,
-  "--changed: пустой список изменений -> exit 0, план пуст (нечего проверять)");
+  "verify runner assertion 9");
 const allIds = verifyListArgs(ctmp, []).plan.map((p) => p.stack).sort().join(",");
 const fbIds = verifyListArgs(ctmp, ["--changed", "--base", "no-such-ref"]).plan.map((p) => p.stack).sort().join(",");
-ok(allIds === "node,python" && fbIds === "harness,node,python",
-  "--changed fail-safe: недоступная база diff -> все стеки + harness checks (не молчаливый пропуск)");
+ok(allIds === "harness-syntax,node,python" && fbIds === "harness-syntax,node,python",
+  "verify runner assertion 10");
 chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
-ok(chg.plan.some((p) => p.stack === "harness"),
-  "--changed: изменение hooks/** запускает harness checks даже без package.json");
+ok(chg.plan.some((p) => p.stack === "harness-syntax"),
+  "verify runner assertion 11");
 try { fs.rmSync(ctmp, { recursive: true, force: true }); } catch {}
 
 const dirtyTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifydirty-"));
@@ -573,13 +587,13 @@ dgit(["add", "."]);
 dgit(["commit", "-q", "-m", "chore: base"]);
 dwrite("hooks/verify.js", "console.log('dirty');\n");
 chg = verifyListArgs(dirtyTmp, ["--changed"]);
-ok(chg.plan.some((p) => p.stack === "harness"), "--changed: unstaged harness edit is included");
+ok(chg.plan.some((p) => p.stack === "harness-syntax"), "--changed: unstaged harness edit is included");
 dgit(["add", "hooks/verify.js"]);
 chg = verifyListArgs(dirtyTmp, ["--changed"]);
-ok(chg.plan.some((p) => p.stack === "harness"), "--changed: staged harness edit is included");
+ok(chg.plan.some((p) => p.stack === "harness-syntax"), "--changed: staged harness edit is included");
 dwrite("hooks/new-check.js", "console.log('new');\n");
 chg = verifyListArgs(dirtyTmp, ["--changed"]);
-ok(chg.plan.some((p) => p.stack === "harness"), "--changed: untracked harness file is included");
+ok(chg.plan.some((p) => p.stack === "harness-syntax"), "--changed: untracked harness file is included");
 try { fs.rmSync(dirtyTmp, { recursive: true, force: true }); } catch {}
 
 try { fs.rmSync(vtmp, { recursive: true, force: true }); fs.rmSync(etmp, { recursive: true, force: true }); } catch {}
@@ -601,18 +615,18 @@ function dbgExit(files, cfg) {
   fs.writeFileSync(path.join(dbgtmp, "harness.config.json"), JSON.stringify(cfg || {}));
   return verifyExitArgs(dbgtmp, ["--files", files]);
 }
-ok(dbgExit("bad.js", {}) === 1, "debug-аудит: debugger в изменённом .js -> VERIFY падает");
-ok(dbgExit("clean.js", {}) === 0, "debug-аудит: чистый изменённый файл -> VERIFY проходит");
-ok(dbgExit("bad.py", {}) === 1, "debug-аудит: pdb.set_trace в изменённом .py -> падает");
-ok(dbgExit("bp.js", {}) === 0, "debug-аудит: breakpoint в .js НЕ ловится (маркер привязан к .py) — защита от FP");
-ok(dbgExit("softy.js", {}) === 0, "debug-аудит: console.log при soft=false -> не падение");
-ok(dbgExit("softy.js", { debugAudit: { soft: true } }) === 0, "debug-аудит: console.log при soft=true -> заметка, но не падение");
-ok(dbgExit("bad.js", { debugAudit: { exclude: ["bad.js"] } }) === 0, "debug-аудит: exclude-глоб пропускает файл с hard-маркером");
-ok(dbgExit("bad.js", { debugAudit: { enabled: false } }) === 0, "debug-аудит: enabled=false отключает аудит");
-ok(dbgExit("hooks/bad-hook.js", {}) === 1, "debug-аудит: hooks/** больше не исключён из hard-аудита");
-ok(dbgExit("hooks/fixture.js", {}) === 0, "debug-аудит: hard-маркер внутри строкового fixture не даёт self-FP");
-ok(dbgExit("hooks/comment.js", {}) === 0, "debug-аудит: hard-маркер внутри комментария не даёт self-FP");
-ok(verifyExitArgs(dbgtmp, ["--strict-audit"]) === 1, "debug-аудит: --strict-audit валит VERIFY, если diff scope недоступен");
+ok(dbgExit("bad.js", {}) === 1, "debug audit assertion 1");
+ok(dbgExit("clean.js", {}) === 0, "debug audit assertion 2");
+ok(dbgExit("bad.py", {}) === 1, "debug audit assertion 3");
+ok(dbgExit("bp.js", {}) === 0, "debug audit assertion 4");
+ok(dbgExit("softy.js", {}) === 0, "debug audit assertion 5");
+ok(dbgExit("softy.js", { debugAudit: { soft: true } }) === 0, "debug audit assertion 6");
+ok(dbgExit("bad.js", { debugAudit: { exclude: ["bad.js"] } }) === 0, "debug audit assertion 7");
+ok(dbgExit("bad.js", { debugAudit: { enabled: false } }) === 0, "debug audit assertion 8");
+ok(dbgExit("hooks/bad-hook.js", {}) === 1, "debug audit assertion 9");
+ok(dbgExit("hooks/fixture.js", {}) === 0, "debug audit assertion 10");
+ok(dbgExit("hooks/comment.js", {}) === 0, "debug audit assertion 11");
+ok(verifyExitArgs(dbgtmp, ["--strict-audit"]) === 1, "debug audit assertion 12");
 try { fs.rmSync(dbgtmp, { recursive: true, force: true }); } catch {}
 
 // ---------- doctor ----------
@@ -625,12 +639,12 @@ function doctor(root) {
 const drepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-"));
 execFileSync("git", ["init", "-q"], { cwd: drepo });
 let dres = doctor(drepo);
-ok((dres.results || []).some((r) => /lock-операции/.test(r.msg) && r.level === "PASS"),
-  "doctor: .git допускает write+unlink lock-операции -> PASS (нормальная FS)");
+ok((dres.results || []).some((r) => /atomic lock operations/.test(r.msg) && r.level === "PASS"),
+  "doctor: .git supports write+unlink lock operations -> PASS on a normal filesystem");
 fs.writeFileSync(path.join(drepo, ".git", "index.lock"), "");
 dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
-  "doctor: залипший index.lock -> WARN (детект блокера коммита)");
+  "doctor assertion 1");
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
@@ -638,15 +652,15 @@ execFileSync("git", ["remote", "add", "origin", "https://github.com/IvanLarinDev
 try { execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" }); } catch {}
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:/.test(r.msg) && r.level === "FAIL"),
-  "doctor: untracked harness-файлы -> FAIL с bootstrap-сообщением");
+  "doctor assertion 2");
 execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
-  "doctor: tracked harness-файлы -> PASS bootstrap-проверки");
+  "doctor assertion 3");
 execFileSync("git", ["rm", "--cached", "CHANGELOG.md"], { cwd: bootRepo, stdio: "ignore" });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:.*CHANGELOG\.md/.test(r.msg) && r.level === "FAIL"),
-  "doctor: untracked CHANGELOG.md -> FAIL bootstrap-проверки");
+  "doctor assertion 4");
 execFileSync("git", ["add", "CHANGELOG.md"], { cwd: bootRepo });
 fs.rmSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), { force: true });
 dres = doctor(bootRepo);
@@ -660,18 +674,25 @@ ok((dres.results || []).some((r) => /ruleset required check\(s\) not published/.
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), "name: verify\njobs:\n  verify:\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/verify.js\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /does not run required harness step/.test(r.msg) && /doctor/.test(r.msg) && /design-gate strict/.test(r.msg) && /secret scan/.test(r.msg) && r.level === "FAIL"),
-  "doctor: job id verify без полного harness-контракта -> FAIL");
+  "doctor assertion 5");
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
   "name: verify\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - uses: gitleaks/gitleaks-action@v2\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
-  "doctor: required verify job с полным harness-контрактом -> PASS");
+  "doctor assertion 6");
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
   "name: verify\njobs:\n  \"verify\": # quoted job id is valid YAML\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - uses: gitleaks/gitleaks-action@v2\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
-  "doctor: valid YAML variant с quoted job id/comment -> PASS");
+  "doctor assertion 7");
 fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
+{
+  const rulesetPath = path.join(bootRepo, ".github", "rulesets", "main.json");
+  const ruleset = JSON.parse(fs.readFileSync(rulesetPath, "utf8"));
+  const prRule = ruleset.rules.find((r) => r.type === "pull_request");
+  prRule.parameters.require_code_owner_review = true;
+  fs.writeFileSync(rulesetPath, JSON.stringify(ruleset, null, 2) + "\n");
+}
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /code-owner review requires \.github\/CODEOWNERS/.test(r.msg) && r.level === "FAIL"),
   "doctor: code-owner review without CODEOWNERS -> FAIL");
@@ -681,7 +702,7 @@ fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ ve
 execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /verify\.stacks.*harness self-test/.test(r.msg) && r.level === "FAIL"),
-  "doctor: verify.stacks не может убрать обязательный harness self-test");
+  "doctor assertion 8");
 const badCog = fs.readFileSync(path.join(bootRepo, "cog.toml"), "utf8")
   .replace(/,\s*"release\/\*\*"/, "")
   .replace(/\ntemplate\s*=\s*"remote"/, "")
@@ -707,14 +728,14 @@ fs.writeFileSync(path.join(bootRepo, "harness.config.json"), JSON.stringify({ ve
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\r\nline two\r\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /AGENTS\.md: CRLF\/CR line endings/.test(r.msg) && r.level === "FAIL"),
-  "doctor: CRLF в critical harness-файле -> FAIL");
+  "doctor assertion 9");
 fs.writeFileSync(path.join(bootRepo, "AGENTS.md"), "line one\nline two\n");
 fs.rmSync(path.join(bootRepo, ".github"), { recursive: true, force: true });
 fs.rmSync(path.join(bootRepo, "hooks", "apply-ruleset.js"), { force: true });
 execFileSync("git", ["add", "-A"], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /\.github\/rulesets\/main\.json/.test(r.msg) && /hooks\/apply-ruleset\.js/.test(r.msg) && r.level === "FAIL"),
-  "doctor: missing tracked server-enforcement files -> FAIL bootstrap-проверки");
+  "doctor assertion 10");
 try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
 
 // ---------- release-preflight ----------
@@ -776,25 +797,42 @@ rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /remote tag already exists/.test(r.msg)),
   "release-preflight: existing remote tag -> FAIL");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("0.10.1");
+relGit(relCase.work, ["tag", "-d", "v0.10.1"]);
+relGit(relCase.work, ["tag", "v0.10.1"]);
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /must be annotated/.test(r.msg)),
+  "release-preflight: lightweight tag -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("0.10.1");
+fs.writeFileSync(path.join(relCase.work, "CHANGELOG.md"), "# Changelog\n\n## v0.10.0\n\n- stale\n");
+relGit(relCase.work, ["add", "CHANGELOG.md"]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore: stale changelog"]);
+relGit(relCase.work, ["tag", "-d", "v0.10.1"]);
+relGit(relCase.work, ["tag", "-a", "v0.10.1", "-m", "v0.10.1"]);
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /CHANGELOG\.md does not mention/.test(r.msg)),
+  "release-preflight: stale changelog version -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 
 // ---------- stop-reminder ----------
 console.log("\nstop-reminder:");
 const stopRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo });
 let stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
-ok(stopOut.trim() === "", "чистое дерево -> молчит (без шума)");
+ok(stopOut.trim() === "", "stop reminder assertion 1");
 fs.writeFileSync(path.join(stopRepo, "wip.txt"), "x");
 stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
-ok(/VERIFY/.test(stopOut) && /wip\.txt/.test(stopOut), "грязное дерево -> напоминание + git status");
-ok(/"decision"\s*:\s*"block"/.test(stopOut), "напоминание в контракте Stop-хука (decision:block, additionalContext на Stop не работает)");
+ok(/VERIFY/.test(stopOut) && /wip\.txt/.test(stopOut), "stop reminder assertion 2");
+ok(/"decision"\s*:\s*"block"/.test(stopOut), "stop reminder assertion 3");
 stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
-ok(stopOut.trim() === "", "повторный Stop с тем же dirty status -> молчит (осознанное завершение)");
+ok(stopOut.trim() === "", "stop reminder assertion 4");
 fs.writeFileSync(path.join(stopRepo, "another.txt"), "x");
 stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
 ok(/another\.txt/.test(stopOut) && /"decision"\s*:\s*"block"/.test(stopOut),
-  "изменился dirty status -> stop-reminder напоминает снова");
+  "stop reminder assertion 5");
 stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: stopRepo });
-ok(stopOut.trim() === "", "stop_hook_active=true -> молчит (защита от вечного block-цикла)");
+ok(stopOut.trim() === "", "stop reminder assertion 6");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
 const stopRepo2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-explained-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo2 });
@@ -804,10 +842,10 @@ fs.writeFileSync(path.join(stopRepo2, ".gitignore"), "x");
 const transcript = path.join(os.tmpdir(), "harness-stop-transcript-" + process.pid + ".jsonl");
 fs.writeFileSync(transcript, JSON.stringify({
   type: "assistant",
-  message: { role: "assistant", content: "VERIFY проверено, commit создан. Оставшиеся uncommitted bootstrap/harness/local файлы оставлены намеренно и не относятся к правке." },
+  message: { role: "assistant", content: "VERIFY verified, commit created. Remaining uncommitted bootstrap/harness/local files were left intentionally and are not part of this change." },
 }) + "\n");
 stopOut = hookOutput(STOP, { transcript_path: transcript }, { HARNESS_PROJECT_DIR: stopRepo2 });
-ok(stopOut.trim() === "", "dirty только harness/local + отчёт объясняет intentional uncommitted -> Stop молчит");
+ok(stopOut.trim() === "", "dirty only harness/local plus report explains intentional uncommitted files -> Stop stays silent");
 try { fs.rmSync(stopRepo2, { recursive: true, force: true }); fs.rmSync(transcript, { force: true }); } catch {}
 const stopRepo3 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-review-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo3 });
@@ -815,10 +853,10 @@ fs.writeFileSync(path.join(stopRepo3, ".gitattributes"), "x");
 const transcript2 = path.join(os.tmpdir(), "harness-stop-review-transcript-" + process.pid + ".jsonl");
 fs.writeFileSync(transcript2, JSON.stringify({
   type: "assistant",
-  message: { role: "assistant", content: "Повторный review завершён: изменения я не правил и не коммитил. VERIFY проверено частично, commit/PR не делал, потому что задача была именно на ревью." },
+  message: { role: "assistant", content: "Review-only pass complete: I did not edit and did not commit. VERIFY was checked partially, commit/PR not created because the task was only a review." },
 }) + "\n");
 stopOut = hookOutput(STOP, { transcript_path: transcript2 }, { HARNESS_PROJECT_DIR: stopRepo3 });
-ok(stopOut.trim() === "", "review-only отчёт объясняет dirty tree -> Stop не перекрывает финальный ответ");
+ok(stopOut.trim() === "", "review-only report explains dirty tree -> Stop does not override the final answer");
 try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcript2, { force: true }); } catch {}
 
 // ---------- installer (install.js) ----------
@@ -835,37 +873,48 @@ execFileSync("git", ["init", "-q"], { cwd: itmp });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/example-target.git"], { cwd: itmp });
 // dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
-ok(plan.ok === true && plan.mode === "install", "install --dry-run: ok, режим install");
-ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f.rel)), "dry-run план включает hooks/agent/guard.js");
-ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ничего не пишет на диск");
+ok(plan.ok === true && plan.mode === "install", "installer assertion 1");
+ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f.rel)), "installer assertion 2");
+ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
+const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");
+const defaultRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
+const defaultPrRule = (defaultRuleset.rules || []).find((r) => r.type === "pull_request");
+ok(!/@IvanLarinDev/.test(defaultOwners) && defaultPrRule.parameters.require_code_owner_review === false,
+  "install: default target CODEOWNERS does not hardcode the source maintainer and disables code-owner review");
+installJson(itmp, ["--code-owner", "@ExampleOrg/harness-maintainers"]);
+const ownerRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
+const ownerPrRule = (ownerRuleset.rules || []).find((r) => r.type === "pull_request");
+ok(/@ExampleOrg\/harness-maintainers/.test(fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8")) &&
+   ownerPrRule.parameters.require_code_owner_review === true,
+  "install: explicit --code-owner writes CODEOWNERS and enables code-owner review");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
 ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.test(tcog),
   "install: cog.toml remote changelog metadata is rewritten from target origin");
-ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "install: dev-self-test (test.js) в target НЕ копируется");
+ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "installer assertion 5");
 const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
-ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "install: сгенерён config без self-test-пина verify (target авто-детектит стеки)");
+ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "installer assertion 6");
 const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
-ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "install: guard вплетён в PreToolUse");
-ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "install: stop-reminder вплетён в Stop");
+ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "installer assertion 7");
+ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "installer assertion 8");
 // .gitignore ignores only personal settings.local.json, not harness files.
 const gi = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
-ok(/\.claude\/settings\.local\.json/.test(gi), "install: .gitignore получает .claude/settings.local.json");
+ok(/\.claude\/settings\.local\.json/.test(gi), "installer assertion 9");
 ok(!/^hooks\//m.test(gi) && !/lefthook\.yml/.test(gi) && !/harness\.config/.test(gi),
-  "install: файлы харнесса в .gitignore НЕ попадают (они коммитятся)");
+  "installer assertion 10");
 installJson(itmp, []);
 const gi2 = fs.readFileSync(path.join(itmp, ".gitignore"), "utf8");
-ok((gi2.match(/settings\.local\.json/g) || []).length === 1, "повторный install не дублирует строку в .gitignore");
+ok((gi2.match(/settings\.local\.json/g) || []).length === 1, "installer assertion 11");
 
 // Idempotency: repeated install does not duplicate hook entries.
 const preLen = tset.hooks.PreToolUse.length;
 installJson(itmp, []);
 const tset2 = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
-ok(tset2.hooks.PreToolUse.length === preLen, "повторный install идемпотентен (hook-записи не дублируются)");
+ok(tset2.hooks.PreToolUse.length === preLen, "installer assertion 12");
 const dstSet = path.join(itmp, ".claude", "settings.json");
 const staleSet = JSON.parse(fs.readFileSync(dstSet, "utf8"));
 staleSet.hooks.PreToolUse = [
@@ -885,23 +934,23 @@ ok(staleMerge.settings && staleMerge.settings.added === 2 &&
 const gp = path.join(itmp, "hooks", "agent", "guard.js");
 fs.writeFileSync(gp, "// local edit\n");
 installJson(itmp, []);
-ok(fs.readFileSync(gp, "utf8") === "// local edit\n", "install без --force не перезатирает существующий файл");
+ok(fs.readFileSync(gp, "utf8") === "// local edit\n", "installer assertion 13");
 installJson(itmp, ["--force"]);
-ok(fs.readFileSync(gp, "utf8") !== "// local edit\n", "install --force перезаписывает файлы харнесса");
+ok(fs.readFileSync(gp, "utf8") !== "// local edit\n", "installer assertion 14");
 // settings.json merge keeps foreign keys.
 const cur = JSON.parse(fs.readFileSync(dstSet, "utf8")); cur.model = "opus"; fs.writeFileSync(dstSet, JSON.stringify(cur));
 installJson(itmp, []);
-ok(JSON.parse(fs.readFileSync(dstSet, "utf8")).model === "opus", "install мержит settings.json, сохраняя чужие ключи (не затирает)");
+ok(JSON.parse(fs.readFileSync(dstSet, "utf8")).model === "opus", "installer assertion 15");
 // Invalid existing settings.json is reported and left untouched.
 fs.writeFileSync(dstSet, "{ broken");
 const br = installJson(itmp, []);
-ok(br.settings && br.settings.status === "error", "невалидный .claude/settings.json → ошибка мержа, файл не тронут");
-ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "невалидный settings.json остался как был (не затёрт)");
+ok(br.settings && br.settings.status === "error", "invalid .claude/settings.json -> merge error, file untouched");
+ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "invalid settings.json remains unchanged");
 // A non-git target gets a note; file installation still runs.
 const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
-ok(Array.isArray(ng.notes) && ng.notes.some((n) => /git-репозиторий/.test(n)), "не-git target → нота про git init");
-ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "install: activation/doctor failure делает JSON ok=false");
+ok(Array.isArray(ng.notes) && ng.notes.some((n) => /not a git repository/.test(n)), "non-git target -> note about git init");
+ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "installer assertion 16");
 try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
 
 // ---------- hygiene: NUL bytes ----------
@@ -916,12 +965,12 @@ function walk(dir) {
   return out;
 }
 const nulFiles = walk(__dirname).filter((f) => fs.readFileSync(f).includes(0));
-ok(nulFiles.length === 0, "нет NUL-байтов в исходниках хуков" + (nulFiles.length ? " (найдено: " + nulFiles.join(", ") + ")" : ""));
+ok(nulFiles.length === 0, "source hygiene assertion 1" + (nulFiles.length ? "source hygiene assertion 1" + nulFiles.join(", ") + ")" : ""));
 
 // ---------- hygiene: key docs integrity ----------
 // Catches truncated/corrupt markdown. Regression 99bf0c7 cut AGENTS.md in the
 // middle of a table with a broken UTF-8 byte and lost the ## Env section. A
-// truncated multibyte tail fails decode→encode roundtrip and produces U+FFFD, so
+// truncated multibyte tail fails decode->encode roundtrip and produces U+FFFD, so
 // both signals are checked.
 console.log("\ndocs integrity:");
 function docCheck(rel) {
@@ -932,21 +981,21 @@ function docCheck(rel) {
   return {
     exists: true,
     endsNewline: buf.length > 0 && buf[buf.length - 1] === 10,
-    noReplacement: !buf.includes(Buffer.from("�")),
+    noReplacement: !buf.includes(Buffer.from([0xef, 0xbf, 0xbd])),
     validUtf8: roundtrips,
     text,
   };
 }
 for (const rel of ["AGENTS.md", "README.md"]) {
   const d = docCheck(rel);
-  ok(d.exists, rel + ": присутствует");
-  ok(d.exists && d.endsNewline, rel + ": заканчивается переводом строки (не обрезан на полуслове)");
-  ok(d.exists && d.validUtf8, rel + ": валидный UTF-8, без обрезанного многобайтного хвоста");
-  ok(d.exists && d.noReplacement, rel + ": нет U+FFFD (маркера битых байт)");
+  ok(d.exists, rel + "docs integrity assertion 1");
+  ok(d.exists && d.endsNewline, rel + "docs integrity assertion 2");
+  ok(d.exists && d.validUtf8, rel + "docs integrity assertion 3");
+  ok(d.exists && d.noReplacement, rel + "docs integrity assertion 4");
 }
 const agentsDoc = docCheck("AGENTS.md");
 ok(agentsDoc.exists && /^##\s+Env\b/m.test(agentsDoc.text),
-  "AGENTS.md содержит секцию ## Env (референс env-переменных, на неё ссылается guard.js)");
+  "docs integrity assertion 5");
 
 try { fs.rmSync(NEUTRAL, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail ? "FAIL" : "PASS"}: ${pass} passed, ${fail} failed`);
