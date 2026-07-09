@@ -26,6 +26,7 @@ Commit-lint / secret-scan / release / hook-раннер делегированы
 | **Реальный enforcement** (require PR + check, block force-push) | **GitHub ruleset** | [`.github/rulesets/main.json`](./.github/rulesets/main.json) |
 | VERIFY (мульти-стек lint/build/test) | *своё* | [`hooks/verify.js`](./hooks/verify.js) |
 | GUI DESIGN-гейт | *своё* | [`hooks/design-gate.js`](./hooks/design-gate.js) |
+| Release preflight (tag/worktree/version) | *своё* | [`hooks/release-preflight.js`](./hooks/release-preflight.js) |
 | Agent-хук (обход/циклы/подсказки) | *своё* | [`hooks/agent/guard.js`](./hooks/agent/guard.js) |
 | Security-аудит конфигурации агента (advisory) | **ecc-agentshield** (npx, прибитая версия) | [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) |
 
@@ -95,6 +96,7 @@ worktree не воспроизведёт локальные untracked файлы
 node hooks/test.js                     # self-test suite харнесса
 node hooks/verify.js [--list]          # исполняемый VERIFY (авто-детект стеков)
 node hooks/design-gate.js --base origin/main # DESIGN-гейт по diff ветки
+node hooks/release-preflight.js --tag vX.Y.Z --base origin/main # release gate
 node hooks/doctor.js                   # окружение
 node hooks/apply-ruleset.js --dry-run  # показать ruleset без применения
 ```

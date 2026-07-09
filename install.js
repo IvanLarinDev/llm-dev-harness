@@ -40,7 +40,7 @@ const { DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_
 // repo's dev self-test, tied to this repo's docs/CI. .github/rulesets/main.json is
 // needed by apply-ruleset.js, so it is always copied.
 const FILES = [
-  "hooks/_lib.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js",
+  "hooks/_lib.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-preflight.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",

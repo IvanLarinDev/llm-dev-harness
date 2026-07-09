@@ -42,6 +42,7 @@ const STOP = path.join(__dirname, "agent", "stop-reminder.js");
 const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
+const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
@@ -219,6 +220,12 @@ ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').wr
   "node -e writeFileSync в hooks/ -> жёсткий блок");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook.yml','w').write('x')\"" } }, sess("ie2")) === 2,
   "python -c open('lefthook.yml','w') -> жёсткий блок");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"from pathlib import Path; Path('hooks/agent/guard.js').write_text('x')\"" } }, sess("ie2b")) === 2,
+  "python -c pathlib write_text в hooks/ -> жёсткий блок");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import shutil; shutil.rmtree('hooks')\"" } }, sess("ie2c")) === 2,
+  "python -c shutil.rmtree('hooks') -> жёсткий блок");
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import os; os.remove('lefthook.yml')\"" } }, sess("ie2d")) === 2,
+  "python -c os.remove('lefthook.yml') -> жёсткий блок");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, sess("ie3")) === 2,
   "bash -c 'rm -rf hooks/' -> жёсткий блок (глагол спрятан в кавычках от write-детекции)");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "pwsh -EncodedCommand SQBFAFgAIAAoACcAaABvAG8AawBzAC8AYQBnAGUAbgB0AC8AZwB1AGEAcgBkAC4AagBzACcAKQA=" } }, sess("ie9")) === 2,
@@ -710,6 +717,66 @@ ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /\
   "doctor: missing tracked server-enforcement files -> FAIL bootstrap-проверки");
 try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
 
+// ---------- release-preflight ----------
+console.log("\nrelease-preflight:");
+function relGit(root, args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+function releaseJson(root, tag, extra = []) {
+  try {
+    const s = execFileSync("node", [RELEASE_PREFLIGHT, "--root", root, "--tag", tag, "--json", ...extra],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(s);
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [] }; }
+  }
+}
+function writeReleaseProject(root, version) {
+  fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "App", "App.csproj"), `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>\n`);
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${version}\n\n- release\n`);
+}
+function releaseRepo(version, tag = "v0.10.1") {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-origin-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-work-"));
+  execFileSync("git", ["init", "--bare", "-q"], { cwd: origin });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: work });
+  relGit(work, ["config", "user.name", "Harness Test"]);
+  relGit(work, ["config", "user.email", "harness@example.test"]);
+  relGit(work, ["remote", "add", "origin", origin]);
+  fs.writeFileSync(path.join(work, "README.md"), "base\n");
+  relGit(work, ["add", "."]);
+  relGit(work, ["commit", "-q", "-m", "chore: base"]);
+  relGit(work, ["push", "-q", "-u", "origin", "main"]);
+  writeReleaseProject(work, version);
+  relGit(work, ["add", "."]);
+  relGit(work, ["commit", "-q", "-m", `chore(version): ${tag}`]);
+  relGit(work, ["tag", "-a", tag, "-m", tag]);
+  return { origin, work };
+}
+let relCase = releaseRepo("0.10.1");
+let rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release-preflight: clean release with csproj version matching tag -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("0.10.0");
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /project version\(s\) do not match/.test(r.msg) && r.mismatches && /App\.csproj/.test(JSON.stringify(r.mismatches))),
+  "release-preflight: tag v0.10.1 with csproj 0.10.0 -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("0.10.1");
+fs.writeFileSync(path.join(relCase.work, "dirty.txt"), "x\n");
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /worktree is dirty/.test(r.msg) && r.level === "FAIL"),
+  "release-preflight: dirty release worktree -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("0.10.1");
+relGit(relCase.work, ["push", "-q", "origin", "v0.10.1"]);
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /remote tag already exists/.test(r.msg)),
+  "release-preflight: existing remote tag -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
 // ---------- stop-reminder ----------
 console.log("\nstop-reminder:");
 const stopRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-"));
@@ -773,7 +840,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "dry-run ничего не пишет на диск");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "install: хуки и конфиги скопированы");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
