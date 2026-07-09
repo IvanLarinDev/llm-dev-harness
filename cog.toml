@@ -18,7 +18,7 @@ path = "CHANGELOG.md"
 remote = "github.com"
 template = "remote"
 owner = "IvanLarinDev"
-repository = "agents"
+repository = "llm-dev-harness"
 authors = []
 
 # Extra non-default type used by repos with this history.

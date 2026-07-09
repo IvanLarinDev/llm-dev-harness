@@ -82,6 +82,36 @@ function copyOne(rel, force, dryRun) {
   return { rel, action: exists ? "overwrite" : "write" };
 }
 
+function githubRepoFromUrl(url) {
+  const value = String(url || "").trim();
+  const m = value.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  return m ? { owner: m[1], repository: m[2] } : null;
+}
+
+function gitRemoteUrl(target) {
+  const r = spawnSync("git", ["remote", "get-url", "origin"], { cwd: target, encoding: "utf8" });
+  return r.status === 0 ? String(r.stdout || "").trim() : "";
+}
+
+function rewriteCogRemoteMetadata(dryRun) {
+  const dst = path.join(a.target, "cog.toml");
+  const repo = githubRepoFromUrl(gitRemoteUrl(a.target));
+  if (!repo) return { action: "skip", reason: "no GitHub origin" };
+  let text = "";
+  try { text = fs.readFileSync(dst, "utf8"); }
+  catch {
+    if (!dryRun) return { action: "skip", reason: "missing cog.toml" };
+    try { text = fs.readFileSync(path.join(SRC, "cog.toml"), "utf8"); }
+    catch { return { action: "skip", reason: "missing cog.toml" }; }
+  }
+  const next = text
+    .replace(/^owner\s*=\s*"[^"]*"\s*$/m, `owner = "${repo.owner}"`)
+    .replace(/^repository\s*=\s*"[^"]*"\s*$/m, `repository = "${repo.repository}"`);
+  if (next === text) return { action: "already", owner: repo.owner, repository: repo.repository };
+  if (!dryRun) fs.writeFileSync(dst, next);
+  return { action: "rewrite", owner: repo.owner, repository: repo.repository };
+}
+
 // ---------- harness.config.json (generate if missing) ----------
 function writeConfig(force, dryRun) {
   const dst = path.join(a.target, "harness.config.json");
@@ -163,7 +193,7 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
 
   // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
@@ -179,6 +209,13 @@ const a = parseArgs(process.argv.slice(2));
   if (!selfInstall) {
     const list = a.withCi ? FILES.concat(CI_FILES) : FILES.slice();
     for (const rel of list) out.files.push(copyOne(rel, a.force, a.dryRun));
+    const cogFile = out.files.find((f) => f.rel === "cog.toml");
+    if (cogFile && cogFile.action !== "skip") {
+      out.cog = rewriteCogRemoteMetadata(a.dryRun);
+      if (out.cog.action === "skip") {
+        out.notes.push("cog.toml: " + out.cog.reason + " - set [changelog] owner/repository before release.");
+      }
+    }
     out.config = writeConfig(a.force, a.dryRun);
     if (a.withCi && !FILES.includes(".github/workflows/ci.yml")) {
       // The CI mirror is copied, but it only activates after push and requires the workflow scope.

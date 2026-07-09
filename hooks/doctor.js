@@ -20,6 +20,25 @@ function gitSafe(args) { try { return git(args); } catch { return null; } }
 function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
 function tracked(rel) { return gitSafe(["ls-files", "--error-unmatch", rel]) !== null; }
 function readText(rel) { try { return fs.readFileSync(path.join(ROOT, rel), "utf8"); } catch { return ""; } }
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function tomlSection(text, name) {
+  const re = new RegExp(`^\\s*\\[${escapeRe(name)}\\]\\s*$`, "m");
+  const m = re.exec(text);
+  if (!m) return "";
+  const rest = text.slice(m.index + m[0].length);
+  const next = rest.search(/^\s*\[[^\]]+\]\s*$/m);
+  return next >= 0 ? rest.slice(0, next) : rest;
+}
+function tomlString(section, key) {
+  const re = new RegExp(`^\\s*${escapeRe(key)}\\s*=\\s*"([^"]*)"\\s*$`, "m");
+  const m = re.exec(section);
+  return m ? m[1] : null;
+}
+function githubRepoFromUrl(url) {
+  const value = String(url || "").trim();
+  const m = value.match(/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/:]+)\/([^/]+?)(?:\.git)?\/?$/i);
+  return m ? { owner: m[1], repository: m[2] } : null;
+}
 function checkTextFile(rel) {
   const p = path.join(ROOT, rel);
   let buf;
@@ -142,11 +161,10 @@ if (!inRepo) {
   }
   wired ? ok("lefthook wired into .git/hooks") : warn("хуки не установлены — запусти: lefthook install");
 
-  // .git должна допускать полный жизненный цикл lock-файла (write + unlink): git
-  // обновляет index и refs через <name>.lock -> rename/unlink. На FS без удаления
-  // (некоторые сетевые/контейнерные/FUSE mount'ы) commit/checkout/rebase падают на
-  // "index.lock: File exists". Проверяем реальной пробой, а не предположением —
-  // именно этот отказ среды раньше не ловился.
+  // .git must support the full lock-file lifecycle (write + unlink): git updates
+  // the index and refs through <name>.lock -> rename/unlink. On filesystems that
+  // cannot delete files (some network/container/FUSE mounts), commit/checkout/rebase
+  // fails with "index.lock: File exists". Probe the real behavior instead of guessing.
   const gitDir = gitSafe(["rev-parse", "--git-dir"]) || ".git";
   const gitDirAbs = path.isAbsolute(gitDir) ? gitDir : path.join(ROOT, gitDir);
   const probe = path.join(gitDirAbs, ".doctor-lock-probe-" + process.pid);
@@ -192,6 +210,7 @@ const requiredHarnessFiles = [
   "harness.config.json",
   "lefthook.yml",
   "cog.toml",
+  "CHANGELOG.md",
   ".gitleaks.toml",
   "AGENTS.md",
   "settings.example.json",
@@ -250,21 +269,40 @@ if (fs.existsSync(cfgPath)) {
 const cogPath = path.join(ROOT, "cog.toml");
 if (fs.existsSync(cogPath)) {
   const cog = fs.readFileSync(cogPath, "utf8");
+  const changelogSection = tomlSection(cog, "changelog");
+  const changelogTemplate = tomlString(changelogSection, "template");
+  const changelogOwner = tomlString(changelogSection, "owner");
+  const changelogRepository = tomlString(changelogSection, "repository");
   /from_latest_tag\s*=\s*true/.test(cog) ? ok("cog.toml: from_latest_tag=true") : fail("cog.toml: нужен from_latest_tag=true для release bump от последнего v* tag");
   /ignore_merge_commits\s*=\s*true/.test(cog) ? ok("cog.toml: ignore_merge_commits=true") : fail("cog.toml: нужен ignore_merge_commits=true");
   /tag_prefix\s*=\s*"v"/.test(cog) ? ok("cog.toml: tag_prefix=\"v\"") : fail("cog.toml: нужен tag_prefix=\"v\"");
   /branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog)
     ? ok("cog.toml: branch_whitelist includes release/**")
     : fail("cog.toml: branch_whitelist must include release/** for release worktrees");
-  /template\s*=\s*"remote"/.test(cog)
+  changelogTemplate === "remote"
     ? ok("cog.toml: changelog.template=\"remote\"")
     : fail("cog.toml: changelog.template=\"remote\" is required for github.com remote changelog generation");
-  /owner\s*=\s*"[^"]+"/.test(cog)
+  changelogOwner
     ? ok("cog.toml: changelog.owner set")
     : fail("cog.toml: changelog.owner is required for remote changelog generation");
-  /repository\s*=\s*"[^"]+"/.test(cog)
+  changelogRepository
     ? ok("cog.toml: changelog.repository set")
     : fail("cog.toml: changelog.repository is required for remote changelog generation");
+  if (changelogTemplate === "remote" && (changelogOwner || changelogRepository)) {
+    const origin = githubRepoFromUrl(gitSafe(["remote", "get-url", "origin"]));
+    if (!origin) {
+      fail("cog.toml: remote changelog generation requires a GitHub origin remote");
+    } else {
+      const ownerMatches = changelogOwner && changelogOwner.toLowerCase() === origin.owner.toLowerCase();
+      const repoMatches = changelogRepository && changelogRepository.toLowerCase() === origin.repository.toLowerCase();
+      ownerMatches
+        ? ok("cog.toml: changelog.owner matches origin")
+        : fail(`cog.toml: changelog.owner must match origin owner (${origin.owner})`);
+      repoMatches
+        ? ok("cog.toml: changelog.repository matches origin")
+        : fail(`cog.toml: changelog.repository must match origin repository (${origin.repository})`);
+    }
+  }
   const changelogPath = path.join(ROOT, "CHANGELOG.md");
   let changelog = "";
   try { changelog = fs.readFileSync(changelogPath, "utf8"); } catch {}
