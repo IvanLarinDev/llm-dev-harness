@@ -53,7 +53,9 @@ Useful flags:
 Without `--code-owner`, the installer writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the
 regular approving-review requirement without deadlocking solo-maintainer
-repositories on an owner that does not exist in the target project.
+repositories on an owner that does not exist in the target project. The target
+ruleset comment is rewritten to match that policy; re-run with
+`--code-owner @org/team` when a real owner should become a required reviewer.
 
 ## Bootstrap PR
 
