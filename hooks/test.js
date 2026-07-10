@@ -1433,6 +1433,13 @@ ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer ass
 // Real installation.
 installJson(itmp, []);
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(/^# Changelog\s+- - -\s*$/s.test(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8")),
+  "install: missing target changelog is initialized for Cocogitto");
+const productChangelog = "# Changelog\n\n- - -\n\n## v9.9.9\n\n- Product history must survive harness updates.\n";
+fs.writeFileSync(path.join(itmp, "CHANGELOG.md"), productChangelog);
+installJson(itmp, ["--force"]);
+ok(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8") === productChangelog,
+  "install: --force preserves the target project's changelog");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 ok(!fs.existsSync(path.join(itmp, ".github", "workflows", "release.yml")),
