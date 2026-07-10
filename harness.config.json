@@ -1,17 +1,59 @@
 {
-  "_comment": "Configuration for the DESIGN-gate (BACKLOG P1-5). Adjust globs/min for your stack.",
+  "schemaVersion": 2,
+  "_comment": "Universal harness capabilities. Project-owned: installer updates never replace this file.",
+  "capabilities": {
+    "ui": "auto",
+    "release": "cocogitto",
+    "serverPolicy": "github"
+  },
   "ui": {
     "globs": [
       "**/*.ui",
       "**/*.qml",
       "**/*.slint",
+      "**/*.xaml",
+      "**/*.axaml",
+      "**/*.razor",
+      "**/*.cshtml",
+      "**/*.tsx",
+      "**/*.jsx",
+      "**/*.vue",
+      "**/*.svelte",
+      "**/*.html",
+      "**/*.css",
+      "**/*.scss",
+      "**/*.sass",
+      "**/*.less",
+      "**/res/layout/**/*.xml",
+      "**/*View.swift",
       "**/ui/**",
       "**/views/**",
       "**/widgets/**",
+      "**/components/**",
+      "**/pages/**",
+      "**/screens/**",
       "**/*_window.py",
       "**/*_dialog.py",
       "**/*_view.py",
       "**/*_widget.py"
+    ],
+    "exclude": [
+      "**/node_modules/**",
+      "**/vendor/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/bin/**",
+      "**/obj/**",
+      "**/coverage/**",
+      "**/generated/**",
+      "**/*.generated.*",
+      "**/*.g.*",
+      "**/*.test.*",
+      "**/*.spec.*",
+      "**/__tests__/**",
+      "**/test/**",
+      "**/tests/**",
+      "**/fixtures/**"
     ],
     "mockups": {
       "dir": "design/mockups",
@@ -30,7 +72,13 @@
     "strict": true
   },
   "release": {
-    "sourceZip": true
+    "provider": "cocogitto",
+    "sourceZip": true,
+    "artifacts": ["source-zip", "sha256"]
+  },
+  "serverPolicy": {
+    "provider": "github",
+    "profile": "solo"
   },
   "_verify_note": "Omit verify.stacks to enable auto-detect (python/dotnet/rust/node). Here we pin the harness's own self-test as the VERIFY step.",
   "verify": {

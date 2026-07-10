@@ -27,14 +27,34 @@ feature branch are always required.
 
 Before requiring this loop from a target repository, commit the harness to
 `main` through a separate bootstrap PR. Minimum set: `hooks/`, `AGENTS.md`,
-`harness.config.json`, `lefthook.yml`, `cog.toml`, `.gitleaks.toml`,
-`settings.example.json`, and `.github/` when CI/rulesets are enabled.
+`.harness/installation.json`, `harness.config.json`, `lefthook.yml`,
+`.gitleaks.toml`, and `settings.example.json`; release and server-policy files
+are required only when their capabilities are enabled.
 
 `node hooks/doctor.js` checks not only that these files exist, but also that they
 are tracked in git. If harness files are untracked, a clean worktree from
 `origin/main` cannot run `node hooks/verify.js`, `design-gate.js`, or release
 through `cog bump --auto`. In that state, create the bootstrap PR first; release
 flow is not fully enforceable.
+
+Installer state is explicit: a successful first install exits zero with
+`installed=true`, `bootstrapRequired=true`, and `enforceable=false` until the
+bootstrap files are tracked. Automation that requires the final state uses
+`install.js --require-enforceable`.
+
+## Universal Contract
+
+The harness is project-agnostic; Dropwheel is only a canary. Managed runtime is
+limited to `hooks/`, `lefthook.yml`, and `settings.example.json`, with hashes in
+`.harness/installation.json`. `AGENTS.md`, `harness.config.json`, `cog.toml`,
+`.gitleaks.toml`, `.gitattributes`, `CHANGELOG.md`, and `.github/` are
+project-owned and are never replaced by install/update/force. `--update` is
+hash-aware; `--replace-managed` explicitly replaces reviewed managed drift.
+
+`harness.config.json` schema version 2 selects UI, release, and server-policy
+capabilities independently. `none` disables a capability contract; do not infer
+GitHub, Cocogitto, source ZIPs, one-package SemVer, or a GUI from the presence of
+the harness. See `docs/universal-contract.md`.
 
 ## Stage Rules
 
@@ -51,7 +71,7 @@ evidence. Do not use four unrelated visual themes for every kind of UI work.
 
 - Backend-only work with no user-visible UI impact skips DESIGN. A mixed task
   designs only its UI slice. `design-gate.js` skips automatically when no changed
-  file matches `harness.config.json -> ui.globs`.
+  file matches `harness.config.json -> ui.globs` after `ui.exclude`.
 - Animation uses one concrete scenario. The low-cost option is at least four
   written motion variants (`--fidelity text`); use executable HTML/JavaScript
   variants (`--fidelity js`) when timing, gesture, or physical feel cannot be
@@ -197,7 +217,8 @@ anchors remain available.
 
 ## Harness Layers
 
-**Layer 0 - server ruleset.** The only real enforcement layer. Versioned in
+**Layer 0 - server policy adapter.** The strongest repository enforcement layer
+when enabled. The bundled GitHub adapter is versioned in
 `.github/rulesets/main.json` and applied with `node hooks/apply-ruleset.js`.
 It requires PRs, the `verify` required check, and blocks force-push/delete on
 main. It cannot be bypassed locally. Private repositories need a plan that

@@ -7,6 +7,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 
 function arg(name, def) { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : def; }
@@ -14,7 +15,7 @@ const ROOT = arg("--root", process.cwd());
 const results = [];
 function ok(msg) { results.push({ level: "PASS", msg }); }
 function warn(msg) { results.push({ level: "WARN", msg }); }
-function fail(msg) { results.push({ level: "FAIL", msg }); }
+function fail(msg, code) { results.push({ level: "FAIL", msg, ...(code ? { code } : {}) }); }
 function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }).trim(); }
 function gitSafe(args) { try { return git(args); } catch { return null; } }
 function inPath(bin) { try { execFileSync(process.platform === "win32" ? "where" : "which", [bin], { stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }); return true; } catch { return false; } }
@@ -247,18 +248,29 @@ if (!inRepo) {
   } catch {}
 }
 
+const sourceHarness = fs.existsSync(path.join(ROOT, "install.js")) &&
+  fs.existsSync(path.join(ROOT, "hooks", "verify.js"));
+const cfgPath = path.join(ROOT, "harness.config.json");
+let harnessConfig = {};
+let harnessConfigError = null;
+if (fs.existsSync(cfgPath)) {
+  try { harnessConfig = JSON.parse(fs.readFileSync(cfgPath, "utf8")); }
+  catch (e) { harnessConfigError = e; }
+}
+const capabilities = harnessConfig.capabilities || {};
+const releaseProvider = sourceHarness ? "cocogitto" : String(capabilities.release || (harnessConfig.release && harnessConfig.release.provider) || "cocogitto");
+const serverProvider = sourceHarness ? "github" : String(capabilities.serverPolicy || (harnessConfig.serverPolicy && harnessConfig.serverPolicy.provider) || "github");
+
 // runner + delegated tools in PATH (WARN, not FAIL; CI provides them)
 const tools = [
   ["lefthook", "git hook runner (lefthook install)"],
   ["gitleaks", "secret scanning (pre-commit + CI)"],
-  ["cog", "cocogitto: conventional commits + release"],
 ];
+if (releaseProvider === "cocogitto") tools.push(["cog", "cocogitto: conventional commits + release"]);
 for (const t of tools) {
   inPath(t[0]) ? ok(t[0] + " found") : warn(t[0] + " not in PATH - " + t[1]);
 }
 
-const sourceHarness = fs.existsSync(path.join(ROOT, "install.js")) &&
-  fs.existsSync(path.join(ROOT, "hooks", "verify.js"));
 const requiredHarnessFiles = [
   "hooks/verify.js",
   "hooks/verify-core.js",
@@ -280,16 +292,16 @@ const requiredHarnessFiles = [
   "hooks/agent/stop-reminder.js",
   "harness.config.json",
   "lefthook.yml",
-  "cog.toml",
-  "CHANGELOG.md",
   ".gitleaks.toml",
   "AGENTS.md",
   "settings.example.json",
-  ".github/rulesets/main.json",
-  ".github/workflows/ci.yml",
-  ".github/CODEOWNERS",
 ];
-if (sourceHarness) requiredHarnessFiles.push("hooks/test.js");
+if (releaseProvider === "cocogitto") requiredHarnessFiles.push("cog.toml", "CHANGELOG.md");
+if (serverProvider === "github") requiredHarnessFiles.push(
+  ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/CODEOWNERS"
+);
+if (sourceHarness) requiredHarnessFiles.push("hooks/test.js", "templates/AGENTS.target.md", "templates/cog.target.toml");
+else requiredHarnessFiles.push(".harness/installation.json");
 const missingHarness = [];
 const untrackedHarness = [];
 for (const f of requiredHarnessFiles) {
@@ -301,7 +313,7 @@ if (missingHarness.length || untrackedHarness.length) {
   if (missingHarness.length) parts.push("missing: " + missingHarness.join(", "));
   if (untrackedHarness.length) parts.push("untracked: " + untrackedHarness.join(", "));
   fail("harness not bootstrapped into repository main - " + parts.join("; ") +
-    ". Create a bootstrap PR and commit these files before the dev/release loop.");
+    ". Create a bootstrap PR and commit these files before the dev/release loop.", "bootstrap-required");
 } else {
   ok("harness bootstrap files present and tracked");
 }
@@ -323,13 +335,18 @@ const textCritical = requiredHarnessFiles.concat([
 for (const f of textCritical) checkTextFile(f);
 
 // harness.config.json valid JSON
-const cfgPath = path.join(ROOT, "harness.config.json");
-let harnessConfig = {};
 if (fs.existsSync(cfgPath)) {
-  try {
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-    harnessConfig = cfg;
+  if (!harnessConfigError) {
+    const cfg = harnessConfig;
     ok("harness.config.json is valid JSON");
+    if (cfg.schemaVersion && cfg.schemaVersion !== 2)
+      warn(`harness.config.json: unknown schemaVersion ${cfg.schemaVersion}; expected 2`);
+    if (!["auto", "none"].includes(String((cfg.capabilities || {}).ui || "auto")))
+      fail(`harness.config.json: unsupported UI capability ${(cfg.capabilities || {}).ui}`);
+    if (!["cocogitto", "none"].includes(releaseProvider))
+      fail(`harness.config.json: unsupported release provider ${releaseProvider}`);
+    if (!["github", "none"].includes(serverProvider))
+      fail(`harness.config.json: unsupported server-policy provider ${serverProvider}`);
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
     if (sourceHarness || hasSelfTest) {
@@ -339,12 +356,11 @@ if (fs.existsSync(cfgPath)) {
       stacks && runsSelfTest ? ok("harness.config.json: VERIFY declares the harness self-test") :
         fail(`harness.config.json: ${sourceHarness ? "source harness" : "repository with hooks/test.js"} must declare verify.stacks harness self-test (node test.js)`);
     }
-  }
-  catch (e) { fail("harness.config.json is invalid: " + e.message); }
+  } else fail("harness.config.json is invalid: " + harnessConfigError.message);
 }
 
 const cogPath = path.join(ROOT, "cog.toml");
-if (fs.existsSync(cogPath)) {
+if (releaseProvider === "cocogitto" && fs.existsSync(cogPath)) {
   const cog = fs.readFileSync(cogPath, "utf8");
   const changelogSection = tomlSection(cog, "changelog");
   const changelogTemplate = tomlString(changelogSection, "template");
@@ -356,16 +372,21 @@ if (fs.existsSync(cogPath)) {
   /branch_whitelist\s*=\s*\[[^\]]*"release\/\*\*"/s.test(cog)
     ? ok("cog.toml: branch_whitelist includes release/**")
     : fail("cog.toml: branch_whitelist must include release/** for release worktrees");
-  changelogTemplate === "remote"
-    ? ok("cog.toml: changelog.template=\"remote\"")
-    : fail("cog.toml: changelog.template=\"remote\" is required for github.com remote changelog generation");
-  changelogOwner
-    ? ok("cog.toml: changelog.owner set")
-    : fail("cog.toml: changelog.owner is required for remote changelog generation");
-  changelogRepository
-    ? ok("cog.toml: changelog.repository set")
-    : fail("cog.toml: changelog.repository is required for remote changelog generation");
-  if (changelogTemplate === "remote" && (changelogOwner || changelogRepository)) {
+  const configuredRemote = harnessConfig.release && harnessConfig.release.remote;
+  const githubChangelog = sourceHarness || configuredRemote === "github" ||
+    (serverProvider === "github" && configuredRemote !== "none");
+  if (githubChangelog) {
+    changelogTemplate === "remote"
+      ? ok("cog.toml: changelog.template=\"remote\"")
+      : fail("cog.toml: changelog.template=\"remote\" is required for github.com remote changelog generation");
+    changelogOwner
+      ? ok("cog.toml: changelog.owner set")
+      : fail("cog.toml: changelog.owner is required for remote changelog generation");
+    changelogRepository
+      ? ok("cog.toml: changelog.repository set")
+      : fail("cog.toml: changelog.repository is required for remote changelog generation");
+  }
+  if (githubChangelog && changelogTemplate === "remote" && (changelogOwner || changelogRepository)) {
     const origin = githubRepoFromUrl(gitSafe(["remote", "get-url", "origin"]));
     if (!origin) {
       fail("cog.toml: remote changelog generation requires a GitHub origin remote");
@@ -394,7 +415,7 @@ if (fs.existsSync(cogPath)) {
 const workflowPath = ".github/workflows/ci.yml";
 const releaseWorkflowPath = ".github/workflows/release.yml";
 const rulesetPath = ".github/rulesets/main.json";
-if (fs.existsSync(path.join(ROOT, rulesetPath))) {
+if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath))) {
   const jobs = workflowJobIds(workflowPath);
   const required = rulesetRequiredChecks(rulesetPath);
   if (required.length && !fs.existsSync(path.join(ROOT, workflowPath))) {
@@ -410,13 +431,36 @@ if (fs.existsSync(path.join(ROOT, rulesetPath))) {
   }
   checkRulesetPrReview(rulesetPath);
 }
-if (fs.existsSync(path.join(ROOT, releaseWorkflowPath))) {
+if (!sourceHarness && fs.existsSync(path.join(ROOT, ".harness", "installation.json"))) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".harness", "installation.json"), "utf8"));
+    if (manifest.schemaVersion !== 1 || !manifest.managed || typeof manifest.managed !== "object") {
+      fail(".harness/installation.json has an unsupported schema");
+    } else {
+      const drift = [];
+      for (const [rel, expected] of Object.entries(manifest.managed)) {
+        const abs = path.join(ROOT, rel);
+        if (!fs.existsSync(abs)) continue;
+        const actual = crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex");
+        if (actual !== expected) drift.push(rel);
+      }
+      drift.length
+        ? fail(`managed harness runtime differs from its installation baseline: ${drift.join(", ")}. Review the changes, then run install.js --update or explicitly --replace-managed.`)
+        : ok("managed harness runtime matches .harness/installation.json");
+    }
+  } catch (e) { fail(".harness/installation.json is invalid: " + e.message); }
+}
+const auditReleaseWorkflow = sourceHarness || !!(harnessConfig.release &&
+  (harnessConfig.release.sourceZip === true || harnessConfig.release.auditWorkflow === true));
+if (auditReleaseWorkflow && fs.existsSync(path.join(ROOT, releaseWorkflowPath))) {
   if (harnessConfig.release && harnessConfig.release.sourceZip === true) {
     checkReleaseWorkflowContract(releaseWorkflowPath);
   } else {
     ok("release workflow uses a target-specific artifact contract");
   }
   checkWorkflowSupplyChain(releaseWorkflowPath);
+} else if (fs.existsSync(path.join(ROOT, releaseWorkflowPath))) {
+  ok("release workflow uses a target-specific artifact contract; source-ZIP checks are not applied");
 }
 
 // report
