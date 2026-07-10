@@ -64,6 +64,7 @@ const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
+const RELEASE_CLEANUP = path.join(__dirname, "release-cleanup.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
@@ -178,6 +179,15 @@ ok(/design-gate\.js --strict --base/.test(ci), "configs lefthook gitleaks cocogi
 ok(/AGENTSHIELD_VERSION:\s*"1\.4\.0"/.test(ci) && /continue-on-error:\s*true/.test(ci),
   "configs lefthook gitleaks cocogitto ruleset ci assertion 10");
 ok(/AgentShield[\s\S]*shell:\s*bash/.test(ci), "CI: AgentShield step uses bash explicitly on the Windows runner");
+const releaseWorkflow = readRepo(".github/workflows/release.yml");
+ok(/tags:\s*\[[^\]]*"v\*"/.test(releaseWorkflow) && /contents:\s*write/.test(releaseWorkflow),
+  "release workflow triggers on version tags with contents write permission");
+ok(/release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--allow-remote-tag/.test(releaseWorkflow) &&
+   /node hooks\/verify\.js/.test(releaseWorkflow),
+"release workflow rejects tags outside main and runs VERIFY");
+ok(/git archive/.test(releaseWorkflow) && /Get-FileHash[^\n]*SHA256/.test(releaseWorkflow) &&
+   /Expand-Archive/.test(releaseWorkflow) && /gh release (?:create|upload)/.test(releaseWorkflow),
+"release workflow builds, checksums, smoke-tests, and publishes a source ZIP");
 
 // ---------- no-coauthor policy ----------
 console.log("\nno-coauthor policy:");
@@ -950,11 +960,12 @@ function releaseRepo(version, tag = "v0.10.1") {
   relGit(work, ["add", "."]);
   relGit(work, ["commit", "-q", "-m", "chore: base"]);
   relGit(work, ["push", "-q", "-u", "origin", "main"]);
+  const base = relGit(work, ["rev-parse", "HEAD"]);
   writeReleaseProject(work, version);
   relGit(work, ["add", "."]);
   relGit(work, ["commit", "-q", "-m", `chore(version): ${tag}`]);
   relGit(work, ["tag", "-a", tag, "-m", tag]);
-  return { origin, work };
+  return { origin, work, base };
 }
 let relCase = releaseRepo("0.10.1");
 let rpre = releaseJson(relCase.work, "v0.10.1");
@@ -977,6 +988,9 @@ relGit(relCase.work, ["push", "-q", "origin", "v0.10.1"]);
 rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /remote tag already exists/.test(r.msg)),
   "release-preflight: existing remote tag -> FAIL");
+rpre = releaseJson(relCase.work, "v0.10.1", ["--allow-remote-tag"]);
+ok(rpre.ok === true && (rpre.results || []).some((r) => /remote tag already exists but allowed/.test(r.msg)),
+  "release-preflight: tag workflow may allow the already-pushed remote tag");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 relCase = releaseRepo("0.10.1");
 relGit(relCase.work, ["tag", "-d", "v0.10.1"]);
@@ -995,6 +1009,116 @@ rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /CHANGELOG\.md does not mention/.test(r.msg)),
   "release-preflight: stale changelog version -> FAIL");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.1");
+{
+  const releaseHead = relGit(relCase.work, ["rev-parse", "HEAD"]);
+  const tree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
+  const mergedMain = relGit(relCase.work, ["commit-tree", tree, "-p", releaseHead, "-m", "Merge release PR"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", mergedMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-tag-in-base"]);
+ok(rpre.ok === true && rpre.mode === "post-merge" &&
+   (rpre.results || []).some((r) => /tag v0\.10\.1 is included in origin\/main/.test(r.msg)),
+"release-preflight: post-merge mode requires the tag commit inside main");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.1");
+{
+  const tree = relGit(relCase.work, ["rev-parse", `${relCase.base}^{tree}`]);
+  const siblingMain = relGit(relCase.work, ["commit-tree", tree, "-p", relCase.base, "-m", "Unrelated main commit"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", siblingMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-tag-in-base"]);
+ok(rpre.ok === false && (rpre.results || []).some((r) => /tag v0\.10\.1 is not included in origin\/main/.test(r.msg)),
+  "release-preflight: sibling release tag outside main -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+// ---------- release cleanup ----------
+console.log("\nrelease cleanup:");
+function cleanupJson(root, extra = []) {
+  try {
+    const s = execFileSync("node", [RELEASE_CLEANUP, "--root", root, "--base", "origin/main", "--json", ...extra],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(s);
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, candidates: [], blocked: [], errors: [] }; }
+  }
+}
+const cleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-cleanup-"));
+const cleanupOrigin = path.join(cleanupRoot, "origin.git");
+const cleanupWork = path.join(cleanupRoot, "work");
+const cleanReleaseWorktree = path.join(cleanupRoot, "release-worktree");
+const dirtyFixWorktree = path.join(cleanupRoot, "dirty-fix-worktree");
+fs.mkdirSync(cleanupOrigin, { recursive: true });
+fs.mkdirSync(cleanupWork, { recursive: true });
+execFileSync("git", ["init", "--bare", "-q"], { cwd: cleanupOrigin });
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: cleanupWork });
+relGit(cleanupWork, ["config", "user.name", "Harness Test"]);
+relGit(cleanupWork, ["config", "user.email", "harness@example.test"]);
+relGit(cleanupWork, ["remote", "add", "origin", cleanupOrigin]);
+fs.writeFileSync(path.join(cleanupWork, "README.md"), "base\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "chore: base"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "main"]);
+
+relGit(cleanupWork, ["checkout", "-q", "-b", "feat/done"]);
+fs.writeFileSync(path.join(cleanupWork, "done.txt"), "done\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "feat: done"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "feat/done"]);
+relGit(cleanupWork, ["checkout", "-q", "main"]);
+relGit(cleanupWork, ["merge", "-q", "--no-ff", "feat/done", "-m", "Merge feat/done"]);
+relGit(cleanupWork, ["push", "-q", "origin", "main"]);
+
+relGit(cleanupWork, ["branch", "release/v0.10.1", "main"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "release/v0.10.1"]);
+relGit(cleanupWork, ["worktree", "add", "-q", cleanReleaseWorktree, "release/v0.10.1"]);
+relGit(cleanupWork, ["branch", "fix/dirty", "main"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "fix/dirty"]);
+relGit(cleanupWork, ["worktree", "add", "-q", dirtyFixWorktree, "fix/dirty"]);
+fs.writeFileSync(path.join(dirtyFixWorktree, "dirty.txt"), "uncommitted\n");
+
+relGit(cleanupWork, ["checkout", "-q", "-b", "feat/wip", "main"]);
+fs.writeFileSync(path.join(cleanupWork, "wip.txt"), "wip\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "feat: wip"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "feat/wip"]);
+relGit(cleanupWork, ["checkout", "-q", "main"]);
+
+relGit(cleanupWork, ["checkout", "-q", "-b", "fix/remote-ahead", "main"]);
+fs.writeFileSync(path.join(cleanupWork, "remote-ahead.txt"), "remote only\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "fix: remote ahead"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "fix/remote-ahead"]);
+relGit(cleanupWork, ["checkout", "-q", "main"]);
+relGit(cleanupWork, ["branch", "-f", "fix/remote-ahead", "main"]);
+relGit(cleanupWork, ["tag", "v0.10.1"]);
+
+let cleanup = cleanupJson(cleanupWork, ["--no-fetch"]);
+ok(cleanup.apply === false && cleanup.candidates.some((entry) => entry.branch === "feat/done") &&
+   cleanup.candidates.some((entry) => entry.branch === "release/v0.10.1") &&
+   cleanup.blocked.some((entry) => entry.branch === "fix/dirty" && /dirty/.test(entry.reasons.join(" "))) &&
+   cleanup.blocked.some((entry) => entry.branch === "fix/remote-ahead" && /remote branch/.test(entry.reasons.join(" "))),
+"release cleanup dry-run classifies merged clean and dirty branches");
+
+cleanup = cleanupJson(cleanupWork, ["--no-fetch", "--apply"]);
+const localAfterCleanup = relGit(cleanupWork, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
+  .split(/\r?\n/).filter(Boolean);
+const remoteAfterCleanup = relGit(cleanupWork, ["ls-remote", "--heads", "origin"]);
+const cleanupRemovedExpected = cleanup.ok === false && cleanup.deletedLocal.includes("feat/done") && cleanup.deletedLocal.includes("release/v0.10.1") &&
+  cleanup.deletedRemote.includes("feat/done") && cleanup.deletedRemote.includes("release/v0.10.1") &&
+  cleanup.removedWorktrees.some((item) => path.basename(item).toLowerCase() === path.basename(cleanReleaseWorktree).toLowerCase());
+ok(cleanupRemovedExpected,
+"release cleanup removes merged branches and their clean linked worktrees");
+ok(localAfterCleanup.includes("fix/dirty") && localAfterCleanup.includes("feat/wip") && localAfterCleanup.includes("fix/remote-ahead") &&
+   /refs\/heads\/fix\/dirty/.test(remoteAfterCleanup) && /refs\/heads\/feat\/wip/.test(remoteAfterCleanup) &&
+   /refs\/heads\/fix\/remote-ahead/.test(remoteAfterCleanup) &&
+   !localAfterCleanup.includes("feat/done") && !localAfterCleanup.includes("release/v0.10.1"),
+"release cleanup preserves dirty, unmerged, and remote-diverged branches");
+ok(relGit(cleanupWork, ["tag", "--list", "v0.10.1"]) === "v0.10.1",
+  "release cleanup never deletes release tags");
+try { fs.rmSync(cleanupRoot, { recursive: true, force: true }); } catch {}
 
 // ---------- stop-reminder ----------
 console.log("\nstop-reminder:");
@@ -1059,9 +1183,11 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
+ok(!fs.existsSync(path.join(itmp, ".github", "workflows", "release.yml")),
+  "install: source-only release workflow is not copied into target projects");
 const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");
 const defaultRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
 const defaultPrRule = (defaultRuleset.rules || []).find((r) => r.type === "pull_request");
