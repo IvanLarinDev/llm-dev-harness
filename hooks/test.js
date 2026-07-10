@@ -64,6 +64,7 @@ const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
+const POST_MERGE_CLEANUP = path.join(__dirname, "post-merge-cleanup.js");
 const RELEASE_CLEANUP = path.join(__dirname, "release-cleanup.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
@@ -1036,13 +1037,15 @@ fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.ori
 
 // ---------- release cleanup ----------
 console.log("\nrelease cleanup:");
-function cleanupJson(root, extra = []) {
+ok(/--force-with-lease=refs\/heads\/\$\{entry\.branch\}:\$\{entry\.remoteOid\}/.test(readRepo("hooks/release-cleanup.js")),
+"branch cleanup leases remote deletion to the OID that passed ancestry checks");
+function cleanupJson(root, extra = [], script = RELEASE_CLEANUP) {
   try {
-    const s = execFileSync("node", [RELEASE_CLEANUP, "--root", root, "--base", "origin/main", "--json", ...extra],
+    const s = execFileSync("node", [script, "--root", root, "--base", "origin/main", "--json", ...extra],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(s);
   } catch (e) {
-    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, candidates: [], blocked: [], errors: [] }; }
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, candidates: [], blocked: [], skipped: [], errors: [] }; }
   }
 }
 const cleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-cleanup-"));
@@ -1095,22 +1098,42 @@ relGit(cleanupWork, ["checkout", "-q", "main"]);
 relGit(cleanupWork, ["branch", "-f", "fix/remote-ahead", "main"]);
 relGit(cleanupWork, ["tag", "v0.10.1"]);
 
+let postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.mode === "branch" && postMerge.branch === "feat/done" &&
+   postMerge.candidates.length === 1 && postMerge.candidates[0].branch === "feat/done",
+"post-merge cleanup dry-run scopes deletion to one merged development branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch", "--apply"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.deletedLocal.includes("feat/done") && postMerge.deletedRemote.includes("feat/done"),
+"post-merge cleanup deletes the merged local and remote feature branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.absent.includes("feat/done"),
+"post-merge cleanup is idempotent after the branch is already absent");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/wip", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.blocked.some((entry) => entry.branch === "feat/wip" && /not merged/.test(entry.reasons.join(" "))),
+"post-merge cleanup blocks an unmerged feature branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "release/v0.10.1", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.errors.some((error) => /not eligible/.test(error)),
+"post-merge cleanup reserves release branches for post-smoke cleanup");
+postMerge = cleanupJson(cleanupWork, ["--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.errors.some((error) => /--branch is required/.test(error)),
+"post-merge cleanup requires an explicit branch");
+
 let cleanup = cleanupJson(cleanupWork, ["--no-fetch"]);
-ok(cleanup.apply === false && cleanup.candidates.some((entry) => entry.branch === "feat/done") &&
-   cleanup.candidates.some((entry) => entry.branch === "release/v0.10.1") &&
+ok(cleanup.apply === false && cleanup.candidates.some((entry) => entry.branch === "release/v0.10.1") &&
    cleanup.blocked.some((entry) => entry.branch === "fix/dirty" && /dirty/.test(entry.reasons.join(" "))) &&
-   cleanup.blocked.some((entry) => entry.branch === "fix/remote-ahead" && /remote branch/.test(entry.reasons.join(" "))),
-"release cleanup dry-run classifies merged clean and dirty branches");
+   cleanup.blocked.some((entry) => entry.branch === "fix/remote-ahead" && /remote branch/.test(entry.reasons.join(" "))) &&
+   cleanup.skipped.some((entry) => entry.branch === "feat/wip" && /not merged/.test(entry.reasons.join(" "))),
+"release cleanup dry-run classifies merged, dirty, diverged, and unmerged branches");
 
 cleanup = cleanupJson(cleanupWork, ["--no-fetch", "--apply"]);
 const localAfterCleanup = relGit(cleanupWork, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
   .split(/\r?\n/).filter(Boolean);
 const remoteAfterCleanup = relGit(cleanupWork, ["ls-remote", "--heads", "origin"]);
-const cleanupRemovedExpected = cleanup.ok === false && cleanup.deletedLocal.includes("feat/done") && cleanup.deletedLocal.includes("release/v0.10.1") &&
-  cleanup.deletedRemote.includes("feat/done") && cleanup.deletedRemote.includes("release/v0.10.1") &&
+const cleanupRemovedExpected = cleanup.ok === false && cleanup.deletedLocal.includes("release/v0.10.1") &&
+  cleanup.deletedRemote.includes("release/v0.10.1") &&
   cleanup.removedWorktrees.some((item) => path.basename(item).toLowerCase() === path.basename(cleanReleaseWorktree).toLowerCase());
 ok(cleanupRemovedExpected,
-"release cleanup removes merged branches and their clean linked worktrees");
+"release cleanup removes the remaining merged release branch and its clean linked worktree");
 ok(localAfterCleanup.includes("fix/dirty") && localAfterCleanup.includes("feat/wip") && localAfterCleanup.includes("fix/remote-ahead") &&
    /refs\/heads\/fix\/dirty/.test(remoteAfterCleanup) && /refs\/heads\/feat\/wip/.test(remoteAfterCleanup) &&
    /refs\/heads\/fix\/remote-ahead/.test(remoteAfterCleanup) &&
@@ -1183,7 +1206,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 ok(!fs.existsSync(path.join(itmp, ".github", "workflows", "release.yml")),

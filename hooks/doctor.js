@@ -235,6 +235,7 @@ const requiredHarnessFiles = [
   "hooks/verify-core.js",
   "hooks/design-gate.js",
   "hooks/release-preflight.js",
+  "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",

@@ -28,6 +28,7 @@ README covers the stack and installation.
 | Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
 | GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
+| Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
 | Source ZIP release | GitHub Actions | [.github/workflows/release.yml](./.github/workflows/release.yml) |
 | Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
@@ -119,10 +120,25 @@ node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
+node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/release-cleanup.js --base origin/main
 node hooks/doctor.js
 node hooks/apply-ruleset.js --dry-run
 ```
+
+## Branch lifecycle
+
+Development branches and releases have separate lifecycles. Merge short-lived
+feature/fix/docs/chore branches through verified PRs into `main`; after the PR
+is server-confirmed `MERGED` and the resulting `main` CI succeeds, run
+`post-merge-cleanup.js` in dry-run mode and then with `--apply`. The helper
+deletes only merged local/remote refs and clean linked worktrees.
+
+`main` may accumulate verified but unreleased changes for as long as needed.
+The eventual SemVer bump is derived from Conventional Commits since the latest
+tag. Keep incomplete behavior behind feature flags so `main` remains releasable.
+Dirty, diverged, and unmerged branches are preserved. Release/hotfix branches
+are retained until publication and artifact smoke testing complete.
 
 ## Full release
 
@@ -143,7 +159,8 @@ The safe sequence is intentionally two-PR:
 5. Push the tag. The source release workflow verifies the exact tag, builds a
    source ZIP and SHA-256, smoke-tests the ZIP, and publishes the GitHub Release.
 6. Download the published assets, compare the checksum, repeat the smoke check,
-   then run `release-cleanup.js --apply` from a separate clean base worktree.
+   then run `release-cleanup.js --apply` from a separate clean base worktree as
+   a final audit for merged branches missed by post-merge cleanup.
 
 This repository is source-only, so its release artifact is
 `llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories

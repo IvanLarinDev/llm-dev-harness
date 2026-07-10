@@ -15,6 +15,7 @@ enforce.
    - failure/new warnings -> return to step 3
    - green              -> step 5
 5. COMMIT on branch -> PR, never directly on main
+5.5 MERGE+CLEANUP   - confirmed MERGED + green main -> exact branch cleanup
 6. REPORT           - changed / verified / remaining / manual test notes
 7. USER DECISION    - accept = DONE; revise -> 2 or 3; reject -> revert
 ```
@@ -98,6 +99,23 @@ or `BREAKING CHANGE:` means MAJOR. Lefthook rejects co-author and generated-by
 trailers. `git push`, force-push, and `reset --hard` require an explicit user
 request.
 
+**5.5 MERGE -> CLEANUP.** Feature, fix, docs, chore, refactor, test, CI, and
+other development branches do not wait for a release. After the PR is confirmed
+server-side `MERGED` and the resulting `main` push CI is green, run from a
+separate clean base worktree:
+
+```powershell
+node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
+node hooks/post-merge-cleanup.js --branch feat/example --base origin/main --apply
+```
+
+The helper requires both local and remote refs to be ancestors of the base,
+removes only clean linked worktrees, and is idempotent when the branch was
+already deleted. Dirty, diverged, or unmerged refs block exact cleanup and are
+never forced. `release/*` and `hotfix/*` are deliberately ineligible: retain
+them until their tag, published artifacts, and smoke tests succeed. The
+release-wide cleanup remains a final audit for merged branches missed earlier.
+
 **6. REPORT.** Report what changed, what was verified with commands and results,
 what remains, and how the user can test manually.
 
@@ -119,7 +137,7 @@ still requires a new user decision.
 
 | Step | Action | Gate |
 |---|---|---|
-| R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green. | No release from an unmerged feature branch. |
+| R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green, then run exact post-merge cleanup for each branch. | No release from an unmerged feature branch; merged development branches should not accumulate while releases are deferred. |
 | R1 | Fetch/prune, then create a new clean release worktree from `origin/main`. Run `node hooks/doctor.js`, `node hooks/verify.js`, and `git describe --tags --abbrev=0`. | The latest tag must be an ancestor of `origin/main`; stop on a broken release graph. |
 | R2 | Derive SemVer from merged Conventional Commits with `cog bump --auto --dry-run`. Report the computed tag/diff/notes, create `release/vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. |
 | R2.5 | Run prepare preflight: `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`. | Clean tree; annotated local tag points at release HEAD; remote tag absent; manifests and CHANGELOG match. |
@@ -127,7 +145,7 @@ still requires a new user decision.
 | R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base`. | The tag commit must now be an ancestor of `origin/main`; remote tag must still be absent. |
 | R5 | Push `vX.Y.Z`. Watch the tag-triggered release workflow and require every release step to pass. | The workflow must build from the exact tag, verify, create a source ZIP + SHA-256, smoke-test it, and publish the GitHub Release. |
 | R6 | Run `gh release view vX.Y.Z`; download the published ZIP/checksum; compare SHA-256 and smoke-test the downloaded asset. | For this source-only harness, the tag plus matching CHANGELOG version is the version check. Binary/package projects must also verify their reported binary/package version. |
-| R7 | From a separate clean base worktree run `node hooks/release-cleanup.js --base origin/main` and then `node hooks/release-cleanup.js --base origin/main --apply`. | Immediately delete all merged managed feature/release branches and clean linked worktrees. Dirty or unmerged branches block cleanup and are reported, never forced. Tags are retained. |
+| R7 | From a separate clean base worktree run `node hooks/release-cleanup.js --base origin/main` and then `node hooks/release-cleanup.js --base origin/main --apply`. | Final audit: delete any remaining merged managed branches and clean linked worktrees. Dirty merged branches block cleanup; unmerged branches are skipped and reported. Tags are retained. |
 | R8 | Report tag, merge SHAs, workflow URL, Release URL, asset hash, smoke results, cleanup results, and rollback boundary. | The release is complete only after R6 and R7. |
 
 The source repository's `.github/workflows/release.yml` implements the source
