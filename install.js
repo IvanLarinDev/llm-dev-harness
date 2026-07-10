@@ -39,9 +39,11 @@ const { DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_
 // Harness files copied into the target repository. harness.config.json is not here
 // because it is generated separately. test.js is not here because it is the source
 // repo's dev self-test, tied to this repo's docs/CI. .github/rulesets/main.json is
-// needed by apply-ruleset.js, so it is always copied.
+// needed by apply-ruleset.js, so it is always copied. The source repository's
+// release.yml is intentionally not copied: target projects must build and verify
+// artifacts appropriate to their own runtime.
 const FILES = [
-  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-preflight.js",
+  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-preflight.js", "hooks/release-cleanup.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",

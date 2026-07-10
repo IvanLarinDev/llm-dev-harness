@@ -21,8 +21,8 @@ Resolved in this hardening pass:
   `git diff --cached --check`.
 - `--changed` now runs harness syntax for changed harness files even when
   `hooks/test.js` is not tracked in a target install.
-- Release preflight now requires annotated tags and fails when `CHANGELOG.md`
-  does not mention the release version.
+- Release preflight requires annotated tags, validates `CHANGELOG.md`, and has a
+  post-merge mode that rejects tags outside `origin/main`.
 - Target installs no longer hardcode the source maintainer in CODEOWNERS and no
   longer enable required code-owner review unless `--code-owner` is provided.
 - Guard path handling covers common file-tool aliases and quoted shell paths, so
@@ -37,7 +37,8 @@ Remaining watch items:
   whether to make it a required check.
 - Source-repo ruleset may still require code-owner review; target installs should
   enable it only with a real second maintainer or team.
-- Release artifact verification remains a manual R6 step.
+- Target repositories still need artifact workflows appropriate to their own
+  binary/package formats; the source harness workflow publishes a source ZIP.
 
 ## P0 - Server Enforcement
 
@@ -86,8 +87,8 @@ required status checks, required PRs, and blocked force-push/delete.
 ## P2 - Maturity
 
 - **P2-10. Loop guard for non-shell tools. Done.**
-- **P2-11. Release automation. Done via cocogitto plus preflight.** This pass
-  hardens annotated-tag and changelog-version checks.
+- **P2-11. Release automation. Done via two-PR flow, cocogitto, post-merge
+  preflight, source ZIP workflow, and safe merged-branch cleanup.**
 - **P2-12. Doctor. Done.** Checks environment, tracked bootstrap files, line
   endings, required CI/ruleset contract, and release config.
 - **P2-13. Quality-gate helper. Removed.** Prefer real linters/tests and git diff

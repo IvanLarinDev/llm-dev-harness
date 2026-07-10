@@ -28,6 +28,8 @@ README covers the stack and installation.
 | Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
 | GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
+| Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
+| Source ZIP release | GitHub Actions | [.github/workflows/release.yml](./.github/workflows/release.yml) |
 | Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
 | Agent config security audit | ecc-agentshield | [.github/workflows/ci.yml](./.github/workflows/ci.yml) |
 
@@ -116,9 +118,37 @@ node hooks/verify.js [--list]
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
+node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
+node hooks/release-cleanup.js --base origin/main
 node hooks/doctor.js
 node hooks/apply-ruleset.js --dry-run
 ```
+
+## Full release
+
+A request for a full release is standing authorization for the normal release
+pushes, PR merges, computed SemVer tag, GitHub Release publication, and final
+cleanup of merged development/release branches. It never authorizes bypasses,
+force-pushes, deletion of unmerged work, or loss of dirty worktrees.
+
+The safe sequence is intentionally two-PR:
+
+1. Merge and verify the feature/fix PR on `main`.
+2. From fresh `origin/main`, compute SemVer and create the version/changelog
+   commit plus a local annotated tag on `release/vX.Y.Z`.
+3. Run prepare preflight, push only the release branch, and merge its PR with a
+   merge commit so the locally tagged release commit remains in `main`.
+4. Wait for `main` CI and run post-merge preflight with
+   `--require-tag-in-base`.
+5. Push the tag. The source release workflow verifies the exact tag, builds a
+   source ZIP and SHA-256, smoke-tests the ZIP, and publishes the GitHub Release.
+6. Download the published assets, compare the checksum, repeat the smoke check,
+   then run `release-cleanup.js --apply` from a separate clean base worktree.
+
+This repository is source-only, so its release artifact is
+`llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories
+do not receive this source-specific workflow; they must define artifacts and
+version checks appropriate to their own runtime.
 
 PowerShell-safe lefthook diagnostics:
 

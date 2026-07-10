@@ -105,21 +105,39 @@ what remains, and how the user can test manually.
 
 ## Release Flow
 
-Run this only on explicit request and after merge to `main`.
+Run this only on an explicit release request. A request to make a **full
+release** is standing authorization for the normal release actions below:
+pushing feature/release branches, creating and merging their PRs, pushing the
+computed SemVer tag, publishing the GitHub Release, and deleting merged
+development/release branches after smoke testing. Do not pause for a second
+approval after the SemVer preview.
+
+Standing authorization does not allow bypassing hooks/rulesets, force-pushing,
+continuing after a failed gate, deleting unmerged branches, or discarding a
+dirty worktree. Unexpected history repair, rollback, or destructive recovery
+still requires a new user decision.
 
 | Step | Action | Gate |
 |---|---|---|
-| R1 | Start from a clean worktree at `origin/main`; `node hooks/doctor.js` is green; read current version with `git describe --tags --abbrev=0`. | |
-| R2 | Derive SemVer from Conventional Commits: first `cog bump --auto --dry-run`, then `cog bump --auto --annotated "vX.Y.Z"` to create an annotated tag and changelog. | Show tag, diff, and notes; wait for approval. |
-| R2.5 | `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`: clean tree, tag points to HEAD, remote tag absent, project/package versions match the tag. | |
-| R3 | `git push origin <branch> && git push origin vX.Y.Z`. | Only after an explicit yes. |
-| R4 | If release workflow exists: `gh run watch`; release workflow is green and has no skipped steps. | |
-| R5 | `gh release view vX.Y.Z`: release is published and artifacts exist. | |
-| R6 | Download artifact, smoke-test it, and verify binary version equals the tag. | |
-| R7 | Know rollback: before publication, recreate the tag; after publication, use `gh release delete` plus revert with approval. | |
+| R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green. | No release from an unmerged feature branch. |
+| R1 | Fetch/prune, then create a new clean release worktree from `origin/main`. Run `node hooks/doctor.js`, `node hooks/verify.js`, and `git describe --tags --abbrev=0`. | The latest tag must be an ancestor of `origin/main`; stop on a broken release graph. |
+| R2 | Derive SemVer from merged Conventional Commits with `cog bump --auto --dry-run`. Report the computed tag/diff/notes, create `release/vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. |
+| R2.5 | Run prepare preflight: `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`. | Clean tree; annotated local tag points at release HEAD; remote tag absent; manifests and CHANGELOG match. |
+| R3 | Push **only** `release/vX.Y.Z`, create its PR to `main`, wait for required checks, merge it with a merge commit, and verify server-side `MERGED`. | Do not squash/rebase the PR: the locally tagged release commit must remain in `main`. Do not push the tag yet. |
+| R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base`. | The tag commit must now be an ancestor of `origin/main`; remote tag must still be absent. |
+| R5 | Push `vX.Y.Z`. Watch the tag-triggered release workflow and require every release step to pass. | The workflow must build from the exact tag, verify, create a source ZIP + SHA-256, smoke-test it, and publish the GitHub Release. |
+| R6 | Run `gh release view vX.Y.Z`; download the published ZIP/checksum; compare SHA-256 and smoke-test the downloaded asset. | For this source-only harness, the tag plus matching CHANGELOG version is the version check. Binary/package projects must also verify their reported binary/package version. |
+| R7 | From a separate clean base worktree run `node hooks/release-cleanup.js --base origin/main` and then `node hooks/release-cleanup.js --base origin/main --apply`. | Immediately delete all merged managed feature/release branches and clean linked worktrees. Dirty or unmerged branches block cleanup and are reported, never forced. Tags are retained. |
+| R8 | Report tag, merge SHAs, workflow URL, Release URL, asset hash, smoke results, cleanup results, and rollback boundary. | The release is complete only after R6 and R7. |
 
-Hotfix: branch from the previous tag, fix, PR to `main`, then tag through R2-R6.
-A legitimate release commit on `main` can use `HARNESS_ALLOW_MAIN=1 git commit ...`.
+The source repository's `.github/workflows/release.yml` implements the source
+ZIP path. Installed target repositories must provide a release workflow suited
+to their own binary/package artifacts; when none exists, reproduce R5-R6
+manually from the exact tag and do not claim the release is complete early.
+
+Hotfix: branch from the previous tag, fix, PR to `main`, then follow R1-R8.
+Do not make a release commit directly on `main`; the version/changelog commit
+uses the release PR in R3.
 
 `release-preflight.js` intentionally fails if the tag/changelog are ready but a
 project manifest still reports an old version. If no version manifest exists, it
@@ -131,6 +149,11 @@ the local post-merge pull/rebase fails because of a dirty worktree. Verify with
 merge happened. Sync locally only from a clean tree with `git fetch origin` and
 `git merge --ff-only origin/main`. For releases, prefer a new clean worktree from
 `origin/main`.
+
+Rollback remains a separate decision: before publication, delete/recreate the
+tag only with approval; after publication, use `gh release delete` plus a revert
+PR with approval. Branch cleanup never deletes tags, so published release
+anchors remain available.
 
 ## Harness Layers
 
