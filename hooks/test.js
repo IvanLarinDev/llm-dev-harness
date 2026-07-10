@@ -187,7 +187,7 @@ ok(/AgentShield[\s\S]*shell:\s*bash/.test(ci), "CI: AgentShield step uses bash e
 const releaseWorkflow = readRepo(".github/workflows/release.yml");
 ok(/tags:\s*\[[^\]]*"v\*"/.test(releaseWorkflow) && /contents:\s*write/.test(releaseWorkflow),
   "release workflow triggers on version tags with contents write permission");
-ok(/release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--allow-remote-tag/.test(releaseWorkflow) &&
+ok(/release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--require-release-tip[^\n]*--allow-remote-tag/.test(releaseWorkflow) &&
    /node hooks\/verify\.js/.test(releaseWorkflow),
 "release workflow rejects tags outside main and runs VERIFY");
 ok(/git archive/.test(releaseWorkflow) && /Get-FileHash[^\n]*SHA256/.test(releaseWorkflow) &&
@@ -671,6 +671,15 @@ try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 console.log("\nverify runner:");
 ok(typeof verifyCore.planVerifyTargets === "function" && typeof verifyCore.debugAudit === "function",
   "verify-core exports planning and audit policy");
+const sourceIntegrityTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-source-integrity-"));
+fs.mkdirSync(path.join(sourceIntegrityTmp, "hooks"));
+fs.writeFileSync(path.join(sourceIntegrityTmp, "install.js"), "// source marker\n");
+fs.writeFileSync(path.join(sourceIntegrityTmp, "hooks", "verify.js"), "// verify marker\n");
+const sourceIntegrityPlan = verifyCore.planVerifyTargets(sourceIntegrityTmp, [], {}).targets;
+ok(sourceIntegrityPlan.some((target) => target.stack.id === "source-harness" &&
+   (target.stack.steps || []).some((step) => step.run === "node test.js")),
+  "verify source integrity: missing hooks/test.js still schedules a failing source self-test command");
+fs.rmSync(sourceIntegrityTmp, { recursive: true, force: true });
 function verifyExit(root) {
   try { execFileSync("node", [VERIFY, "--root", root], { encoding: "utf8", stdio: "pipe", maxBuffer: 8 * 1024 * 1024 }); return 0; }
   catch (e) { return e.status || 1; }
@@ -909,12 +918,17 @@ dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /does not run required harness step/.test(r.msg) && /doctor/.test(r.msg) && /design-gate strict/.test(r.msg) && /secret scan/.test(r.msg) && r.level === "FAIL"),
   "doctor assertion 5");
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
-  "name: verify\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - uses: gitleaks/gitleaks-action@v2\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
+  "name: verify\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo harmless\n      # run: node hooks/doctor.js\n      # run: node hooks/verify.js\n      # run: node hooks/design-gate.js --strict\n      # run: gitleaks detect\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /does not run required harness step/.test(r.msg) && /doctor/.test(r.msg) && /verify/.test(r.msg) && r.level === "FAIL"),
+  "doctor: commented workflow gate names do not satisfy the active run-step contract");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
+  "name: verify\njobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - run: gitleaks detect\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 6");
 fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
-  "name: verify\njobs:\n  \"verify\": # quoted job id is valid YAML\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - uses: gitleaks/gitleaks-action@v2\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
+  "name: verify\njobs:\n  \"verify\": # quoted job id is valid YAML\n    name: build label can differ\n    runs-on: ubuntu-latest\n    steps:\n      - run: node hooks/doctor.js\n      - run: gitleaks detect\n      - run: node hooks/verify.js\n      - run: node hooks/design-gate.js --strict --base origin/main\n");
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 7");
@@ -991,6 +1005,18 @@ dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /\.github\/rulesets\/main\.json/.test(r.msg) && /hooks\/apply-ruleset\.js/.test(r.msg) && r.level === "FAIL"),
   "doctor assertion 10");
 try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
+
+const sourceDoctorRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-source-integrity-"));
+execFileSync("git", ["init", "-q"], { cwd: sourceDoctorRepo });
+fs.mkdirSync(path.join(sourceDoctorRepo, "hooks"));
+fs.writeFileSync(path.join(sourceDoctorRepo, "install.js"), "// source marker\n");
+fs.writeFileSync(path.join(sourceDoctorRepo, "hooks", "verify.js"), "// verify marker\n");
+fs.writeFileSync(path.join(sourceDoctorRepo, "harness.config.json"), "{}\n");
+dres = doctor(sourceDoctorRepo);
+ok((dres.results || []).some((result) => /missing:.*hooks\/test\.js/.test(result.msg) && result.level === "FAIL") &&
+   (dres.results || []).some((result) => /source harness.*declare.*self-test/.test(result.msg) && result.level === "FAIL"),
+  "doctor source integrity: missing test file and self-test config fail closed");
+fs.rmSync(sourceDoctorRepo, { recursive: true, force: true });
 
 // ---------- release start ----------
 console.log("\nrelease start:");
@@ -1227,13 +1253,40 @@ relCase = releaseRepo("0.10.1");
 {
   const releaseHead = relGit(relCase.work, ["rev-parse", "HEAD"]);
   const tree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
-  const mergedMain = relGit(relCase.work, ["commit-tree", tree, "-p", releaseHead, "-m", "Merge release PR"]);
+  const mergedMain = relGit(relCase.work, ["commit-tree", tree, "-p", relCase.base, "-p", releaseHead, "-m", "Merge release PR"]);
   relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", mergedMain]);
 }
-rpre = releaseJson(relCase.work, "v0.10.1", ["--require-tag-in-base"]);
-ok(rpre.ok === true && rpre.mode === "post-merge" &&
-   (rpre.results || []).some((r) => /tag v0\.10\.1 is included in origin\/main/.test(r.msg)),
-"release-preflight: post-merge mode requires the tag commit inside main");
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === true && rpre.mode === "release-tip" &&
+   (rpre.results || []).some((r) => /exact release merge/.test(r.msg)),
+"release-preflight: exact two-parent release merge -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.1");
+{
+  const releaseHead = relGit(relCase.work, ["rev-parse", "HEAD"]);
+  const releaseTree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
+  const baseTree = relGit(relCase.work, ["rev-parse", `${relCase.base}^{tree}`]);
+  const concurrentMain = relGit(relCase.work, ["commit-tree", baseTree, "-p", relCase.base, "-m", "Concurrent main change"]);
+  const mergedMain = relGit(relCase.work, ["commit-tree", releaseTree, "-p", concurrentMain, "-p", releaseHead, "-m", "Merge stale release PR"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", mergedMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === false && (rpre.results || []).some((r) => /does not include the merge base parent/.test(r.msg)),
+  "release-preflight: concurrent main commit omitted by tag -> FAIL");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.1");
+{
+  const releaseHead = relGit(relCase.work, ["rev-parse", "HEAD"]);
+  const tree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
+  const mergedMain = relGit(relCase.work, ["commit-tree", tree, "-p", relCase.base, "-p", releaseHead, "-m", "Merge release PR"]);
+  const laterMain = relGit(relCase.work, ["commit-tree", tree, "-p", mergedMain, "-m", "Commit after release merge"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", laterMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === false && (rpre.results || []).some((r) => /exact two-parent release merge/.test(r.msg)),
+  "release-preflight: main advanced after release merge -> FAIL");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 
 relCase = releaseRepo("0.10.1");

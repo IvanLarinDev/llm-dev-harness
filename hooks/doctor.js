@@ -88,6 +88,31 @@ function workflowJobBody(rel, id) {
   const job = workflowJobs(rel).find((j) => j.id === id);
   return job ? job.body.join("\n") : "";
 }
+function workflowRunCommands(body) {
+  const lines = String(body || "").split(/\r?\n/);
+  const commands = [];
+  for (let i = 0; i < lines.length; i++) {
+    const match = lines[i].match(/^(\s*)(?:-\s*)?run:\s*(.*)$/);
+    if (!match) continue;
+    const indent = match[1].length;
+    const inline = match[2].trim();
+    if (inline && inline !== "|" && inline !== ">" && inline !== "|-" && inline !== ">-") {
+      commands.push(inline);
+      continue;
+    }
+    const block = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      const raw = lines[j];
+      if (!raw.trim()) { block.push(""); continue; }
+      const childIndent = (raw.match(/^\s*/) || [""])[0].length;
+      if (childIndent <= indent) break;
+      if (!raw.trimStart().startsWith("#")) block.push(raw.trim());
+      i = j;
+    }
+    commands.push(block.join("\n"));
+  }
+  return commands;
+}
 function rulesetRequiredChecks(rel) {
   let ruleset = {};
   try { ruleset = JSON.parse(readText(rel)); } catch { return []; }
@@ -129,13 +154,14 @@ function checkVerifyJobContract(workflowPath, required) {
   if (!required.includes("verify")) return;
   const body = workflowJobBody(workflowPath, "verify");
   if (!body) { fail("CI job verify is required by ruleset but its workflow body was not found"); return; }
+  const commands = workflowRunCommands(body).join("\n");
   const checks = [
     { name: "doctor", re: /node\s+hooks\/doctor\.js\b/ },
     { name: "verify", re: /node\s+hooks\/verify\.js\b/ },
     { name: "design-gate strict", re: /node\s+hooks\/design-gate\.js\b[^\n]*--strict\b/ },
     { name: "secret scan", re: /gitleaks/i },
   ];
-  const missing = checks.filter((c) => !c.re.test(body)).map((c) => c.name);
+  const missing = checks.filter((c) => !c.re.test(commands)).map((c) => c.name);
   if (missing.length) fail(`CI job verify does not run required harness step(s): ${missing.join(", ")}`);
   else ok("CI job verify runs doctor, verify.js, design-gate --strict and secret scan");
 }
@@ -160,7 +186,7 @@ function checkReleaseWorkflowContract(workflowPath) {
   const checks = [
     { name: "v* tag trigger", re: /tags:\s*\[[^\]]*["']?v\*/i },
     { name: "contents write permission", re: /contents:\s*write/i },
-    { name: "post-merge preflight", re: /release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--allow-remote-tag/i },
+    { name: "post-merge preflight", re: /release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--require-release-tip[^\n]*--allow-remote-tag/i },
     { name: "VERIFY", re: /node\s+hooks\/verify\.js\b/i },
     { name: "exact-tag git archive", re: /git\s+archive\b/i },
     { name: "SHA-256", re: /Get-FileHash[^\n]*SHA256/i },
@@ -231,6 +257,8 @@ for (const t of tools) {
   inPath(t[0]) ? ok(t[0] + " found") : warn(t[0] + " not in PATH - " + t[1]);
 }
 
+const sourceHarness = fs.existsSync(path.join(ROOT, "install.js")) &&
+  fs.existsSync(path.join(ROOT, "hooks", "verify.js"));
 const requiredHarnessFiles = [
   "hooks/verify.js",
   "hooks/verify-core.js",
@@ -261,6 +289,7 @@ const requiredHarnessFiles = [
   ".github/workflows/ci.yml",
   ".github/CODEOWNERS",
 ];
+if (sourceHarness) requiredHarnessFiles.push("hooks/test.js");
 const missingHarness = [];
 const untrackedHarness = [];
 for (const f of requiredHarnessFiles) {
@@ -303,12 +332,12 @@ if (fs.existsSync(cfgPath)) {
     ok("harness.config.json is valid JSON");
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
-    if (hasSelfTest && stacks) {
-      const harness = stacks.find((s) => s && s.id === "harness");
+    if (sourceHarness || hasSelfTest) {
+      const harness = (stacks || []).find((s) => s && s.id === "harness");
       const steps = (harness && Array.isArray(harness.steps)) ? harness.steps : [];
       const runsSelfTest = steps.some((s) => /node\s+test\.js\b/.test(String(s && s.run || "")));
-      runsSelfTest ? ok("harness.config.json: VERIFY includes harness self-test") :
-        fail("harness.config.json: verify.stacks is set but required harness self-test (node test.js) is missing");
+      stacks && runsSelfTest ? ok("harness.config.json: VERIFY declares the harness self-test") :
+        fail(`harness.config.json: ${sourceHarness ? "source harness" : "repository with hooks/test.js"} must declare verify.stacks harness self-test (node test.js)`);
     }
   }
   catch (e) { fail("harness.config.json is invalid: " + e.message); }

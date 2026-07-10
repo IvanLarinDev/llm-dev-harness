@@ -28,7 +28,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           git fetch origin main --tags
-          node hooks/release-preflight.js --tag $env:TAG --base origin/main --require-tag-in-base --allow-remote-tag
+          node hooks/release-preflight.js --tag $env:TAG --base origin/main --require-tag-in-base --require-release-tip --allow-remote-tag
           node hooks/verify.js
 
       - name: Build source ZIP and checksum
