@@ -204,6 +204,22 @@ function checkReleaseWorkflowContract(workflowPath) {
   else ok("release workflow validates merged tags, builds/checksums/smokes source ZIP, and publishes GitHub Release");
 }
 
+function checkBranchCleanupWorkflowContract(workflowPath) {
+  const text = readText(workflowPath);
+  const checks = [
+    { name: "verify workflow_run trigger", re: /workflow_run:[\s\S]*workflows:\s*\[[^\]]*["']verify["'][^\]]*\][\s\S]*types:\s*\[[^\]]*completed[^\]]*\]/i },
+    { name: "successful default-branch push filter", re: /workflow_run\.conclusion\s*==\s*'success'[\s\S]*workflow_run\.event\s*==\s*'push'[\s\S]*workflow_run\.head_branch\s*==\s*github\.event\.repository\.default_branch/i },
+    { name: "contents write permission", re: /contents:\s*write/i },
+    { name: "pull-request read permission", re: /pull-requests:\s*read/i },
+    { name: "checks read permission", re: /checks:\s*read/i },
+    { name: "exact verified SHA checkout", re: /ref:\s*\$\{\{\s*github\.event\.workflow_run\.head_sha\s*\}\}/i },
+    { name: "provider cleanup apply", re: /github-branch-cleanup\.js[\s\S]*--merge-sha[\s\S]*--apply/i },
+  ];
+  const missing = checks.filter((check) => !check.re.test(text)).map((check) => check.name);
+  if (missing.length) fail(`branch cleanup workflow is missing required contract step(s): ${missing.join(", ")}`);
+  else ok("GitHub branch cleanup runs only after green default-branch verify with provider evidence");
+}
+
 // node / git
 ok("node " + process.version);
 const gv = gitSafe(["--version"]);
@@ -286,6 +302,8 @@ const requiredHarnessFiles = [
   "hooks/release-manifest-bump.js",
   "hooks/release-preflight.js",
   "hooks/release-artifacts.js",
+  "hooks/branch-state.js",
+  "hooks/github-branch-cleanup.js",
   "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
   "hooks/repo-state-audit.js",
@@ -306,7 +324,7 @@ const requiredHarnessFiles = [
 ];
 if (releaseProvider === "cocogitto") requiredHarnessFiles.push("cog.toml", "CHANGELOG.md");
 if (serverProvider === "github") requiredHarnessFiles.push(
-  ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/CODEOWNERS"
+  ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/workflows/branch-cleanup.yml", ".github/CODEOWNERS"
 );
 if (sourceHarness) requiredHarnessFiles.push("hooks/test.js", "templates/AGENTS.target.md", "templates/cog.target.toml");
 else requiredHarnessFiles.push(".harness/installation.json");
@@ -334,6 +352,7 @@ const textCritical = requiredHarnessFiles.concat([
   "CLAUDE.md",
   "BACKLOG.md",
   ".github/workflows/ci.yml",
+  ".github/workflows/branch-cleanup.yml",
   ".github/workflows/release.yml",
   ".github/CODEOWNERS",
   ".github/dependabot.yml",
@@ -438,6 +457,7 @@ if (releaseProvider === "cocogitto" && fs.existsSync(cogPath)) {
 }
 
 const workflowPath = ".github/workflows/ci.yml";
+const branchCleanupWorkflowPath = ".github/workflows/branch-cleanup.yml";
 const releaseWorkflowPath = ".github/workflows/release.yml";
 const rulesetPath = ".github/rulesets/main.json";
 if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath))) {
@@ -455,6 +475,10 @@ if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath))) 
     checkWorkflowSupplyChain(workflowPath);
   }
   checkRulesetPrReview(rulesetPath, serverProfile);
+  if (fs.existsSync(path.join(ROOT, branchCleanupWorkflowPath))) {
+    checkBranchCleanupWorkflowContract(branchCleanupWorkflowPath);
+    checkWorkflowSupplyChain(branchCleanupWorkflowPath);
+  }
 }
 if (process.argv.includes("--server")) {
   if (serverProvider === "none") {

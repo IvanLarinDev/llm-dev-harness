@@ -134,12 +134,21 @@ node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main --apply
 ```
 
-The helper requires both local and remote refs to be ancestors of the base,
-removes only clean linked worktrees, and is idempotent when the branch was
-already deleted. Dirty, diverged, or unmerged refs block exact cleanup and are
-never forced. `release/*` and `hotfix/*` are deliberately ineligible: retain
+The helper normally requires both local and remote refs to be ancestors of the
+base. A provider-confirmed squash/rebase cleanup may explicitly admit a
+patch-equivalent ref; unique or ambiguous work remains blocked. It removes only
+clean linked worktrees and is idempotent when the branch was already deleted.
+Dirty, diverged, or unmerged refs are never forced. `release/*` and `hotfix/*` are deliberately ineligible: retain
 them until their tag, published artifacts, and smoke tests succeed. The
 release-wide cleanup remains a final audit for merged branches missed earlier.
+
+With the GitHub server adapter, `.github/workflows/branch-cleanup.yml` runs
+after a successful default-branch `verify` workflow. It resolves the exact
+MERGED PR and required check from GitHub, verifies that the branch still points
+at the reviewed head SHA, and then invokes cleanup with exact OID leases.
+Squash/rebase heads are eligible only when every non-merge patch is already in
+`main`; ambiguous merge histories remain blocked. Fork heads and
+`release/*`/`hotfix/*` are never deleted by this workflow.
 
 For pipelines with separate development and accepted-main roots, finish the
 merge/cleanup sequence with a strict, non-destructive topology audit (the
@@ -151,7 +160,9 @@ node hooks/repo-state-audit.js --root <development-root> --accepted-root <accept
 
 Completion requires every actual checkout branch/HEAD plus local and fetched
 remote `main` SHAs to match, clean expected worktrees, and no leftover local
-branches or linked worktrees. A mismatch means the pipeline is still active or
+or remote branches or linked worktrees. Remote-only branches are classified as
+merged, patch-equivalent, or unique and all block strict completion until the
+lifecycle is resolved. A mismatch means the pipeline is still active or
 incomplete; synchronize and clean it explicitly, then rerun the audit. Do not
 make the audit delete or reset work automatically.
 

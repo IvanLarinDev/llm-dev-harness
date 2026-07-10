@@ -48,7 +48,7 @@ const INSTALL_MANIFEST = ".harness/installation.json";
 // else is project policy: installer-created templates are seeds, never update
 // payloads. test.js and release.yml remain source-repository-only.
 const MANAGED_FILES = [
-  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
+  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/branch-state.js", "hooks/github-branch-cleanup.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "settings.example.json",
@@ -63,6 +63,7 @@ const GENERIC_RELEASE_TEMPLATES = [{ rel: "cog.toml", source: "templates/cog.tar
 const GITHUB_TEMPLATES = [
   { rel: ".github/rulesets/main.json" },
   { rel: ".github/workflows/ci.yml" },
+  { rel: ".github/workflows/branch-cleanup.yml" },
   { rel: ".github/CODEOWNERS" },
 ];
 const CI_FILES = [{ rel: ".github/dependabot.yml" }];
@@ -490,6 +491,14 @@ const a = parseArgs(process.argv.slice(2));
     }
     out.config = writeConfig(out.adapters, a.dryRun);
     out.migrationRequired = (out.config && out.config.migrations) || [];
+    const agentsFile = out.files.find((f) => f.rel === "AGENTS.md");
+    if (agentsFile && agentsFile.action === "preserve") {
+      let agentsText = "";
+      try { agentsText = fs.readFileSync(path.join(a.target, "AGENTS.md"), "utf8"); } catch {}
+      const hasLifecyclePolicy = /MERGE\+CLEANUP/.test(agentsText) ||
+        (/post-merge-cleanup\.js/.test(agentsText) && /repo-state-audit\.js/.test(agentsText));
+      if (!hasLifecyclePolicy) out.migrationRequired.push("branch-lifecycle-policy-review");
+    }
     if (out.adapters.release === "cocogitto") out.changelog = ensureChangelog(a.dryRun);
     if (out.adapters.server === "github") out.codeowners = configureCodeOwnersAndRuleset(a.dryRun, projectWrites, out.adapters.profile);
     out.installManifest = writeInstallManifest(managedHashes, a.dryRun);
@@ -500,6 +509,9 @@ const a = parseArgs(process.argv.slice(2));
     if (out.files.some((f) => f.rel === ".github/workflows/ci.yml" && f.action !== "skip")) {
       // The CI mirror is copied, but it only activates after push and may require the workflow scope.
       out.notes.push("CI mirror .github/workflows/ci.yml was written; it activates after push and may require the gh workflow scope.");
+    }
+    if (out.files.some((f) => f.rel === ".github/workflows/branch-cleanup.yml" && f.action !== "skip")) {
+      out.notes.push("GitHub branch lifecycle workflow was written; after a green main verify it deletes only provider-confirmed merged development branches.");
     }
   } else {
     out.notes.push("bootstrap mode: target is the source repository; files are already present, so only wiring and activation run.");
@@ -538,7 +550,7 @@ const a = parseArgs(process.argv.slice(2));
   if (!a.dryRun && a.requireEnforceable && !out.enforceable) hardFailures.push("not-enforceable");
   if (out.bootstrapRequired) out.notes.push("bootstrap pending: commit the installed harness through a PR before treating the loop as enforceable.");
   if (out.activationRequired) out.notes.push("activation pending: install Lefthook and run `lefthook install`; use --require-enforceable to gate automation.");
-  if (out.migrationRequired.length) out.notes.push(`project-owned harness.config.json needs a separate reviewed migration: ${out.migrationRequired.join(", ")}`);
+  if (out.migrationRequired.length) out.notes.push(`project-owned harness policy needs a separate reviewed migration: ${out.migrationRequired.join(", ")}`);
   return finish(out, hardFailures.length === 0,
     hardFailures.length ? "installation failed: " + hardFailures.join(", ") + " (see notes/doctor)" : null);
 })();

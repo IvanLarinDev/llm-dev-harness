@@ -13,7 +13,11 @@ this repository; harness updates may replace only files listed as `managed` in
 5. VERIFY with `node hooks/verify.js`, inspect its output, and self-review the diff.
 6. COMMIT on a feature branch and merge through a verified PR, never directly to
    `main` or `master`.
-7. REPORT changed, verified, remaining, and manual-test notes.
+7. MERGE+CLEANUP only after the PR is server-confirmed MERGED and its resulting
+   `main` verification is green. Delete the development branch and finish with
+   the strict remote-aware topology gate. Release/hotfix branches wait for
+   artifact smoke testing.
+8. REPORT changed, verified, remaining, and manual-test notes.
 
 A trivial typo may skip a written plan. It does not skip VERIFY or the branch/PR
 contract.
@@ -48,6 +52,15 @@ When GitHub server policy is enabled, use `node hooks/apply-ruleset.js --check`
 for read-only live drift detection. Apply policy only as a separate explicit
 operation. Use `repo-state-audit.js --strict --remote origin --fetch` as the
 terminal gate when automation coordinates multiple checkouts.
+
+The GitHub adapter runs `.github/workflows/branch-cleanup.yml` only after the
+`verify` workflow succeeds for a push to the default branch. It resolves the
+MERGED PR from that exact commit, verifies the GitHub Actions check and reviewed
+head SHA, skips forks plus `release/*`/`hotfix/*`, and deletes an ancestor or
+patch-equivalent development branch with an exact OID lease. On another Git
+provider, the coordinator runs `post-merge-cleanup.js` explicitly after
+equivalent provider evidence. The terminal topology audit remains mandatory and
+rejects leftover local or remote branches.
 
 ## Release
 

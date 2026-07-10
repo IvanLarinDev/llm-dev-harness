@@ -32,6 +32,7 @@ README covers the stack and installation.
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
 | Artifact build/smoke/version contract | local harness | [hooks/release-artifacts.js](./hooks/release-artifacts.js) |
 | Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
+| Provider-confirmed branch cleanup | GitHub adapter | [hooks/github-branch-cleanup.js](./hooks/github-branch-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
 | Repository topology audit | local harness | [hooks/repo-state-audit.js](./hooks/repo-state-audit.js) |
 | Source ZIP release | GitHub Actions | [.github/workflows/release.yml](./.github/workflows/release.yml) |
@@ -116,7 +117,9 @@ runs preserve them byte-for-byte.
 For non-GitHub and local origins, auto mode writes no `.github/`, `cog.toml`, or
 `CHANGELOG.md`; select an adapter explicitly when the project needs one.
 Legacy project config is also preserved; JSON output lists schema/UI/release/server
-reviews under `migrationRequired` so migration can happen in a separate PR.
+reviews under `migrationRequired` so migration can happen in a separate PR. An
+existing `AGENTS.md` without the branch lifecycle contract similarly reports
+`branch-lifecycle-policy-review` instead of being rewritten.
 
 Without `--code-owner`, a new install writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the
@@ -155,8 +158,9 @@ node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
 node hooks/release-artifacts.js --tag vX.Y.Z --phase all
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
+node hooks/github-branch-cleanup.js --merge-sha <full-main-sha> --apply
 node hooks/release-cleanup.js --base origin/main
-node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --strict
+node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --remote origin --fetch --strict
 node hooks/doctor.js
 node hooks/doctor.js --server
 node hooks/apply-ruleset.js --dry-run
@@ -171,6 +175,14 @@ is server-confirmed `MERGED` and the resulting `main` CI succeeds, run
 `post-merge-cleanup.js` in dry-run mode and then with `--apply`. The helper
 deletes only merged local/remote refs and clean linked worktrees.
 
+For GitHub targets, `.github/workflows/branch-cleanup.yml` performs this step
+after the `verify` workflow succeeds on the default branch. The adapter binds
+the workflow SHA to one MERGED same-repository PR, verifies the required GitHub
+Actions check and reviewed head SHA, and permits patch-equivalent cleanup only
+for squash/rebase development branches. Release/hotfix and fork branches are
+skipped. Other providers use the explicit helper plus their own merge/CI
+evidence.
+
 `main` may accumulate verified but unreleased changes for as long as needed.
 The eventual SemVer bump is derived from Conventional Commits since the latest
 tag. Keep incomplete behavior behind feature flags so `main` remains releasable.
@@ -181,8 +193,9 @@ For automation that keeps separate development and accepted-main checkouts, run
 `repo-state-audit.js --strict --remote origin --fetch` as the terminal gate. It
 requires each checkout's actual branch and HEAD to equal its local and fetched
 remote `main`, all expected worktrees to be clean, and no extra local branches
-or linked worktrees to remain. The audit is read-only except for the requested
-fetch; cleanup and synchronization stay explicit coordinator actions.
+or linked worktrees to remain. It also rejects remote-only merged,
+patch-equivalent, and unique branches. The audit is read-only except for the
+requested fetch; cleanup and synchronization stay explicit coordinator actions.
 
 ## Full release
 

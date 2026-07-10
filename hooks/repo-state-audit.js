@@ -9,6 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { classifyRef, listRemoteBranches } = require("./branch-state");
 
 const LOCAL_GIT_TIMEOUT_MS = 10000;
 const REMOTE_GIT_TIMEOUT_MS = 60000;
@@ -105,8 +106,9 @@ function inspectRoot(root, role, args, report) {
   const branchName = baseBranch(base);
   const baseRef = baseRefName(base);
   if (args.fetch && args.remote) {
-    const fetched = result(root, ["fetch", "--prune", args.remote, branchName], { remote: true });
-    if (!fetched.ok) issue(report, "fetch_failed", `${role} cannot fetch ${args.remote}/${branchName}: ${fetched.error}`, { role, root });
+    const refspec = `+refs/heads/*:refs/remotes/${args.remote}/*`;
+    const fetched = result(root, ["fetch", "--prune", args.remote, refspec], { remote: true });
+    if (!fetched.ok) issue(report, "fetch_failed", `${role} cannot fetch ${args.remote}: ${fetched.error}`, { role, root });
   }
   const baseResult = result(root, ["rev-parse", "--verify", baseRef]);
   if (!baseResult.ok) {
@@ -141,7 +143,9 @@ function audit(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const report = {
     ok: true, strict: args.strict, base: args.base, remote: args.remote, fetch: args.fetch, roots: [], issues: [],
-    mergedBranches: [], unmergedBranches: [], dirtyWorktrees: [], extraWorktrees: [],
+    mergedBranches: [], unmergedBranches: [], remoteBranches: [],
+    mergedRemoteBranches: [], equivalentRemoteBranches: [], unmergedRemoteBranches: [],
+    dirtyWorktrees: [], extraWorktrees: [],
   };
   for (const error of args.errors) issue(report, "invalid_argument", error);
   if (args.errors.length) return report;
@@ -195,6 +199,32 @@ function audit(argv = process.argv.slice(2)) {
       } else {
         report.unmergedBranches.push(entry);
         issue(report, "unmerged_branch", `local branch contains commits outside ${args.base}: ${branch}`, entry);
+      }
+    }
+
+    if (args.remote) {
+      const branchName = baseBranch(args.base);
+      const remoteBase = `refs/remotes/${args.remote}/${branchName}`;
+      const listed = listRemoteBranches(probe, args.remote, branchName);
+      if (!listed.ok) {
+        issue(report, "remote_branch_list_failed", `cannot list ${args.remote} branches: ${listed.error}`, { root: probe });
+      } else {
+        for (const branch of listed.branches) {
+          const state = classifyRef(probe, branch.ref, remoteBase);
+          const entry = { root: probe, remote: args.remote, branch: branch.name, oid: branch.oid, state: state.state };
+          report.remoteBranches.push(entry);
+          if (state.state === "merged") {
+            report.mergedRemoteBranches.push(entry);
+            issue(report, "merged_remote_branch", `merged remote branch remains: ${args.remote}/${branch.name}`, entry);
+          } else if (state.state === "equivalent") {
+            report.equivalentRemoteBranches.push(entry);
+            issue(report, "equivalent_remote_branch", `patch-equivalent remote branch remains: ${args.remote}/${branch.name}`, entry);
+          } else {
+            const detailed = { ...entry, reason: state.reason };
+            report.unmergedRemoteBranches.push(detailed);
+            issue(report, "unmerged_remote_branch", `remote branch contains work outside ${args.remote}/${branchName}: ${args.remote}/${branch.name}`, detailed);
+          }
+        }
       }
     }
   }

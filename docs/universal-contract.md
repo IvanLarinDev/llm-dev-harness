@@ -19,9 +19,10 @@ hatch for reviewed local runtime changes; it still cannot replace project-owned
 files. `--force` is retained only as a compatibility alias for
 `--update --replace-managed`.
 
-Legacy project configuration is never silently upgraded. Installer JSON reports
-`migrationRequired` entries for schema, UI routing, release contracts, and server
-policy that need review; the project applies those changes in its own PR.
+Legacy project policy is never silently upgraded. Installer JSON reports
+`migrationRequired` entries for schema, UI routing, release contracts, server
+policy, and a preserved `AGENTS.md` missing the branch lifecycle contract; the
+project applies those changes in its own PR.
 
 ## Capability Schema
 
@@ -61,6 +62,24 @@ Profile flags are explicit structured edits to project config/policy. Ordinary
 install/update/force runs still preserve those files byte-for-byte. Use
 `apply-ruleset.js --check` or `doctor.js --server` for a read-only live drift
 check before deciding whether to apply policy.
+
+Branch lifecycle is a core harness rule with provider-specific evidence. Every
+project uses Git ancestry, patch-equivalence classification, exact OID leases,
+and the remote-aware terminal topology audit. The GitHub adapter additionally
+installs a trusted `workflow_run` cleanup that runs only after `verify` succeeds
+for a default-branch push, binds that SHA to one MERGED same-repository PR, and
+checks the reviewed head SHA before deleting a development branch. Fork heads
+and `release/*`/`hotfix/*` are excluded. Other providers keep cleanup as an
+explicit coordinator action after equivalent merge and CI evidence; the harness
+does not pretend that Git ancestry alone proves a server-side PR decision.
+
+Patch-equivalent cleanup exists for squash and rebase merges. It is accepted
+only when every non-merge patch outside the base already has an equivalent in
+the base and provider evidence authorizes the exact branch head. Branches with
+unique patches or merge commits outside the base remain ambiguous and are never
+deleted automatically. Strict topology treats every remaining local or remote
+branch as an incomplete lifecycle, regardless of whether it is merged,
+equivalent, or unique.
 
 Release version scope and artifact evidence are also project-owned:
 
