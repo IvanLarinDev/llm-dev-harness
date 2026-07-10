@@ -77,6 +77,7 @@ const sharedLib = require(path.join(__dirname, "_lib.js"));
 const verifyCore = require(path.join(__dirname, "verify-core.js"));
 const applyRuleset = require(APPLY_RULESET);
 const releaseStart = require(RELEASE_START);
+const repoStateAudit = require(REPO_STATE_AUDIT);
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -1547,6 +1548,9 @@ try { fs.rmSync(cleanupRoot, { recursive: true, force: true }); } catch {}
 
 // ---------- repository topology audit ----------
 console.log("\nrepository topology audit:");
+ok(repoStateAudit.commandTimeoutMs({ remote: true }) === 60000 &&
+   repoStateAudit.commandTimeoutMs() === 10000,
+"topology audit gives remote fetches a separate network timeout budget");
 function topologyJson(root, acceptedRoot, extra = []) {
   try {
     const args = [REPO_STATE_AUDIT, "--root", root];

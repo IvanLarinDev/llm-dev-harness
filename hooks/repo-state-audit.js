@@ -10,6 +10,9 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
+const LOCAL_GIT_TIMEOUT_MS = 10000;
+const REMOTE_GIT_TIMEOUT_MS = 60000;
+
 function parseArgs(argv) {
   const out = {
     root: process.cwd(), acceptedRoot: "", base: "main", remote: "",
@@ -34,15 +37,19 @@ function parseArgs(argv) {
   return out;
 }
 
-function run(root, args) {
+function commandTimeoutMs(options = {}) {
+  return options.remote ? REMOTE_GIT_TIMEOUT_MS : LOCAL_GIT_TIMEOUT_MS;
+}
+
+function run(root, args, options = {}) {
   return execFileSync("git", args, {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10000, killSignal: "SIGKILL",
+    timeout: commandTimeoutMs(options), killSignal: "SIGKILL",
   }).trim();
 }
 
-function result(root, args) {
-  try { return { ok: true, out: run(root, args) }; }
+function result(root, args, options) {
+  try { return { ok: true, out: run(root, args, options) }; }
   catch (e) { return { ok: false, error: String(e.stderr || e.message || "").trim() }; }
 }
 
@@ -98,7 +105,7 @@ function inspectRoot(root, role, args, report) {
   const branchName = baseBranch(base);
   const baseRef = baseRefName(base);
   if (args.fetch && args.remote) {
-    const fetched = result(root, ["fetch", "--prune", args.remote, branchName]);
+    const fetched = result(root, ["fetch", "--prune", args.remote, branchName], { remote: true });
     if (!fetched.ok) issue(report, "fetch_failed", `${role} cannot fetch ${args.remote}/${branchName}: ${fetched.error}`, { role, root });
   }
   const baseResult = result(root, ["rev-parse", "--verify", baseRef]);
@@ -217,4 +224,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { audit, parseArgs, parseWorktrees };
+module.exports = { audit, parseArgs, parseWorktrees, commandTimeoutMs };
