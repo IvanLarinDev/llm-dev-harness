@@ -935,10 +935,10 @@ console.log("\nrelease-preflight:");
 function relGit(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-function releaseJson(root, tag, extra = []) {
+function releaseJson(root, tag, extra = [], env = {}) {
   try {
     const s = execFileSync("node", [RELEASE_PREFLIGHT, "--root", root, "--tag", tag, "--json", ...extra],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
     return JSON.parse(s);
   } catch (e) {
     try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [] }; }
@@ -948,6 +948,14 @@ function writeReleaseProject(root, version) {
   fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "App", "App.csproj"), `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>\n`);
   fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${version}\n\n- release\n`);
+}
+function writeReleaseProjectWithPrefixSuffix(root, versionPrefix, versionSuffix) {
+  fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "src", "App", "App.csproj"),
+    `<Project><PropertyGroup><VersionPrefix>${versionPrefix}</VersionPrefix><VersionSuffix>${versionSuffix}</VersionSuffix></PropertyGroup></Project>\n`
+  );
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${versionPrefix}-${versionSuffix}\n\n- release\n`);
 }
 function releaseRepo(version, tag = "v0.10.1") {
   const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-origin-"));
@@ -973,6 +981,16 @@ let rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
   "release-preflight: clean release with csproj version matching tag -> PASS");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("1.2.3", "v1.2.3-rc.1");
+writeReleaseProjectWithPrefixSuffix(relCase.work, "1.2.3", "rc.1");
+relGit(relCase.work, ["add", "."]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(version): v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-d", "v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-a", "v1.2.3-rc.1", "-m", "v1.2.3-rc.1"]);
+rpre = releaseJson(relCase.work, "v1.2.3-rc.1");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release-preflight: prerelease tag matches csproj VersionPrefix + VersionSuffix -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 relCase = releaseRepo("0.10.0");
 rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /project version\(s\) do not match/.test(r.msg) && r.mismatches && /App\.csproj/.test(JSON.stringify(r.mismatches))),
@@ -992,6 +1010,32 @@ ok(rpre.ok === false && (rpre.results || []).some((r) => /remote tag already exi
 rpre = releaseJson(relCase.work, "v0.10.1", ["--allow-remote-tag"]);
 ok(rpre.ok === true && (rpre.results || []).some((r) => /remote tag already exists but allowed/.test(r.msg)),
   "release-preflight: tag workflow may allow the already-pushed remote tag");
+const slowGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-slow-git-"));
+const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"],
+  { encoding: "utf8" }).split(/\r?\n/).find(Boolean);
+const slowGitShim = path.join(slowGitDir, "slow-git-shim.js");
+fs.writeFileSync(slowGitShim, [
+  "#!/usr/bin/env node",
+  "const { spawnSync } = require('child_process');",
+  "if ((process.argv[2] || '').toLowerCase() === 'ls-remote') {",
+  "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 11000);",
+  "}",
+  "const result = spawnSync(process.env.HARNESS_REAL_GIT || 'git', process.argv.slice(2), { stdio: 'inherit' });",
+  "if (result.error) { console.error(result.error.message); process.exit(1); }",
+  "process.exit(result.status ?? 1);",
+  "",
+].join("\n"));
+fs.writeFileSync(path.join(slowGitDir, "git.cmd"), "@echo off\r\nnode \"%~dp0slow-git-shim.js\" %*\r\n");
+fs.writeFileSync(path.join(slowGitDir, "git"), "#!/usr/bin/env sh\nexec node \"$(dirname \"$0\")/slow-git-shim.js\" \"$@\"\n");
+fs.chmodSync(slowGitShim, 0o755);
+fs.chmodSync(path.join(slowGitDir, "git"), 0o755);
+rpre = releaseJson(relCase.work, "v0.10.1", ["--allow-remote-tag"], {
+  PATH: slowGitDir + path.delimiter + process.env.PATH,
+  HARNESS_REAL_GIT: realGit,
+});
+ok(rpre.ok === true && (rpre.results || []).some((r) => /remote tag already exists but allowed/.test(r.msg)),
+  "release-preflight: slow remote tag check stays within timeout budget");
+fs.rmSync(slowGitDir, { recursive: true, force: true });
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 relCase = releaseRepo("0.10.1");
 relGit(relCase.work, ["tag", "-d", "v0.10.1"]);
