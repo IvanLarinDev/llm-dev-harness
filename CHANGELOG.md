@@ -1,6 +1,18 @@
 # Changelog
 
 - - -
+## [v0.5.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/28f4d642c1ea8de19a29bea4beb79abbe2f53bcb..v0.5.0) - 2026-07-10
+#### Features
+- (**install**) add universal ownership-aware updates - ([109dd82](https://github.com/IvanLarinDev/llm-dev-harness/commit/109dd823e597ccdcc669ecf995773a3ea9cd5cf2)) - agidevway
+- (**policy**) add topology and server drift gates - ([59f0dd0](https://github.com/IvanLarinDev/llm-dev-harness/commit/59f0dd0c3e4918b0eb262621c91c037d85e83cfc)) - agidevway
+- (**release**) add project artifact contracts - ([a671d44](https://github.com/IvanLarinDev/llm-dev-harness/commit/a671d4490cbc1c6f9973683ded387615245c7242)) - agidevway
+#### Bug Fixes
+- (**install**) report missing hook activation as pending - ([dffcf89](https://github.com/IvanLarinDev/llm-dev-harness/commit/dffcf890f29c5d35805e7951df5614fab0e95fdc)) - agidevway
+- (**process**) fail closed on integrity and release graph - ([3a0b1eb](https://github.com/IvanLarinDev/llm-dev-harness/commit/3a0b1eb15952e7fa84c184785ab30fb4768a62fc)) - agidevway
+- (**release**) support detached preparation worktrees - ([73f2b4f](https://github.com/IvanLarinDev/llm-dev-harness/commit/73f2b4ff37655c95c4344340fcdc18338a95b175)) - agidevway
+
+- - -
+
 ## [v0.4.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/7020db612e6cde6642c911d6013c83536229ef6b..v0.4.0) - 2026-07-10
 #### Features
 - (**automation**) add dropwheel harness triage - ([3247110](https://github.com/IvanLarinDev/llm-dev-harness/commit/32471103e361fdfed02d30d8fa24555656f5a8cd)) - agidevway
