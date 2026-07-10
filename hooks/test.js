@@ -2024,6 +2024,13 @@ for (const rel of ["AGENTS.md", "README.md"]) {
 const agentsDoc = docCheck("AGENTS.md");
 ok(agentsDoc.exists && /^##\s+Env\b/m.test(agentsDoc.text),
   "docs integrity assertion 5");
+ok(agentsDoc.exists && /one canonical repository directory/.test(agentsDoc.text) &&
+   /Never\s+create or depend on a persistent sibling such as `<repo>-main`/.test(agentsDoc.text),
+  "docs require a single persistent canonical checkout by default");
+const targetAgentsDoc = docCheck("templates/AGENTS.target.md");
+ok(targetAgentsDoc.exists && /one persistent canonical project directory/.test(targetAgentsDoc.text) &&
+   /never create a persistent sibling `<repo>-main`/.test(targetAgentsDoc.text),
+  "target policy forbids implicit persistent accepted-main clones");
 
 try { fs.rmSync(NEUTRAL, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail ? "FAIL" : "PASS"}: ${pass} passed, ${fail} failed`);
