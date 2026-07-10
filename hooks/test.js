@@ -715,6 +715,8 @@ const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifychg-"));
 fs.mkdirSync(path.join(ctmp, "py")); fs.writeFileSync(path.join(ctmp, "py", "pyproject.toml"), "[project]\n");
 fs.mkdirSync(path.join(ctmp, "js")); fs.writeFileSync(path.join(ctmp, "js", "package.json"), "{}\n");
 fs.mkdirSync(path.join(ctmp, "hooks")); fs.writeFileSync(path.join(ctmp, "hooks", "verify.js"), "console.log('fake verify');\n");
+fs.mkdirSync(path.join(ctmp, ".codex", "canary-worktrees", "run", "src"), { recursive: true });
+fs.writeFileSync(path.join(ctmp, ".codex", "canary-worktrees", "run", "src", "Ignored.csproj"), "<Project/>");
 const syntaxTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifysyntax-"));
 fs.mkdirSync(path.join(syntaxTmp, "hooks"));
 fs.writeFileSync(path.join(syntaxTmp, "hooks", "verify.js"), "function {\n");
@@ -732,6 +734,8 @@ const allIds = verifyListArgs(ctmp, []).plan.map((p) => p.stack).sort().join(","
 const fbIds = verifyListArgs(ctmp, ["--changed", "--base", "no-such-ref"]).plan.map((p) => p.stack).sort().join(",");
 ok(allIds === "harness-syntax,node,python" && fbIds === "harness-syntax,node,python",
   "verify runner assertion 10");
+ok(!verifyListArgs(ctmp, []).plan.some((p) => String(p.dir || "").includes(".codex")),
+  "verify ignores .codex automation worktrees");
 chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"),
   "verify runner assertion 11");

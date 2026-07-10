@@ -251,3 +251,49 @@ Human runner knobs:
 | `HARNESS_SESSION_ID` / `HARNESS_PROJECT_DIR` | Guard state key when the runner did not provide one. | unset |
 | `HARNESS_ROOT` | Root for `new-mockups.js` when scaffolding mockups. | repo root |
 | `LEFTHOOK=0` | Skip lefthook for humans only; guard blocks agent use. | unset |
+
+## Dropwheel Canary Inbox
+
+Dropwheel at `C:\Users\poweruser\projects\csharp\dropwheel` is the canary
+target for this harness.
+
+When a report arrives under `inbox/dropwheel` or from a Dropwheel Codex thread,
+use `$harness-triage` and follow `docs/dropwheel-harness-inbox.md`.
+
+Routing rule:
+
+- installer, doctor, harness syntax, guard, design gate, verify runner, or
+  generated harness file failure caused by source harness behavior belongs in
+  this repo;
+- installer-created files that only need to be accepted/tracked in Dropwheel are
+  `dropwheel-harness-update` and should be routed back to Dropwheel auto-fix;
+- Dropwheel build/test failure after a green install and doctor belongs in
+  Dropwheel unless the report proves a bad harness contract;
+- unclear owner starts here as triage, then routes to the right project.
+
+For valid harness bugs, reproduce against a disposable Dropwheel canary
+worktree, fix the smallest harness behavior, add regression coverage, run
+`node hooks\verify.js`, and rerun:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Users\poweruser\projects\csharp\dropwheel\scripts\harness-canary.ps1
+```
+
+The Dropwheel inbox automation is allowed to perform these harness fixes
+automatically. If the main checkout is dirty, make code changes in an isolated
+local worktree under `.codex\auto-fix-worktrees` and keep inbox bookkeeping in
+the main checkout. After `node hooks\verify.js` and the Dropwheel canary pass,
+create a local feature-branch commit with a Conventional Commit message. Do not
+push, merge, release, reset, force-push, or bypass hooks without an explicit
+user request.
+
+## Color Team Review
+
+When the user asks for Color Team Review, use `$color-team-review` instead of
+expanding a long prompt inline. Keep the compact format: verdict, evidence-based
+findings, what is good, priority fixes, minimal safe plan, useful tests, and
+verdict-changing questions only.
+
+For Dropwheel handoffs, read `docs/dropwheel-harness-inbox.md` and process
+`inbox/dropwheel/review-handoff-*` files as first-class harness triage inputs,
+even when the related canary report is green.
