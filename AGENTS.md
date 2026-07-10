@@ -126,8 +126,9 @@ request.
 
 **5.5 MERGE -> CLEANUP.** Feature, fix, docs, chore, refactor, test, CI, and
 other development branches do not wait for a release. After the PR is confirmed
-server-side `MERGED` and the resulting `main` push CI is green, run from a
-separate clean base worktree:
+server-side `MERGED` and the resulting `main` push CI is green, synchronize the
+one canonical checkout back to clean `main`, or use a disposable base worktree
+that is removed before completion:
 
 ```powershell
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
@@ -150,13 +151,22 @@ Squash/rebase heads are eligible only when every non-merge patch is already in
 `main`; ambiguous merge histories remain blocked. Fork heads and
 `release/*`/`hotfix/*` are never deleted by this workflow.
 
-For pipelines with separate development and accepted-main roots, finish the
-merge/cleanup sequence with a strict, non-destructive topology audit (the
-optional fetch updates remote-tracking refs only):
+Persistent checkout topology defaults to one canonical repository directory.
+Keep it on clean `main` when idle; create feature/release work only in temporary
+worktrees outside the sibling project list and remove them after cleanup. Never
+create or depend on a persistent sibling such as `<repo>-main` unless the user
+explicitly chooses a two-root external pipeline.
+
+Finish the merge/cleanup sequence with a strict, non-destructive topology audit
+(the optional fetch updates remote-tracking refs only):
 
 ```powershell
-node hooks/repo-state-audit.js --root <development-root> --accepted-root <accepted-main-root> --base main --remote origin --fetch --strict
+node hooks/repo-state-audit.js --root <canonical-root> --base main --remote origin --fetch --strict
 ```
+
+`--accepted-root` remains available only for an explicitly configured external
+pipeline with a genuinely independent accepted checkout; it is not a reason to
+create a local `<repo>-main` clone.
 
 Completion requires every actual checkout branch/HEAD plus local and fetched
 remote `main` SHAs to match, clean expected worktrees, and no leftover local

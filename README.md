@@ -160,7 +160,7 @@ node hooks/release-artifacts.js --tag vX.Y.Z --phase all
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/github-branch-cleanup.js --merge-sha <full-main-sha> --apply
 node hooks/release-cleanup.js --base origin/main
-node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --remote origin --fetch --strict
+node hooks/repo-state-audit.js --root <canonical-root> --base main --remote origin --fetch --strict
 node hooks/doctor.js
 node hooks/doctor.js --server
 node hooks/apply-ruleset.js --dry-run
@@ -189,11 +189,14 @@ tag. Keep incomplete behavior behind feature flags so `main` remains releasable.
 Dirty, diverged, and unmerged branches are preserved. Release/hotfix branches
 are retained until publication and artifact smoke testing complete.
 
-For automation that keeps separate development and accepted-main checkouts, run
-`repo-state-audit.js --strict --remote origin --fetch` as the terminal gate. It
-requires each checkout's actual branch and HEAD to equal its local and fetched
-remote `main`, all expected worktrees to be clean, and no extra local branches
-or linked worktrees to remain. It also rejects remote-only merged,
+The default persistent topology is one canonical repository directory, on clean
+`main` when idle. Feature and release worktrees are disposable and live outside
+the sibling project list; cleanup removes them. Do not create `<repo>-main` as a
+second accepted clone unless an external two-root pipeline is explicitly
+required. Run `repo-state-audit.js --strict --remote origin --fetch` as the
+terminal gate. It requires the checkout's branch and HEAD to equal local and
+fetched remote `main`, all expected worktrees to be clean, and no extra local
+branches or linked worktrees to remain. It also rejects remote-only merged,
 patch-equivalent, and unique branches, plus stale remote-tracking refs whose
 remote is no longer configured. The audit is read-only except for the requested
 fetch; cleanup and synchronization stay explicit coordinator actions.

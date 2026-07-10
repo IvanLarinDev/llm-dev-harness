@@ -50,8 +50,12 @@ not fully enforceable from a clean checkout.
 
 When GitHub server policy is enabled, use `node hooks/apply-ruleset.js --check`
 for read-only live drift detection. Apply policy only as a separate explicit
-operation. Use `repo-state-audit.js --strict --remote origin --fetch` as the
-terminal gate when automation coordinates multiple checkouts.
+operation. Keep one persistent canonical project directory on clean `main` when
+idle. Feature/release worktrees are temporary and must be removed after their
+cycle; never create a persistent sibling `<repo>-main` checkout unless the user
+explicitly configures an external two-root pipeline. Use
+`repo-state-audit.js --root <canonical-root> --base main --strict --remote origin --fetch`
+as the terminal gate.
 
 The GitHub adapter runs `.github/workflows/branch-cleanup.yml` only after the
 `verify` workflow succeeds for a push to the default branch. It resolves the

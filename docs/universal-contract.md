@@ -73,6 +73,13 @@ and `release/*`/`hotfix/*` are excluded. Other providers keep cleanup as an
 explicit coordinator action after equivalent merge and CI evidence; the harness
 does not pretend that Git ancestry alone proves a server-side PR decision.
 
+The universal local topology is one persistent canonical checkout. It returns
+to clean `main` after each accepted change; feature and release worktrees are
+disposable and removed after cleanup. The harness must not introduce a sibling
+`<repo>-main` clone as an implicit accepted root. `--accepted-root` is reserved
+for projects whose user-owned external pipeline explicitly requires two
+independent persistent checkouts.
+
 Patch-equivalent cleanup exists for squash and rebase merges. It is accepted
 only when every non-merge patch outside the base already has an equivalent in
 the base and provider evidence authorizes the exact branch head. Branches with
