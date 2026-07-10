@@ -67,6 +67,7 @@ const RELEASE_START = path.join(__dirname, "release-start.js");
 const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const RELEASE_ARTIFACTS = path.join(__dirname, "release-artifacts.js");
+const GITHUB_BRANCH_CLEANUP = path.join(__dirname, "github-branch-cleanup.js");
 const POST_MERGE_CLEANUP = path.join(__dirname, "post-merge-cleanup.js");
 const RELEASE_CLEANUP = path.join(__dirname, "release-cleanup.js");
 const REPO_STATE_AUDIT = path.join(__dirname, "repo-state-audit.js");
@@ -78,6 +79,7 @@ const verifyCore = require(path.join(__dirname, "verify-core.js"));
 const applyRuleset = require(APPLY_RULESET);
 const releaseStart = require(RELEASE_START);
 const repoStateAudit = require(REPO_STATE_AUDIT);
+const githubBranchCleanup = require(GITHUB_BRANCH_CLEANUP);
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -192,6 +194,35 @@ ok(/design-gate\.js --strict --base/.test(ci), "configs lefthook gitleaks cocogi
 ok(/AGENTSHIELD_VERSION:\s*"1\.4\.0"/.test(ci) && /continue-on-error:\s*true/.test(ci),
   "configs lefthook gitleaks cocogitto ruleset ci assertion 10");
 ok(/AgentShield[\s\S]*shell:\s*bash/.test(ci), "CI: AgentShield step uses bash explicitly on the Windows runner");
+const branchCleanupWorkflow = readRepo(".github/workflows/branch-cleanup.yml");
+ok(/workflow_run:[\s\S]*workflows:\s*\[[^\]]*"verify"[^\]]*\][\s\S]*types:\s*\[completed\]/.test(branchCleanupWorkflow) &&
+   /workflow_run\.conclusion == 'success'/.test(branchCleanupWorkflow) &&
+   /workflow_run\.head_branch == github\.event\.repository\.default_branch/.test(branchCleanupWorkflow),
+  "branch cleanup workflow runs only after successful default-branch verify");
+ok(/contents:\s*write/.test(branchCleanupWorkflow) && /pull-requests:\s*read/.test(branchCleanupWorkflow) &&
+   /checks:\s*read/.test(branchCleanupWorkflow) && /github-branch-cleanup\.js[\s\S]*--apply/.test(branchCleanupWorkflow),
+  "branch cleanup workflow grants scoped evidence/delete permissions and invokes the provider adapter");
+ok(/ref:\s*\$\{\{ github\.event\.workflow_run\.head_sha \}\}/.test(branchCleanupWorkflow),
+  "branch cleanup workflow executes trusted code from the verified main SHA");
+const evidencePr = {
+  number: 7, merged_at: "2026-01-01T00:00:00Z", merge_commit_sha: "a".repeat(40),
+  base: { ref: "main" }, head: { ref: "feat/example", sha: "b".repeat(40), repo: { full_name: "example/repo" } },
+};
+ok(githubBranchCleanup.selectMergedPr([evidencePr], "a".repeat(40), "main").length === 1 &&
+   githubBranchCleanup.selectMergedPr([evidencePr], "c".repeat(40), "main").length === 0,
+  "GitHub branch cleanup binds one MERGED PR to the exact workflow SHA and base");
+ok(githubBranchCleanup.latestRequiredCheck([
+  { id: 1, name: "verify", status: "completed", conclusion: "failure", app: { slug: "github-actions" } },
+  { id: 2, name: "verify", status: "completed", conclusion: "success", app: { slug: "github-actions" } },
+  { id: 3, name: "verify", status: "completed", conclusion: "success", app: { slug: "foreign-app" } },
+], "verify").id === 2,
+"GitHub branch cleanup uses the latest required GitHub Actions check, not a foreign status");
+ok(githubBranchCleanup.mismatchedBranchHeads([
+  { label: "missing", exists: false, oid: "" },
+  { label: "reviewed", exists: true, oid: "b".repeat(40) },
+  { label: "moved", exists: true, oid: "c".repeat(40) },
+], "b".repeat(40)).map((entry) => entry.label).join(",") === "moved",
+"GitHub branch cleanup rejects any existing local or remote ref that moved after review");
 const releaseWorkflow = readRepo(".github/workflows/release.yml");
 ok(/tags:\s*\[[^\]]*"v\*"/.test(releaseWorkflow) && /contents:\s*write/.test(releaseWorkflow),
   "release workflow triggers on version tags with contents write permission");
@@ -941,6 +972,15 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 3");
+ok((dres.results || []).some((r) => /GitHub branch cleanup runs only after green default-branch verify/.test(r.msg) && r.level === "PASS"),
+  "doctor accepts the provider-confirmed branch cleanup workflow");
+const targetBranchCleanupWorkflow = path.join(bootRepo, ".github", "workflows", "branch-cleanup.yml");
+fs.writeFileSync(targetBranchCleanupWorkflow, "name: branch-cleanup\non:\n  workflow_run:\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branch cleanup workflow is missing required contract/.test(r.msg) && r.level === "FAIL"),
+  "doctor rejects a branch cleanup workflow without provider evidence gates");
+fs.writeFileSync(targetBranchCleanupWorkflow, readRepo(".github/workflows/branch-cleanup.yml"));
+execFileSync("git", ["add", ".github/workflows/branch-cleanup.yml"], { cwd: bootRepo });
 execFileSync("git", ["rm", "--cached", "CHANGELOG.md"], { cwd: bootRepo, stdio: "ignore" });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:.*CHANGELOG\.md/.test(r.msg) && r.level === "FAIL"),
@@ -1480,6 +1520,16 @@ relGit(cleanupWork, ["commit", "-q", "-m", "feat: wip"]);
 relGit(cleanupWork, ["push", "-q", "-u", "origin", "feat/wip"]);
 relGit(cleanupWork, ["checkout", "-q", "main"]);
 
+relGit(cleanupWork, ["checkout", "-q", "-b", "feat/squashed", "main"]);
+fs.writeFileSync(path.join(cleanupWork, "squashed.txt"), "squashed\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "feat: branch version"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "feat/squashed"]);
+relGit(cleanupWork, ["checkout", "-q", "main"]);
+relGit(cleanupWork, ["cherry-pick", "-n", "feat/squashed"]);
+relGit(cleanupWork, ["commit", "-q", "-m", "feat: squash equivalent"]);
+relGit(cleanupWork, ["push", "-q", "origin", "main"]);
+
 relGit(cleanupWork, ["checkout", "-q", "-b", "fix/remote-ahead", "main"]);
 fs.writeFileSync(path.join(cleanupWork, "remote-ahead.txt"), "remote only\n");
 relGit(cleanupWork, ["add", "."]);
@@ -1502,6 +1552,17 @@ ok(postMerge.ok === true && postMerge.absent.includes("feat/done"),
 postMerge = cleanupJson(cleanupWork, ["--branch", "feat/wip", "--no-fetch"], POST_MERGE_CLEANUP);
 ok(postMerge.ok === false && postMerge.blocked.some((entry) => entry.branch === "feat/wip" && /not merged/.test(entry.reasons.join(" "))),
 "post-merge cleanup blocks an unmerged feature branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/squashed", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.equivalent.some((entry) => entry.branch === "feat/squashed") &&
+   postMerge.blocked.some((entry) => /patch-equivalent/.test(entry.reasons.join(" "))),
+"post-merge cleanup detects squash-equivalent heads but requires provider evidence");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/squashed", "--no-fetch", "--include-equivalent"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.candidates.some((entry) => entry.branch === "feat/squashed" &&
+   entry.localState === "equivalent" && entry.remoteState === "equivalent"),
+"provider-confirmed cleanup admits a squash-equivalent development branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/squashed", "--no-fetch", "--include-equivalent", "--apply"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.deletedLocal.includes("feat/squashed") && postMerge.deletedRemote.includes("feat/squashed"),
+"provider-confirmed cleanup deletes the equivalent branch with exact leases");
 postMerge = cleanupJson(cleanupWork, ["--branch", "release/v0.10.1", "--no-fetch"], POST_MERGE_CLEANUP);
 ok(postMerge.ok === false && postMerge.errors.some((error) => /not eligible/.test(error)),
 "post-merge cleanup reserves release branches for post-smoke cleanup");
@@ -1608,6 +1669,27 @@ relGit(topologyAccepted, ["merge", "-q", "--ff-only", "origin/main"]);
 topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === true, "topology audit passes after branch cleanup and accepted-main synchronization");
 
+relGit(topologyDevelopment, ["checkout", "-q", "-b", "feat/remote-only", "main"]);
+fs.writeFileSync(path.join(topologyDevelopment, "remote-only.txt"), "remote only\n");
+relGit(topologyDevelopment, ["add", "."]);
+relGit(topologyDevelopment, ["commit", "-q", "-m", "feat: remote-only fixture"]);
+relGit(topologyDevelopment, ["checkout", "-q", "main"]);
+topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"]);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "unmerged_remote_branch" && item.branch === "feat/remote-only"),
+  "topology strict audit rejects a remote-only branch with unique patches");
+relGit(topologyDevelopment, ["cherry-pick", "-n", "feat/remote-only"]);
+relGit(topologyDevelopment, ["commit", "-q", "-m", "feat: accept equivalent remote patch"]);
+relGit(topologyAccepted, ["fetch", "-q", "origin"]);
+relGit(topologyAccepted, ["merge", "-q", "--ff-only", "origin/main"]);
+topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"]);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "equivalent_remote_branch" && item.branch === "feat/remote-only"),
+  "topology strict audit rejects a patch-equivalent remote-only branch");
+relGit(topologyDevelopment, ["branch", "-D", "feat/remote-only"]);
+relGit(topologyAccepted, ["fetch", "-q", "--prune", "origin"]);
+topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"]);
+ok(topology.ok === true && topology.remoteBranches.length === 0,
+  "topology strict audit passes only after the remote branch is removed");
+
 relGit(topologyDevelopment, ["worktree", "add", "-q", "--detach", topologyExtra, "main"]);
 topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === false && topology.issues.some((item) => item.code === "extra_worktree"),
@@ -1705,11 +1787,13 @@ ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer ass
 const firstInstall = installJson(itmp, []);
 ok(firstInstall.ok === true && firstInstall.installed === true && firstInstall.bootstrapRequired === true && firstInstall.enforceable === false,
   "install: fresh repository reports bootstrapRequired without failing file installation");
+ok(!firstInstall.migrationRequired.includes("branch-lifecycle-policy-review"),
+  "install: fresh target receives branch lifecycle policy without a migration flag");
 const enforceableGate = installJson(itmp, ["--require-enforceable"]);
 ok(enforceableGate.ok === false && enforceableGate.installed === true && enforceableGate.bootstrapRequired === true &&
    /not-enforceable/.test(enforceableGate.reason || ""),
   "install: --require-enforceable turns bootstrap-pending into an automation failure");
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-state.js")) && fs.existsSync(path.join(itmp, "hooks", "github-branch-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 const installManifest = JSON.parse(fs.readFileSync(path.join(itmp, ".harness", "installation.json"), "utf8"));
 ok(installManifest.schemaVersion === 1 && installManifest.managed["hooks/agent/guard.js"] &&
    installManifest.ownership.projectOwned.includes("harness.config.json"),
@@ -1721,8 +1805,10 @@ fs.writeFileSync(path.join(itmp, "CHANGELOG.md"), productChangelog);
 installJson(itmp, ["--force"]);
 ok(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8") === productChangelog,
   "install: --force preserves the target project's changelog");
-ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
-  "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
+ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) &&
+   fs.existsSync(path.join(itmp, ".github", "workflows", "branch-cleanup.yml")) &&
+   fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
+  "install: CI, branch lifecycle workflow, and CODEOWNERS are copied by default with the ruleset");
 ok(!fs.existsSync(path.join(itmp, ".github", "workflows", "release.yml")),
   "install: source-only release workflow is not copied into target projects");
 const defaultOwners = fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8");
@@ -1768,7 +1854,9 @@ const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), 
 ok(tcfg.schemaVersion === 2 && !tcfg.verify && Array.isArray(tcfg.ui.globs) && Array.isArray(tcfg.ui.exclude) &&
    tcfg.capabilities.release === "cocogitto" && tcfg.capabilities.serverPolicy === "github",
   "installer assertion 6");
-ok(!/Dropwheel|inbox\/dropwheel/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")),
+ok(!/Dropwheel|inbox\/dropwheel/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")) &&
+   /MERGE\+CLEANUP/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")) &&
+   /remote branches/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")),
   "install: target AGENTS template is project-agnostic");
 const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
 ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "installer assertion 7");
@@ -1834,6 +1922,9 @@ ok(forced.ok === true && JSON.parse(fs.readFileSync(path.join(itmp, "harness.con
    fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8") === customOwners &&
    JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8")).rules.find((r) => r.type === "pull_request").parameters.required_approving_review_count === 2,
   "install: --force updates managed runtime but preserves every project-owned policy file");
+ok(forced.migrationRequired.includes("branch-lifecycle-policy-review") &&
+   forced.notes.some((note) => /branch-lifecycle-policy-review/.test(note)),
+  "install: preserved AGENTS policy reports branch lifecycle review as an explicit migration");
 // settings.json merge keeps foreign keys.
 const cur = JSON.parse(fs.readFileSync(dstSet, "utf8")); cur.model = "opus"; fs.writeFileSync(dstSet, JSON.stringify(cur));
 installJson(itmp, []);
