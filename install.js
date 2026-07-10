@@ -48,7 +48,7 @@ const INSTALL_MANIFEST = ".harness/installation.json";
 // else is project policy: installer-created templates are seeds, never update
 // payloads. test.js and release.yml remain source-repository-only.
 const MANAGED_FILES = [
-  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
+  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "settings.example.json",
@@ -132,7 +132,10 @@ function defaultConfig(adapters) {
     capabilities: { ui: "auto", release: adapters.release, serverPolicy: adapters.server },
     ui: { globs: DEFAULT_UI_GLOBS, exclude: DEFAULT_UI_EXCLUDE, mockups: DEFAULT_MOCKUPS },
     debugAudit: { enabled: true, base: "main", soft: false, exclude: [], strict: true },
-    release: { provider: adapters.release, remote: adapters.detectedGitHub ? "github" : "none", artifacts: [] },
+    release: {
+      provider: adapters.release, remote: adapters.detectedGitHub ? "github" : "none",
+      changelog: adapters.release === "cocogitto", versioning: { exclude: [], allowMissing: false }, artifacts: [],
+    },
     serverPolicy: { provider: adapters.server, profile: adapters.profile },
   }, null, 2) + "\n";
 }
@@ -311,10 +314,22 @@ function writeConfig(adapters, dryRun) {
   try { fs.accessSync(dst); exists = true; } catch {}
   if (exists) {
     const explicit = a.serverProvider !== "auto" || a.releaseProvider !== "auto" || a.rulesetProfile !== "auto";
-    if (!explicit) return { action: "preserve", ownership: "project" };
     let config;
     try { config = JSON.parse(fs.readFileSync(dst, "utf8")); }
     catch (e) { return { action: "error", ownership: "project", reason: `cannot apply explicit adapter selection to invalid JSON: ${e.message}` }; }
+    if (!explicit) {
+      const migrations = [];
+      if (config.schemaVersion !== 2 || !config.capabilities)
+        migrations.push("schema-v2-capabilities");
+      if (!config.ui || !Array.isArray(config.ui.exclude) ||
+          (Array.isArray(config.ui.globs) && !config.ui.globs.some((glob) => /xaml|tsx|jsx|vue|svelte|razor/i.test(String(glob)))))
+        migrations.push("ui-routing-v2-review");
+      if (!config.release || !config.release.versioning || !Array.isArray(config.release.artifacts))
+        migrations.push("release-contract-v2-review");
+      if (!config.serverPolicy || !config.serverPolicy.provider || !config.serverPolicy.profile)
+        migrations.push("server-policy-v2-review");
+      return { action: "preserve", ownership: "project", migrations };
+    }
     config.schemaVersion = config.schemaVersion || 2;
     config.capabilities = config.capabilities || {};
     config.release = config.release || {};
@@ -427,7 +442,7 @@ const a = parseArgs(process.argv.slice(2));
     target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null,
     adapters: null, installManifest: null, changelog: null, cog: null, codeowners: null,
     settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null,
-    notes: [], argumentErrors: a.errors,
+    migrationRequired: [], notes: [], argumentErrors: a.errors,
   };
 
   if (a.errors.length) {
@@ -474,6 +489,7 @@ const a = parseArgs(process.argv.slice(2));
       }
     }
     out.config = writeConfig(out.adapters, a.dryRun);
+    out.migrationRequired = (out.config && out.config.migrations) || [];
     if (out.adapters.release === "cocogitto") out.changelog = ensureChangelog(a.dryRun);
     if (out.adapters.server === "github") out.codeowners = configureCodeOwnersAndRuleset(a.dryRun, projectWrites, out.adapters.profile);
     out.installManifest = writeInstallManifest(managedHashes, a.dryRun);
@@ -522,6 +538,7 @@ const a = parseArgs(process.argv.slice(2));
   if (!a.dryRun && a.requireEnforceable && !out.enforceable) hardFailures.push("not-enforceable");
   if (out.bootstrapRequired) out.notes.push("bootstrap pending: commit the installed harness through a PR before treating the loop as enforceable.");
   if (out.activationRequired) out.notes.push("activation pending: install Lefthook and run `lefthook install`; use --require-enforceable to gate automation.");
+  if (out.migrationRequired.length) out.notes.push(`project-owned harness.config.json needs a separate reviewed migration: ${out.migrationRequired.join(", ")}`);
   return finish(out, hardFailures.length === 0,
     hardFailures.length ? "installation failed: " + hardFailures.join(", ") + " (see notes/doctor)" : null);
 })();

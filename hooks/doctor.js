@@ -282,8 +282,10 @@ const requiredHarnessFiles = [
   "hooks/verify-core.js",
   "hooks/design-gate.js",
   "hooks/release-start.js",
+  "hooks/release-config.js",
   "hooks/release-manifest-bump.js",
   "hooks/release-preflight.js",
+  "hooks/release-artifacts.js",
   "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
   "hooks/repo-state-audit.js",
@@ -355,6 +357,21 @@ if (fs.existsSync(cfgPath)) {
       fail(`harness.config.json: unsupported server-policy provider ${serverProvider}`);
     if (!["solo", "team"].includes(serverProfile))
       fail(`harness.config.json: unsupported server-policy profile ${serverProfile}`);
+    if (releaseProvider === "cocogitto") {
+      const release = cfg.release || {};
+      const versioning = release.versioning || {};
+      if (Array.isArray(versioning.manifests) && !versioning.manifests.length && versioning.allowMissing !== true)
+        fail("harness.config.json: empty release.versioning.manifests requires allowMissing=true");
+      const artifacts = Array.isArray(release.artifacts) ? release.artifacts : [];
+      if (!artifacts.length) warn("harness.config.json: release.artifacts is empty; release publication has no artifact evidence contract");
+      for (const artifact of artifacts) {
+        if (!artifact || typeof artifact !== "object" || !artifact.id) {
+          fail("harness.config.json: every release artifact must be an object with id");
+        } else if (artifact.workflowOwned !== true && (!artifact.path || !artifact.smoke || !artifact.versionCommand)) {
+          fail(`harness.config.json: release artifact ${artifact.id} requires path, smoke, and versionCommand (or workflowOwned=true)`);
+        }
+      }
+    }
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
     if (sourceHarness || hasSelfTest) {

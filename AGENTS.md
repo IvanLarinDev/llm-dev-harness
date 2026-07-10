@@ -142,16 +142,18 @@ them until their tag, published artifacts, and smoke tests succeed. The
 release-wide cleanup remains a final audit for merged branches missed earlier.
 
 For pipelines with separate development and accepted-main roots, finish the
-merge/cleanup sequence with a strict, read-only topology audit:
+merge/cleanup sequence with a strict, non-destructive topology audit (the
+optional fetch updates remote-tracking refs only):
 
 ```powershell
-node hooks/repo-state-audit.js --root <development-root> --accepted-root <accepted-main-root> --base main --strict
+node hooks/repo-state-audit.js --root <development-root> --accepted-root <accepted-main-root> --base main --remote origin --fetch --strict
 ```
 
-Completion requires matching local `main` SHAs, clean expected worktrees, and
-no leftover local branches or linked worktrees. A mismatch means the pipeline
-is still active or incomplete; synchronize and clean it explicitly, then rerun
-the audit. Do not make the audit delete or reset work automatically.
+Completion requires every actual checkout branch/HEAD plus local and fetched
+remote `main` SHAs to match, clean expected worktrees, and no leftover local
+branches or linked worktrees. A mismatch means the pipeline is still active or
+incomplete; synchronize and clean it explicitly, then rerun the audit. Do not
+make the audit delete or reset work automatically.
 
 **6. REPORT.** Report what changed, what was verified with commands and results,
 what remains, and how the user can test manually.
@@ -181,7 +183,7 @@ still requires a new user decision.
 | R3 | Push **only** `release/vX.Y.Z`, create its PR to `main`, wait for required checks, merge it with a merge commit, and verify server-side `MERGED`. | Do not squash/rebase the PR: the locally tagged release commit must remain in `main`. Do not push the tag yet. |
 | R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base --require-release-tip`. | `origin/main` must be the exact two-parent release merge: second parent equals the tag and first parent is included by the tag. This rejects concurrent main changes, updated release branches, and commits after the release merge. Remote tag must still be absent. |
 | R5 | Push `vX.Y.Z`. Watch the tag-triggered release workflow and require every release step to pass. | The workflow must build from the exact tag, verify, create a source ZIP + SHA-256, smoke-test it, and publish the GitHub Release. |
-| R6 | Run `gh release view vX.Y.Z`; download the published ZIP/checksum; compare SHA-256 and smoke-test the downloaded asset. | For this source-only harness, the tag plus matching CHANGELOG version is the version check. Binary/package projects must also verify their reported binary/package version. |
+| R6 | Run `gh release view vX.Y.Z`; download the published artifacts and execute their configured smoke/version contract (`node hooks/release-artifacts.js --tag vX.Y.Z --phase all`) or verify equivalent workflow-owned evidence. | For this source-only harness, compare the ZIP checksum and smoke its contents. Binary/package projects must verify their reported version equals the tag. |
 | R7 | From a separate clean base worktree run `node hooks/release-cleanup.js --base origin/main` and then `node hooks/release-cleanup.js --base origin/main --apply`. | Final audit: delete any remaining merged managed branches and clean linked worktrees. Dirty merged branches block cleanup; unmerged branches are skipped and reported. Tags are retained. |
 | R8 | Report tag, merge SHAs, workflow URL, Release URL, asset hash, smoke results, cleanup results, and rollback boundary. | The release is complete only after R6 and R7. |
 
@@ -194,10 +196,12 @@ Hotfix: branch from the previous tag, fix, PR to `main`, then follow R1-R8.
 Do not make a release commit directly on `main`; the version/changelog commit
 uses the release PR in R3.
 
-`release-manifest-bump.js` synchronizes known project manifests before the tag is
-created. `release-preflight.js` intentionally fails if the tag/changelog are
-ready but a project manifest still reports an old version. If no version
-manifest exists, it warns; R6 still verifies the binary version.
+`release-manifest-bump.js` synchronizes only `release.versioning.manifests` when
+configured, otherwise it auto-detects known manifests for compatibility.
+`release-preflight.js` fails if an in-scope manifest disagrees with the tag.
+Independent-version monorepos must configure scope explicitly. If no version
+manifest exists, `allowMissing` controls the contract; R6 still verifies the
+published artifact version.
 
 Do not whitelist `HEAD` in `cog.toml`: that would permit a real bump from an
 arbitrary detached commit. `release-start.js` attaches the clean release

@@ -73,8 +73,20 @@
   },
   "release": {
     "provider": "cocogitto",
+    "remote": "github",
+    "changelog": true,
+    "versioning": {
+      "manifests": [],
+      "allowMissing": true,
+      "exclude": []
+    },
     "sourceZip": true,
-    "artifacts": ["source-zip", "sha256"]
+    "artifacts": [
+      {
+        "id": "source-zip-and-sha256",
+        "workflowOwned": true
+      }
+    ]
   },
   "serverPolicy": {
     "provider": "github",

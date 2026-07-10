@@ -20,6 +20,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { loadReleaseConfig, includesAutoManifest } = require("./release-config.js");
 
 const SKIP_DIRS = new Set([".git", "node_modules", "target", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__", ".next"]);
 const MAX_DEPTH = 6;
@@ -155,13 +156,24 @@ function pyprojectVersion(abs, rel) {
   return version ? { rel, kind: "pyproject.toml", version } : null;
 }
 
-function collectVersions(root) {
+function collectVersions(root, contract) {
   const versions = [];
-  walk(root, (abs, rel) => {
+  const errors = contract.versioning.invalid.map((value) => `invalid release.versioning.manifests path: ${value}`);
+  if (contract.versioning.explicit && !contract.versioning.manifests.length && !contract.versioning.allowMissing)
+    errors.push("release.versioning.manifests is empty but allowMissing is false");
+  const inspect = (abs, rel, configured) => {
     const hit = csprojVersion(abs, rel) || packageJsonVersion(abs, rel) || cargoVersion(abs, rel) || pyprojectVersion(abs, rel);
     if (hit) versions.push(hit);
-  });
-  return versions;
+    else if (configured) errors.push(`configured file is missing or is not a supported version manifest: ${rel}`);
+  };
+  if (contract.versioning.explicit) {
+    for (const rel of contract.versioning.manifests) inspect(path.join(root, rel), rel, true);
+  } else {
+    walk(root, (abs, rel) => {
+      if (includesAutoManifest(rel, contract.versioning)) inspect(abs, rel, false);
+    });
+  }
+  return { versions, errors };
 }
 
 function checkGitState(a, res) {
@@ -252,11 +264,15 @@ function checkTag(a, res, version) {
   else pass(res, `remote tag does not exist yet: ${a.tag}`);
 }
 
-function checkVersions(a, res, version) {
+function checkVersions(a, res, version, contract) {
   if (!version) return;
-  const versions = collectVersions(a.root);
+  const collected = collectVersions(a.root, contract);
+  for (const error of collected.errors) fail(res, error);
+  const versions = collected.versions;
   if (!versions.length) {
-    warn(res, "no project version manifests found");
+    contract.versioning.allowMissing
+      ? pass(res, "release contract allows no project version manifest")
+      : warn(res, "no project version manifests found");
     return;
   }
   const mismatches = versions.filter((v) => v.version !== version);
@@ -267,7 +283,8 @@ function checkVersions(a, res, version) {
   }
 }
 
-function checkChangelog(a, res) {
+function checkChangelog(a, res, contract) {
+  if (!contract.changelog) { pass(res, "release contract does not require CHANGELOG.md"); return; }
   const p = path.join(a.root, "CHANGELOG.md");
   let text = "";
   try { text = fs.readFileSync(p, "utf8"); } catch { fail(res, "CHANGELOG.md not found"); return; }
@@ -285,11 +302,13 @@ function main() {
     results: [],
   };
   const version = semverFromTag(a.tag);
+  const contract = loadReleaseConfig(a.root);
 
+  if (contract.provider === "none") fail(res, "release capability is disabled in harness.config.json");
   checkGitState(a, res);
   checkTag(a, res, version);
-  checkVersions(a, res, version);
-  checkChangelog(a, res);
+  checkVersions(a, res, version, contract);
+  checkChangelog(a, res, contract);
 
   res.ok = !res.results.some((r) => r.level === "FAIL");
   if (a.json) {

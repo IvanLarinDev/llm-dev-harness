@@ -15,6 +15,7 @@
 
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { loadReleaseConfig } = require("./release-config.js");
 
 function parseArgs(argv) {
   const a = { root: process.cwd(), base: "origin/main", json: false, errors: [] };
@@ -99,6 +100,11 @@ function releaseStart(options, dependencies = {}) {
   const add = (level, msg, extra = {}) => res.results.push({ level, msg, ...extra });
   const fail = (msg, extra) => add("FAIL", msg, extra);
   const pass = (msg, extra) => add("PASS", msg, extra);
+
+  if (loadReleaseConfig(a.root).provider === "none") {
+    fail("release capability is disabled in harness.config.json");
+    return res;
+  }
 
   if (!gitOk(a.root, ["rev-parse", "--is-inside-work-tree"])) {
     fail("not a git repository");

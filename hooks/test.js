@@ -66,6 +66,7 @@ const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_START = path.join(__dirname, "release-start.js");
 const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
+const RELEASE_ARTIFACTS = path.join(__dirname, "release-artifacts.js");
 const POST_MERGE_CLEANUP = path.join(__dirname, "post-merge-cleanup.js");
 const RELEASE_CLEANUP = path.join(__dirname, "release-cleanup.js");
 const REPO_STATE_AUDIT = path.join(__dirname, "repo-state-audit.js");
@@ -721,6 +722,27 @@ ok(ids.includes("rust") && ids.includes("dotnet") && ids.includes("python"),
   "verify runner assertion 1");
 const dotnetPlan = verifyList(vtmp).plan.find((p) => p.stack === "dotnet");
 ok(dotnetPlan && dotnetPlan.steps.includes("format"), "verify runner assertion 2");
+const universalFixtures = [
+  { name: "Node backend", files: ["package.json", "src/server.js"], stacks: ["node"], ui: false },
+  { name: "React UI", files: ["package.json", "src/components/App.tsx"], stacks: ["node"], ui: true, uiPath: "src/components/App.tsx" },
+  { name: "Python service", files: ["pyproject.toml", "src/service.py"], stacks: ["python"], ui: false },
+  { name: ".NET service", files: ["src/Service/Service.csproj", "src/Service/Program.cs"], stacks: ["dotnet"], ui: false },
+  { name: "WPF desktop", files: ["src/Desktop/Desktop.csproj", "src/Desktop/App.xaml"], stacks: ["dotnet"], ui: true, uiPath: "src/Desktop/App.xaml" },
+  { name: "Rust service", files: ["Cargo.toml", "src/main.rs"], stacks: ["rust"], ui: false },
+  { name: "Tauri mixed", files: ["package.json", "src-tauri/Cargo.toml", "src/App.tsx"], stacks: ["node", "rust"], ui: true, uiPath: "src/App.tsx" },
+  { name: "mixed monorepo", files: ["apps/web/package.json", "services/api/pyproject.toml"], stacks: ["node", "python"], ui: false },
+];
+for (const fixture of universalFixtures) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stack-fixture-"));
+  for (const rel of fixture.files) {
+    const abs = path.join(root, rel); fs.mkdirSync(path.dirname(abs), { recursive: true }); fs.writeFileSync(abs, "{}\n");
+  }
+  const stacks = new Set(verifyCore.detect(root, verifyCore.DEFAULT_STACKS).map((target) => target.stack.id));
+  const ui = fixture.uiPath ? sharedLib.isUiPath(fixture.uiPath, sharedLib.loadConfig(root)) : false;
+  ok(fixture.stacks.every((id) => stacks.has(id)) && ui === fixture.ui,
+    `universal fixture: ${fixture.name} routes stacks and UI capability correctly`);
+  fs.rmSync(root, { recursive: true, force: true });
+}
 ok(/dotnet format --verify-no-changes[^}]*optional:\s*true/.test(readRepo("hooks/verify-core.js")),
   "dotnet format --verify-no-changes is optional only when the tool is missing");
 const etmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifyexec-"));
@@ -1115,6 +1137,15 @@ ok(startResult.ok === false && startResult.rolledBack === true &&
   "release-start: an existing release branch is preserved and temporary state is rolled back");
 removeReleaseStartRepo(startCase);
 
+startCase = releaseStartRepo();
+fs.writeFileSync(path.join(startCase.work, "harness.config.json"), JSON.stringify({
+  capabilities: { release: "none" }, release: { provider: "none" },
+}, null, 2) + "\n");
+startResult = releaseStartRun(startCase.work);
+ok(startResult.ok === false && (startResult.results || []).some((result) => /release capability is disabled/.test(result.msg)),
+  "release-start skips repositories with release:none instead of assuming Cocogitto");
+removeReleaseStartRepo(startCase);
+
 // ---------- release-preflight ----------
 console.log("\nrelease-preflight:");
 function relGit(root, args) {
@@ -1202,6 +1233,39 @@ relGit(relCase.work, ["tag", "-a", "v0.11.0", "-m", "v0.11.0"]);
 rpre = releaseJson(relCase.work, "v0.11.0");
 ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
   "release flow fixture: manifest bump plus changelog tag passes preflight");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.2", "v0.10.2");
+fs.mkdirSync(path.join(relCase.work, "packages", "Independent"), { recursive: true });
+fs.writeFileSync(path.join(relCase.work, "packages", "Independent", "package.json"), JSON.stringify({ name: "independent", version: "9.9.9" }, null, 2) + "\n");
+fs.writeFileSync(path.join(relCase.work, "harness.config.json"), JSON.stringify({
+  release: { versioning: { manifests: ["src/App/App.csproj"] } },
+}, null, 2) + "\n");
+rbump = releaseBumpJson(relCase.work, "v0.11.0");
+ok(rbump.ok === true && rbump.manifests.length === 1 && rbump.manifests[0].rel === "src/App/App.csproj" &&
+   JSON.parse(fs.readFileSync(path.join(relCase.work, "packages", "Independent", "package.json"), "utf8")).version === "9.9.9",
+  "release manifest scope updates only the configured package in an independent-version monorepo");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.1");
+fs.mkdirSync(path.join(relCase.work, "packages", "Independent"), { recursive: true });
+fs.writeFileSync(path.join(relCase.work, "packages", "Independent", "package.json"), JSON.stringify({ name: "independent", version: "9.9.9" }, null, 2) + "\n");
+fs.writeFileSync(path.join(relCase.work, "harness.config.json"), JSON.stringify({
+  release: { versioning: { manifests: ["src/App/App.csproj"] } },
+}, null, 2) + "\n");
+relGit(relCase.work, ["add", "."]); relGit(relCase.work, ["commit", "-q", "-m", "chore: scope release manifests"]);
+relGit(relCase.work, ["tag", "-d", "v0.10.1"]); relGit(relCase.work, ["tag", "-a", "v0.10.1", "-m", "v0.10.1"]);
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg) && r.count === 1),
+  "release preflight ignores independently versioned manifests outside configured scope");
+fs.writeFileSync(path.join(relCase.work, "harness.config.json"), JSON.stringify({
+  release: { versioning: { manifests: ["missing/project.csproj"] } },
+}, null, 2) + "\n");
+relGit(relCase.work, ["add", "harness.config.json"]); relGit(relCase.work, ["commit", "-q", "-m", "chore: break release scope"]);
+relGit(relCase.work, ["tag", "-d", "v0.10.1"]); relGit(relCase.work, ["tag", "-a", "v0.10.1", "-m", "v0.10.1"]);
+rpre = releaseJson(relCase.work, "v0.10.1");
+ok(rpre.ok === false && (rpre.results || []).some((r) => /configured file is missing/.test(r.msg)),
+  "release preflight fails closed when a configured version manifest is missing");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 
 relCase = releaseRepo("0.10.0");
@@ -1318,6 +1382,46 @@ rpre = releaseJson(relCase.work, "v0.10.1", ["--require-tag-in-base"]);
 ok(rpre.ok === false && (rpre.results || []).some((r) => /tag v0\.10\.1 is not included in origin\/main/.test(r.msg)),
   "release-preflight: sibling release tag outside main -> FAIL");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+// ---------- release artifact contract ----------
+console.log("\nrelease artifact contract:");
+function releaseArtifactsJson(root, tag, extra = []) {
+  try {
+    return JSON.parse(execFileSync("node", [RELEASE_ARTIFACTS, "--root", root, "--tag", tag, "--json", ...extra],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }));
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [] }; }
+  }
+}
+const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-artifact-"));
+fs.writeFileSync(path.join(artifactRoot, "build.js"), [
+  "const fs = require('fs');", "const path = require('path');",
+  "fs.mkdirSync(path.dirname(process.env.HARNESS_ARTIFACT_PATH), { recursive: true });",
+  "fs.writeFileSync(process.env.HARNESS_ARTIFACT_PATH, 'app ' + process.env.HARNESS_RELEASE_VERSION + '\\n');", "",
+].join("\n"));
+fs.writeFileSync(path.join(artifactRoot, "smoke.js"), [
+  "const fs = require('fs');", "const text = fs.readFileSync(process.env.HARNESS_ARTIFACT_PATH, 'utf8');",
+  "process.exit(text.startsWith('app ') ? 0 : 1);", "",
+].join("\n"));
+fs.writeFileSync(path.join(artifactRoot, "version.js"), "process.stdout.write(require('fs').readFileSync(process.env.HARNESS_ARTIFACT_PATH, 'utf8'));\n");
+fs.writeFileSync(path.join(artifactRoot, "harness.config.json"), JSON.stringify({ release: { artifacts: [{
+  id: "app", path: "dist/app-{version}.txt", build: "node build.js", smoke: "node smoke.js", versionCommand: "node version.js",
+}] } }, null, 2) + "\n");
+let artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3");
+ok(artifactReport.ok === true && artifactReport.artifacts[0].path === "dist/app-1.2.3.txt" &&
+   artifactReport.results.some((r) => /reports version 1\.2\.3/.test(r.message)),
+  "release artifact contract builds, finds, smoke-tests, and verifies project artifact version");
+fs.writeFileSync(path.join(artifactRoot, "version.js"), "process.stdout.write('0.0.0');\n");
+artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3", ["--phase", "version"]);
+ok(artifactReport.ok === false && artifactReport.results.some((r) => /does not match 1\.2\.3/.test(r.message)),
+  "release artifact contract rejects artifact version mismatch");
+fs.writeFileSync(path.join(artifactRoot, "harness.config.json"), JSON.stringify({ release: { artifacts: [{
+  id: "escape", path: "../outside.zip", smoke: "node smoke.js", versionCommand: "node version.js",
+}] } }, null, 2) + "\n");
+artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3");
+ok(artifactReport.ok === false && artifactReport.results.some((r) => /repository-external path/.test(r.message)),
+  "release artifact contract rejects paths outside the repository");
+fs.rmSync(artifactRoot, { recursive: true, force: true });
 
 // ---------- release cleanup ----------
 console.log("\nrelease cleanup:");
@@ -1601,7 +1705,7 @@ const enforceableGate = installJson(itmp, ["--require-enforceable"]);
 ok(enforceableGate.ok === false && enforceableGate.installed === true && enforceableGate.bootstrapRequired === true &&
    /not-enforceable/.test(enforceableGate.reason || ""),
   "install: --require-enforceable turns bootstrap-pending into an automation failure");
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 const installManifest = JSON.parse(fs.readFileSync(path.join(itmp, ".harness", "installation.json"), "utf8"));
 ok(installManifest.schemaVersion === 1 && installManifest.managed["hooks/agent/guard.js"] &&
    installManifest.ownership.projectOwned.includes("harness.config.json"),
@@ -1756,9 +1860,20 @@ const genericReleaseInstall = installJson(explicitGenericRelease, ["--release-pr
 ok(genericReleaseInstall.ok === true && fs.readFileSync(path.join(explicitGenericRelease, "cog.toml"), "utf8").includes("Project-owned Cocogitto baseline") &&
    JSON.parse(fs.readFileSync(path.join(explicitGenericRelease, "harness.config.json"), "utf8")).release.remote === "none",
   "install: explicit Cocogitto adapter on a non-GitHub remote uses a provider-neutral project template");
+const legacyTarget = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-legacy-config-"));
+execFileSync("git", ["init", "-q"], { cwd: legacyTarget });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/legacy-target.git"], { cwd: legacyTarget });
+const legacyConfigText = JSON.stringify({ ui: { globs: ["**/*.qml"] }, debugAudit: { enabled: true } }, null, 2) + "\n";
+fs.writeFileSync(path.join(legacyTarget, "harness.config.json"), legacyConfigText);
+const legacyInstall = installJson(legacyTarget, ["--force"]);
+ok(legacyInstall.ok === true && fs.readFileSync(path.join(legacyTarget, "harness.config.json"), "utf8") === legacyConfigText &&
+   legacyInstall.migrationRequired.includes("schema-v2-capabilities") && legacyInstall.migrationRequired.includes("ui-routing-v2-review") &&
+   legacyInstall.migrationRequired.includes("release-contract-v2-review") && legacyInstall.migrationRequired.includes("server-policy-v2-review"),
+  "install: legacy project config is preserved and reported as a separate reviewed migration");
 try {
   fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true });
   fs.rmSync(gitlab, { recursive: true, force: true }); fs.rmSync(explicitGenericRelease, { recursive: true, force: true });
+  fs.rmSync(legacyTarget, { recursive: true, force: true });
   fs.rmSync(invalidArgsTarget, { recursive: true, force: true });
 } catch {}
 
