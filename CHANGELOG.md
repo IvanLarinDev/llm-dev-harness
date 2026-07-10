@@ -1,6 +1,12 @@
 # Changelog
 
 - - -
+## [v0.5.1](https://github.com/IvanLarinDev/llm-dev-harness/compare/00b5f87702e3764ec393bb3c7d98d9f7311b5cfe..v0.5.1) - 2026-07-10
+#### Bug Fixes
+- (**policy**) allow slower topology fetches - ([a15ec08](https://github.com/IvanLarinDev/llm-dev-harness/commit/a15ec081f838a3c6e2703f07d571b4179e607f4b)) - agidevway
+
+- - -
+
 ## [v0.5.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/28f4d642c1ea8de19a29bea4beb79abbe2f53bcb..v0.5.0) - 2026-07-10
 #### Features
 - (**install**) add universal ownership-aware updates - ([109dd82](https://github.com/IvanLarinDev/llm-dev-harness/commit/109dd823e597ccdcc669ecf995773a3ea9cd5cf2)) - agidevway
