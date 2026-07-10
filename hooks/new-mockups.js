@@ -311,7 +311,7 @@ ${variants.map((variant) => `- \`${variant.file}\` - ${variant.focus}`).join("\n
 
 1. Refine every variant into credible evidence for this feature.
 2. Review the alternatives and choose a direction.
-3. Create an \`APPROVED\` file in this directory.
+3. Create an \`APPROVED\` file in this directory with a \`ui: <changed-ui-path-or-glob>\` line.
 4. Implement the user-visible change only after approval.
 `;
 }
@@ -355,7 +355,7 @@ function main() {
 
   console.log(`created ${variants.length} ${args.kind}${args.kind === "animation" ? `/${args.fidelity}` : ""} variants: design/mockups/${args.feature}/`);
   variants.forEach((variant) => console.log(`   - ${variant.file}`));
-  console.log(`Next: refine variants, get approval, then create design/mockups/${args.feature}/APPROVED`);
+  console.log(`Next: refine variants, get approval, then create design/mockups/${args.feature}/APPROVED with a ui: scope`);
 }
 
 main();

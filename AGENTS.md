@@ -72,10 +72,14 @@ node hooks/new-mockups.js <feature> --kind backend
 ```
 
 The generator writes `DESIGN.json`, mode-appropriate variants, and `NOTES.md`.
-After user selection, create `design/mockups/<feature>/APPROVED`. The gate checks
-the manifest and passes UI changes only when that approved set is touched in the
-same branch diff. Legacy sets without `DESIGN.json` remain valid. To reuse an old
-set, append a date/branch line to its `APPROVED` file.
+After user selection, create `design/mockups/<feature>/APPROVED` with a
+`ui: <changed-ui-path-or-glob>` line. The gate checks the manifest and passes UI
+changes only when that approved set is both touched and scoped to the changed UI
+paths in the same branch diff. Legacy sets without `DESIGN.json` remain valid
+only when `APPROVED` carries the same `ui:` scope. If the user explicitly waives
+new mockups for a UI-path change, create `design/mockups/<feature>/WAIVER.json`
+with `schemaVersion`, `feature`, `uiPaths`, `reason`, `date`, and
+`approvedBy` or `approvalSource`.
 
 **3. IMPLEMENT+TEST.** Code and tests move together. If a target project has no
 test runner, report that and propose a minimal one.
@@ -139,7 +143,7 @@ still requires a new user decision.
 |---|---|---|
 | R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green, then run exact post-merge cleanup for each branch. | No release from an unmerged feature branch; merged development branches should not accumulate while releases are deferred. |
 | R1 | Fetch/prune, then create a new clean release worktree from `origin/main`. Run `node hooks/doctor.js`, `node hooks/verify.js`, and `git describe --tags --abbrev=0`. | The latest tag must be an ancestor of `origin/main`; stop on a broken release graph. |
-| R2 | Derive SemVer from merged Conventional Commits with `cog bump --auto --dry-run`. Report the computed tag/diff/notes, create `release/vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. |
+| R2 | Derive SemVer from merged Conventional Commits with `cog bump --auto --dry-run`. Report the computed tag/diff/notes, create `release/vX.Y.Z`, run `node hooks/release-manifest-bump.js --tag vX.Y.Z`, commit manifest changes as `chore(release): prepare vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. |
 | R2.5 | Run prepare preflight: `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`. | Clean tree; annotated local tag points at release HEAD; remote tag absent; manifests and CHANGELOG match. |
 | R3 | Push **only** `release/vX.Y.Z`, create its PR to `main`, wait for required checks, merge it with a merge commit, and verify server-side `MERGED`. | Do not squash/rebase the PR: the locally tagged release commit must remain in `main`. Do not push the tag yet. |
 | R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base`. | The tag commit must now be an ancestor of `origin/main`; remote tag must still be absent. |
@@ -157,9 +161,10 @@ Hotfix: branch from the previous tag, fix, PR to `main`, then follow R1-R8.
 Do not make a release commit directly on `main`; the version/changelog commit
 uses the release PR in R3.
 
-`release-preflight.js` intentionally fails if the tag/changelog are ready but a
-project manifest still reports an old version. If no version manifest exists, it
-warns; R6 still verifies the binary version.
+`release-manifest-bump.js` synchronizes known project manifests before the tag is
+created. `release-preflight.js` intentionally fails if the tag/changelog are
+ready but a project manifest still reports an old version. If no version
+manifest exists, it warns; R6 still verifies the binary version.
 
 After `gh pr merge --delete-branch`, GitHub can merge the PR server-side even if
 the local post-merge pull/rebase fails because of a dirty worktree. Verify with

@@ -27,6 +27,7 @@ README covers the stack and installation.
 | Server enforcement | GitHub ruleset | [.github/rulesets/main.json](./.github/rulesets/main.json) |
 | Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
 | GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
+| Release manifest bump | local harness | [hooks/release-manifest-bump.js](./hooks/release-manifest-bump.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
 | Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
@@ -69,8 +70,12 @@ user-visible slice.
 
 Every non-backend set contains a `DESIGN.json` manifest, four mode-appropriate
 variants, and `NOTES.md`. Create `design/mockups/<feature>/APPROVED` only after
-the user selects a direction. Legacy approved sets without `DESIGN.json` remain
-valid for compatibility.
+the user selects a direction, and include `ui: <changed-ui-path-or-glob>` so the
+approval is bound to the current UI diff. Legacy approved sets without
+`DESIGN.json` remain valid only when `APPROVED` carries that scope. For explicit
+user-approved skips, create `design/mockups/<feature>/WAIVER.json` with
+`schemaVersion`, `feature`, `uiPaths`, `reason`, `date`, and `approvedBy` or
+`approvalSource`.
 
 ## Install
 
@@ -119,6 +124,7 @@ node hooks/test.js --repeat 3
 node hooks/verify.js [--list]
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
+node hooks/release-manifest-bump.js --tag vX.Y.Z --dry-run
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
