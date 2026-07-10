@@ -39,7 +39,8 @@ flow is not fully enforceable.
 
 Installer state is explicit: a successful first install exits zero with
 `installed=true`, `bootstrapRequired=true`, and `enforceable=false` until the
-bootstrap files are tracked. Automation that requires the final state uses
+bootstrap files are tracked. A missing local Lefthook is
+`activationRequired=true`, not a failed file install. Automation that requires the final state uses
 `install.js --require-enforceable`.
 
 ## Universal Contract

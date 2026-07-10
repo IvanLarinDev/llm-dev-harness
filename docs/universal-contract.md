@@ -57,9 +57,12 @@ Installation and enforceability are separate states:
 - `installed`: file/merge operations completed without conflicts.
 - `bootstrapRequired`: required harness files exist but are not yet tracked in
   the repository. This is expected after a fresh install.
+- `activationRequired`: the runtime was installed but Lefthook is unavailable or
+  could not be wired on this machine.
 - `enforceable`: local hooks are activated and doctor has no failures.
 
-A fresh successful installation exits zero with `bootstrapRequired: true`.
+A fresh successful installation exits zero with `bootstrapRequired: true` and
+may also report `activationRequired: true` on a machine without Lefthook.
 `--require-enforceable` turns any pending state into a non-zero automation gate.
 Invalid Git state, malformed structured files, managed-file conflicts, failed
 activation, and non-bootstrap doctor failures remain hard failures.

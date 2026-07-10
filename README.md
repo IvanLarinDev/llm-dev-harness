@@ -133,7 +133,9 @@ separate bootstrap PR before treating the loop as mandatory. At minimum, commit
 are local but untracked, a clean worktree from `origin/main` cannot run
 `node hooks/verify.js`, `design-gate.js`, or `cog bump --auto`.
 The installer reports this expected first-run state as `bootstrapRequired: true`
-and exits zero; use `--require-enforceable` when automation needs a hard gate.
+and exits zero. Missing local Lefthook is reported separately as
+`activationRequired: true`; use `--require-enforceable` when automation needs a
+hard gate.
 
 ## Verify
 

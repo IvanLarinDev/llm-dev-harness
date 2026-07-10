@@ -387,7 +387,7 @@ const a = parseArgs(process.argv.slice(2));
 
 (function main() {
   const out = {
-    ok: true, installed: false, bootstrapRequired: false, enforceable: false,
+    ok: true, installed: false, bootstrapRequired: false, activationRequired: false, enforceable: false,
     target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null,
     adapters: null, installManifest: null, changelog: null, cog: null, codeowners: null,
     settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null,
@@ -476,14 +476,15 @@ const a = parseArgs(process.argv.slice(2));
   const nonBootstrapDoctorFails = doctorFails.filter((r) => r.code !== "bootstrap-required");
   out.installed = conflicts.length === 0 && out.settings.status !== "error";
   out.bootstrapRequired = bootstrapFails.length > 0;
+  out.activationRequired = !a.dryRun && !!(out.lefthook && !out.lefthook.ok);
   out.enforceable = out.installed && isGit && !!(out.lefthook && out.lefthook.ok) && !!(out.doctor && out.doctor.ok);
   if (out.settings.status === "error") hardFailures.push("settings");
   if (conflicts.length) hardFailures.push("managed-file-conflict");
-  if (!a.dryRun && out.lefthook && !out.lefthook.ok) hardFailures.push("lefthook");
   if (!a.dryRun && nonBootstrapDoctorFails.length) hardFailures.push("doctor");
   if (!a.dryRun && a.withRuleset && out.ruleset && !out.ruleset.ok) hardFailures.push("ruleset");
   if (!a.dryRun && a.requireEnforceable && !out.enforceable) hardFailures.push("not-enforceable");
   if (out.bootstrapRequired) out.notes.push("bootstrap pending: commit the installed harness through a PR before treating the loop as enforceable.");
+  if (out.activationRequired) out.notes.push("activation pending: install Lefthook and run `lefthook install`; use --require-enforceable to gate automation.");
   return finish(out, hardFailures.length === 0,
     hardFailures.length ? "installation failed: " + hardFailures.join(", ") + " (see notes/doctor)" : null);
 })();
@@ -519,6 +520,6 @@ function finish(out, ok, reason) {
     console.log("   - server ruleset (real enforcement): node hooks/apply-ruleset.js  (gh admin, Pro/public repository)");
     console.log("   - check: node hooks/verify.js --list and node hooks/doctor.js");
   }
-  console.log(ok ? (out.bootstrapRequired ? "\ninstallation complete; bootstrap PR required." : "\ninstallation complete.") : "\ninstallation failed: " + (reason || ""));
+  console.log(ok ? ((out.bootstrapRequired || out.activationRequired) ? "\ninstallation complete; bootstrap/activation follow-up required." : "\ninstallation complete.") : "\ninstallation failed: " + (reason || ""));
   process.exit(ok ? 0 : 1);
 }
