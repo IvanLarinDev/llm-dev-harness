@@ -1,6 +1,29 @@
 # Changelog
 
 - - -
+## [v0.4.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/7020db612e6cde6642c911d6013c83536229ef6b..v0.4.0) - 2026-07-10
+#### Features
+- (**automation**) add dropwheel harness triage - ([3247110](https://github.com/IvanLarinDev/llm-dev-harness/commit/32471103e361fdfed02d30d8fa24555656f5a8cd)) - agidevway
+- (**branches**) clean merged branches after PRs - ([c51ea7a](https://github.com/IvanLarinDev/llm-dev-harness/commit/c51ea7a0ae21e27cec4d2b3776109f7788a33ee8)) - agidevway
+#### Bug Fixes
+- (**config**) pin PowerShell scripts to LF - ([4b3108e](https://github.com/IvanLarinDev/llm-dev-harness/commit/4b3108e1087b9b842894504f29ada2bc6f48f976)) - agidevway
+- (**doctor**) scope source release contract - ([5d92d84](https://github.com/IvanLarinDev/llm-dev-harness/commit/5d92d8420b260d46d7093c96505e2594bb41c241)) - agidevway
+- (**harness**) close dropwheel release handoff gaps - ([21992a2](https://github.com/IvanLarinDev/llm-dev-harness/commit/21992a21e2d77cfd4fbf794eb7607f6dbaa81599)) - agidevway
+- (**hooks**) enforce converged repository state - ([c1f4a90](https://github.com/IvanLarinDev/llm-dev-harness/commit/c1f4a90f0b8969a2da64b12c6d6cb8838754efeb)) - agidevway
+- (**hooks**) merge prerelease csproj parsing - ([f27c794](https://github.com/IvanLarinDev/llm-dev-harness/commit/f27c7940754de1b5c15e42ef86b3f6254e21685c)) - Ivan Larin
+- (**hooks**) parse csproj prerelease version - ([ff1701f](https://github.com/IvanLarinDev/llm-dev-harness/commit/ff1701fd75314534ada0d15435832e5a1a5ae4c0)) - Ivan Larin
+- (**install**) preserve target changelog - ([92b341f](https://github.com/IvanLarinDev/llm-dev-harness/commit/92b341f882cfab1754a8d59accece978e3ae1d79)) - agidevway
+- (**installer**) honor positional target - ([53aa609](https://github.com/IvanLarinDev/llm-dev-harness/commit/53aa609fad62b17a9e5cc3b5bbb980adcbcd1496)) - agidevway
+#### Tests
+- (**release**) cover slow remote tag checks - ([7020db6](https://github.com/IvanLarinDev/llm-dev-harness/commit/7020db612e6cde6642c911d6013c83536229ef6b)) - agidevway
+#### Miscellaneous Chores
+- (**agents**) merge release handoff fix - ([5bead09](https://github.com/IvanLarinDev/llm-dev-harness/commit/5bead095a265dd242657d85d91b4ceb99065e3d6)) - agidevway
+- (**agents**) merge automation config - ([c383cf6](https://github.com/IvanLarinDev/llm-dev-harness/commit/c383cf6985cb018fb55acfd6c49c7398796bb69b)) - agidevway
+- (**agents**) merge accepted main history - ([61f9278](https://github.com/IvanLarinDev/llm-dev-harness/commit/61f9278500e3c9c8fe781494cc1ca03b5f4607e3)) - agidevway
+- (**agents**) merge release preflight timeout test - ([bd11028](https://github.com/IvanLarinDev/llm-dev-harness/commit/bd11028527c6177590831d1044c4fcf362b09541)) - Ivan Larin
+
+- - -
+
 ## [v0.3.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/78ca25c6608913c624f8f7f4f0e6f53e48fa8697..v0.3.0) - 2026-07-10
 #### Features
 - (**release**) enforce full release lifecycle - ([5001cc7](https://github.com/IvanLarinDev/llm-dev-harness/commit/5001cc735ebe4143e33432a678279d772c39c61f)) - agidevway
