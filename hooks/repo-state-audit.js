@@ -9,7 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { classifyRef, listRemoteBranches } = require("./branch-state");
+const { classifyRef, listOrphanedRemoteRefs, listRemoteBranches } = require("./branch-state");
 
 const LOCAL_GIT_TIMEOUT_MS = 10000;
 const REMOTE_GIT_TIMEOUT_MS = 60000;
@@ -145,6 +145,7 @@ function audit(argv = process.argv.slice(2)) {
     ok: true, strict: args.strict, base: args.base, remote: args.remote, fetch: args.fetch, roots: [], issues: [],
     mergedBranches: [], unmergedBranches: [], remoteBranches: [],
     mergedRemoteBranches: [], equivalentRemoteBranches: [], unmergedRemoteBranches: [],
+    orphanedRemoteRefs: [],
     dirtyWorktrees: [], extraWorktrees: [],
   };
   for (const error of args.errors) issue(report, "invalid_argument", error);
@@ -179,6 +180,17 @@ function audit(argv = process.argv.slice(2)) {
         const entry = { root: probe, path: worktreePath, status: status.ok ? status.out.split(/\r?\n/) : [], error: status.error || "" };
         report.dirtyWorktrees.push(entry);
         issue(report, "dirty_worktree", `worktree is not clean: ${worktreePath}`, entry);
+      }
+    }
+
+    const orphaned = listOrphanedRemoteRefs(probe);
+    if (!orphaned.ok) {
+      issue(report, "orphaned_remote_ref_list_failed", `cannot inspect remote-tracking refs: ${orphaned.error}`, { root: probe });
+    } else {
+      for (const entry of orphaned.refs) {
+        const detailed = { root: probe, ...entry };
+        report.orphanedRemoteRefs.push(detailed);
+        issue(report, "orphaned_remote_ref", `remote-tracking ref has no configured remote: ${entry.relative}`, detailed);
       }
     }
 

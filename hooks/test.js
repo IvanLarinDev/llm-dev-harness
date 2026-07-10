@@ -1690,6 +1690,15 @@ topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"])
 ok(topology.ok === true && topology.remoteBranches.length === 0,
   "topology strict audit passes only after the remote branch is removed");
 
+const orphanedRef = "refs/remotes/retired/feat/stale";
+const acceptedMainOid = relGit(topologyAccepted, ["rev-parse", "main"]);
+relGit(topologyAccepted, ["update-ref", orphanedRef, acceptedMainOid]);
+topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"]);
+ok(topology.ok === false && topology.issues.some((item) =>
+  item.code === "orphaned_remote_ref" && item.relative === "retired/feat/stale"),
+"topology strict audit rejects remote-tracking refs whose remote is no longer configured");
+relGit(topologyAccepted, ["update-ref", "-d", orphanedRef, acceptedMainOid]);
+
 relGit(topologyDevelopment, ["worktree", "add", "-q", "--detach", topologyExtra, "main"]);
 topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === false && topology.issues.some((item) => item.code === "extra_worktree"),
