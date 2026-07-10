@@ -155,7 +155,7 @@ still requires a new user decision.
 |---|---|---|
 | R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green, then run exact post-merge cleanup for each branch. | No release from an unmerged feature branch; merged development branches should not accumulate while releases are deferred. |
 | R1 | Fetch/prune, then create a new clean release worktree from `origin/main`. Run `node hooks/doctor.js`, `node hooks/verify.js`, and `git describe --tags --abbrev=0`. | The latest tag must be an ancestor of `origin/main`; stop on a broken release graph. |
-| R2 | Derive SemVer from merged Conventional Commits with `cog bump --auto --dry-run`. Report the computed tag/diff/notes, create `release/vX.Y.Z`, run `node hooks/release-manifest-bump.js --tag vX.Y.Z`, commit manifest changes as `chore(release): prepare vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. |
+| R2 | Run `node hooks/release-start.js --base origin/main`. It requires detached clean HEAD exactly at the base, creates an allowed temporary branch for `cog bump --auto --dry-run`, and renames it to `release/vX.Y.Z`. Report the computed tag/diff/notes, run `node hooks/release-manifest-bump.js --tag vX.Y.Z`, commit manifest changes as `chore(release): prepare vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. The helper rolls back its temporary branch when version discovery fails. |
 | R2.5 | Run prepare preflight: `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`. | Clean tree; annotated local tag points at release HEAD; remote tag absent; manifests and CHANGELOG match. |
 | R3 | Push **only** `release/vX.Y.Z`, create its PR to `main`, wait for required checks, merge it with a merge commit, and verify server-side `MERGED`. | Do not squash/rebase the PR: the locally tagged release commit must remain in `main`. Do not push the tag yet. |
 | R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base`. | The tag commit must now be an ancestor of `origin/main`; remote tag must still be absent. |
@@ -177,6 +177,11 @@ uses the release PR in R3.
 created. `release-preflight.js` intentionally fails if the tag/changelog are
 ready but a project manifest still reports an old version. If no version
 manifest exists, it warns; R6 still verifies the binary version.
+
+Do not whitelist `HEAD` in `cog.toml`: that would permit a real bump from an
+arbitrary detached commit. `release-start.js` attaches the clean release
+worktree to a named `release/**` branch before invoking Cocogitto and leaves no
+temporary branch behind when startup fails.
 
 After `gh pr merge --delete-branch`, GitHub can merge the PR server-side even if
 the local post-merge pull/rebase fails because of a dirty worktree. Verify with

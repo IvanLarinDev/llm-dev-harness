@@ -27,6 +27,7 @@ README covers the stack and installation.
 | Server enforcement | GitHub ruleset | [.github/rulesets/main.json](./.github/rulesets/main.json) |
 | Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
 | GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
+| Release branch start | local harness | [hooks/release-start.js](./hooks/release-start.js) |
 | Release manifest bump | local harness | [hooks/release-manifest-bump.js](./hooks/release-manifest-bump.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
 | Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
@@ -125,6 +126,7 @@ node hooks/test.js --repeat 3
 node hooks/verify.js [--list]
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
+node hooks/release-start.js --base origin/main
 node hooks/release-manifest-bump.js --tag vX.Y.Z --dry-run
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
@@ -165,8 +167,11 @@ force-pushes, deletion of unmerged work, or loss of dirty worktrees.
 The safe sequence is intentionally two-PR:
 
 1. Merge and verify the feature/fix PR on `main`.
-2. From fresh `origin/main`, compute SemVer and create the version/changelog
-   commit plus a local annotated tag on `release/vX.Y.Z`.
+2. Create a detached worktree at fresh `origin/main`, then run
+   `node hooks/release-start.js --base origin/main`. The helper attaches a
+   temporary allowed branch before Cocogitto computes SemVer and leaves the
+   worktree on `release/vX.Y.Z`; create the version/changelog commit and local
+   annotated tag there.
 3. Run prepare preflight, push only the release branch, and merge its PR with a
    merge commit so the locally tagged release commit remains in `main`.
 4. Wait for `main` CI and run post-merge preflight with
@@ -181,6 +186,12 @@ This repository is source-only, so its release artifact is
 `llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories
 do not receive this source-specific workflow; they must define artifacts and
 version checks appropriate to their own runtime.
+
+Do not add `HEAD` to Cocogitto's `branch_whitelist`. That would also permit a
+real bump commit and tag from an arbitrary detached commit. `release-start.js`
+keeps detached HEAD limited to the clean-base check, rolls back its temporary
+branch on failure, and runs the real bump only after the final release branch
+has been selected.
 
 PowerShell-safe lefthook diagnostics:
 
