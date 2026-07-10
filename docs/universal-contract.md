@@ -63,6 +63,23 @@ install/update/force runs still preserve those files byte-for-byte. Use
 `apply-ruleset.js --check` or `doctor.js --server` for a read-only live drift
 check before deciding whether to apply policy.
 
+Branch conventions are configured independently from the provider adapter:
+
+```json
+{
+  "branchLifecycle": {
+    "managedPrefixes": ["feat/", "fix/", "task/", "story/"],
+    "protectedBranches": ["main", "master"],
+    "retainedPrefixes": ["release/", "hotfix/"]
+  }
+}
+```
+
+Cleanup considers only managed prefixes, always protects the configured base
+branch in addition to `protectedBranches`, and reserves retained prefixes for
+post-publication cleanup. This keeps naming project-specific without making
+deletion less exact.
+
 Branch lifecycle is a core harness rule with provider-specific evidence. Every
 project uses Git ancestry, patch-equivalence classification, exact OID leases,
 and the remote-aware terminal topology audit. The GitHub adapter additionally
@@ -112,8 +129,13 @@ Release version scope and artifact evidence are also project-owned:
 An explicit manifest list prevents unrelated independently versioned packages
 from being bumped or compared to the current tag. Artifact commands receive the
 tag, version, id, and repository-confined artifact path through `HARNESS_*`
-environment variables. `workflowOwned: true` delegates this evidence to a
-project workflow; it is not a generic source-ZIP assumption.
+environment variables. `workflowOwned: true` delegates build and smoke execution
+to a project workflow; it is not a generic source-ZIP assumption. During
+`--phase all`, the workflow must publish a schema-version-1
+`release-evidence.json` beside the downloaded asset and checksum. Each evidence
+entry carries the artifact id, exact version, asset/checksum paths, HTTPS
+workflow and Release URLs, and `smokePassed: true`; the helper recomputes
+SHA-256 and fails when evidence is absent or inconsistent.
 
 ## State Model
 

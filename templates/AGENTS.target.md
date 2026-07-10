@@ -65,6 +65,9 @@ patch-equivalent development branch with an exact OID lease. On another Git
 provider, the coordinator runs `post-merge-cleanup.js` explicitly after
 equivalent provider evidence. The terminal topology audit remains mandatory and
 rejects leftover local or remote branches.
+Project branch conventions live in `harness.config.json -> branchLifecycle`;
+configure managed, protected, and retained prefixes there rather than changing
+the cleanup gates.
 
 ## Release
 
@@ -74,8 +77,10 @@ on a release branch, merge the release PR, verify the tag is the exact release
 tip with `release-preflight.js --require-release-tip`, then publish and smoke-test
 the artifacts declared by this project. Use `release.versioning.manifests` to
 scope independent-version monorepos and `release-artifacts.js` for configured
-build/smoke/version evidence. A harness source ZIP is not a universal artifact
-contract.
+build/smoke/version evidence. Workflow-owned artifacts require downloaded
+schema-version-1 `release-evidence.json` during `--phase all`; the helper checks
+the exact tag/version and recomputes the published asset SHA-256. A harness
+source ZIP is not a universal artifact contract.
 
 Never force-push, delete unmerged work, bypass hooks, weaken verification policy,
 edit `.harness/installation.json` by hand, or overwrite dirty worktrees without
