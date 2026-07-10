@@ -1190,15 +1190,33 @@ try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcri
 // ---------- installer (install.js) ----------
 console.log("\ninstaller:");
 const INSTALL = path.join(REPO, "install.js");
-function installJson(target, extra) {
+function installArgs(args, cwd = REPO) {
   try {
-    const s = execFileSync("node", [INSTALL, "--target", target, "--json", ...extra], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const s = execFileSync("node", [INSTALL, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     return JSON.parse(s);
   } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
+}
+function installJson(target, extra) {
+  return installArgs(["--target", target, "--json", ...extra]);
 }
 const itmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-"));
 execFileSync("git", ["init", "-q"], { cwd: itmp });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/example-target.git"], { cwd: itmp });
+const positionalPlan = installArgs([itmp, "--force", "--dry-run", "--json"]);
+ok(positionalPlan.ok === true && positionalPlan.mode === "install" && positionalPlan.target === path.resolve(itmp),
+  "install: positional target is accepted instead of silently falling back to cwd");
+const invalidArgsTarget = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-invalid-"));
+const unknownArg = installArgs([invalidArgsTarget, "--unknown-option", "--json"]);
+ok(unknownArg.ok === false && unknownArg.mode === "invalid" && /unknown option/.test(unknownArg.reason || "") &&
+   fs.readdirSync(invalidArgsTarget).length === 0,
+"install: unknown options fail before writing to the target");
+const duplicateTarget = installArgs([invalidArgsTarget, "--target", invalidArgsTarget, "--json"]);
+ok(duplicateTarget.ok === false && duplicateTarget.mode === "invalid" && /either positionally or with --target/.test(duplicateTarget.reason || "") &&
+   fs.readdirSync(invalidArgsTarget).length === 0,
+"install: positional and --target destinations cannot be combined");
+const missingTargetValue = installArgs(["--target", "--json"]);
+ok(missingTargetValue.ok === false && /--target requires a directory/.test(missingTargetValue.reason || ""),
+"install: missing --target value fails explicitly");
 // dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "installer assertion 1");
@@ -1289,7 +1307,7 @@ const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
 ok(Array.isArray(ng.notes) && ng.notes.some((n) => /not a git repository/.test(n)), "non-git target -> note about git init");
 ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "installer assertion 16");
-try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
+try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); fs.rmSync(invalidArgsTarget, { recursive: true, force: true }); } catch {}
 
 // ---------- hygiene: NUL bytes ----------
 console.log("\nsource hygiene:");

@@ -15,8 +15,9 @@
 // Double-click wrappers: install.cmd (Windows) / install.sh (POSIX).
 //
 // Usage:
-//   node install.js [--target <dir>] [--force] [--dry-run] [--with-ci]
-//                   [--with-ruleset] [--json]
+//   node install.js [<dir> | --target <dir>] [--force] [--dry-run]
+//                   [--with-ci] [--with-ruleset] [--json]
+//     <dir>           positional install destination (optional)
 //     --target        install destination (default: current directory)
 //     --force         overwrite existing harness files
 //     --dry-run       show the plan without writing
@@ -53,17 +54,36 @@ const CI_FILES = [".github/dependabot.yml"];
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { target: process.cwd(), force: false, dryRun: false, withCi: false, withRuleset: false, codeOwner: "", json: false };
+  const a = {
+    target: process.cwd(), force: false, dryRun: false, withCi: false,
+    withRuleset: false, codeOwner: "", json: false, errors: [],
+  };
+  let positionalTarget = "";
+  let explicitTarget = "";
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--target") a.target = argv[++i];
-    else if (argv[i] === "--force") a.force = true;
-    else if (argv[i] === "--dry-run") a.dryRun = true;
-    else if (argv[i] === "--with-ci") a.withCi = true;
-    else if (argv[i] === "--with-ruleset") a.withRuleset = true;
-    else if (argv[i] === "--code-owner") a.codeOwner = argv[++i] || "";
-    else if (argv[i] === "--json") a.json = true;
+    const arg = argv[i];
+    if (arg === "--target") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--target requires a directory");
+      else if (explicitTarget) { a.errors.push("--target may only be provided once"); i++; }
+      else explicitTarget = argv[++i];
+    }
+    else if (arg === "--force") a.force = true;
+    else if (arg === "--dry-run") a.dryRun = true;
+    else if (arg === "--with-ci") a.withCi = true;
+    else if (arg === "--with-ruleset") a.withRuleset = true;
+    else if (arg === "--code-owner") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--code-owner requires an owner");
+      else a.codeOwner = argv[++i];
+    }
+    else if (arg === "--json") a.json = true;
+    else if (arg.startsWith("-")) a.errors.push(`unknown option: ${arg}`);
+    else if (positionalTarget) a.errors.push(`unexpected positional argument: ${arg}`);
+    else positionalTarget = arg;
   }
-  a.target = path.resolve(a.target);
+  if (positionalTarget && explicitTarget) {
+    a.errors.push("target must be provided either positionally or with --target, not both");
+  }
+  a.target = path.resolve(explicitTarget || positionalTarget || a.target);
   return a;
 }
 
@@ -252,7 +272,12 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, codeowners: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, codeowners: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [], argumentErrors: a.errors };
+
+  if (a.errors.length) {
+    out.mode = "invalid";
+    return finish(out, false, `invalid arguments: ${a.errors.join("; ")}`);
+  }
 
   // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }

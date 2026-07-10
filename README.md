@@ -75,6 +75,7 @@ valid for compatibility.
 ## Install
 
 ```bash
+node install.js ../my-project
 node install.js --target ../my-project
 node install.js
 node install.js --dry-run
