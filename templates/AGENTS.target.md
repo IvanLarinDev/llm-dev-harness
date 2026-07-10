@@ -55,8 +55,10 @@ Run a release only on explicit user request and only when the configured release
 capability is enabled. Derive SemVer from Conventional Commits, prepare the tag
 on a release branch, merge the release PR, verify the tag is the exact release
 tip with `release-preflight.js --require-release-tip`, then publish and smoke-test
-the artifacts declared by this project. A harness source ZIP is not a universal
-artifact contract.
+the artifacts declared by this project. Use `release.versioning.manifests` to
+scope independent-version monorepos and `release-artifacts.js` for configured
+build/smoke/version evidence. A harness source ZIP is not a universal artifact
+contract.
 
 Never force-push, delete unmerged work, bypass hooks, weaken verification policy,
 edit `.harness/installation.json` by hand, or overwrite dirty worktrees without

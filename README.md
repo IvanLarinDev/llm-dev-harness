@@ -30,6 +30,7 @@ README covers the stack and installation.
 | Release branch start | local harness | [hooks/release-start.js](./hooks/release-start.js) |
 | Release manifest bump | local harness | [hooks/release-manifest-bump.js](./hooks/release-manifest-bump.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
+| Artifact build/smoke/version contract | local harness | [hooks/release-artifacts.js](./hooks/release-artifacts.js) |
 | Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
 | Repository topology audit | local harness | [hooks/repo-state-audit.js](./hooks/repo-state-audit.js) |
@@ -114,6 +115,8 @@ seeds `AGENTS.md`, `harness.config.json`, release config, secret policy, and
 runs preserve them byte-for-byte.
 For non-GitHub and local origins, auto mode writes no `.github/`, `cog.toml`, or
 `CHANGELOG.md`; select an adapter explicitly when the project needs one.
+Legacy project config is also preserved; JSON output lists schema/UI/release/server
+reviews under `migrationRequired` so migration can happen in a separate PR.
 
 Without `--code-owner`, a new install writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the
@@ -150,6 +153,7 @@ node hooks/release-start.js --base origin/main
 node hooks/release-manifest-bump.js --tag vX.Y.Z --dry-run
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
+node hooks/release-artifacts.js --tag vX.Y.Z --phase all
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/release-cleanup.js --base origin/main
 node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --strict
@@ -211,6 +215,15 @@ This repository is source-only, so its release artifact is
 `llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories
 do not receive this source-specific workflow; they must define artifacts and
 version checks appropriate to their own runtime.
+
+Projects declare release scope in `release.versioning.manifests`; when omitted,
+known manifests are auto-detected for backward compatibility. Independent-version
+monorepos should always list only the package(s) released by this tag. Runnable
+`release.artifacts` entries declare an exact repository-relative path plus
+`build`, `smoke`, and `versionCommand`; commands receive
+`HARNESS_RELEASE_TAG`, `HARNESS_RELEASE_VERSION`, and `HARNESS_ARTIFACT_PATH`.
+Use `workflowOwned: true` only when the project workflow performs and proves the
+same checks.
 
 Do not add `HEAD` to Cocogitto's `branch_whitelist`. That would also permit a
 real bump commit and tag from an arbitrary detached commit. `release-start.js`

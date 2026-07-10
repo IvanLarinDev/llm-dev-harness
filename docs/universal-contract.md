@@ -19,6 +19,10 @@ hatch for reviewed local runtime changes; it still cannot replace project-owned
 files. `--force` is retained only as a compatibility alias for
 `--update --replace-managed`.
 
+Legacy project configuration is never silently upgraded. Installer JSON reports
+`migrationRequired` entries for schema, UI routing, release contracts, and server
+policy that need review; the project applies those changes in its own PR.
+
 ## Capability Schema
 
 `harness.config.json` schema version 2 declares adapters independently:
@@ -57,6 +61,33 @@ Profile flags are explicit structured edits to project config/policy. Ordinary
 install/update/force runs still preserve those files byte-for-byte. Use
 `apply-ruleset.js --check` or `doctor.js --server` for a read-only live drift
 check before deciding whether to apply policy.
+
+Release version scope and artifact evidence are also project-owned:
+
+```json
+{
+  "release": {
+    "versioning": {
+      "manifests": ["src/App/App.csproj"],
+      "exclude": ["examples/**"],
+      "allowMissing": false
+    },
+    "artifacts": [{
+      "id": "app",
+      "path": "dist/app-{version}.zip",
+      "build": "npm run package",
+      "smoke": "node scripts/smoke-release.js",
+      "versionCommand": "node scripts/read-release-version.js"
+    }]
+  }
+}
+```
+
+An explicit manifest list prevents unrelated independently versioned packages
+from being bumped or compared to the current tag. Artifact commands receive the
+tag, version, id, and repository-confined artifact path through `HARNESS_*`
+environment variables. `workflowOwned: true` delegates this evidence to a
+project workflow; it is not a generic source-ZIP assumption.
 
 ## State Model
 
