@@ -84,4 +84,27 @@ function listRemoteBranches(root, remote, baseBranch) {
   return { ok: true, branches, error: "" };
 }
 
-module.exports = { classifyRef, gitResult, lines, listRemoteBranches, runGit };
+function listOrphanedRemoteRefs(root) {
+  const configured = gitResult(root, ["remote"]);
+  const refs = gitResult(root, [
+    "for-each-ref",
+    "--format=%(refname)%09%(objectname)",
+    "refs/remotes",
+  ]);
+  if (!configured.ok || !refs.ok) {
+    return { ok: false, refs: [], error: configured.ok ? refs.error : configured.error };
+  }
+  const remotes = lines(configured.out).sort((a, b) => b.length - a.length);
+  const prefix = "refs/remotes/";
+  const orphaned = [];
+  for (const line of lines(refs.out)) {
+    const [ref, oid] = line.split("\t");
+    if (!ref || !ref.startsWith(prefix)) continue;
+    const relative = ref.slice(prefix.length);
+    const owner = remotes.find((remote) => relative.startsWith(`${remote}/`));
+    if (!owner) orphaned.push({ ref, oid, relative });
+  }
+  return { ok: true, refs: orphaned, error: "" };
+}
+
+module.exports = { classifyRef, gitResult, lines, listOrphanedRemoteRefs, listRemoteBranches, runGit };

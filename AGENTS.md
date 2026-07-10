@@ -162,7 +162,8 @@ Completion requires every actual checkout branch/HEAD plus local and fetched
 remote `main` SHAs to match, clean expected worktrees, and no leftover local
 or remote branches or linked worktrees. Remote-only branches are classified as
 merged, patch-equivalent, or unique and all block strict completion until the
-lifecycle is resolved. A mismatch means the pipeline is still active or
+lifecycle is resolved. Remote-tracking refs whose remote is no longer configured
+also block completion as orphaned state. A mismatch means the pipeline is still active or
 incomplete; synchronize and clean it explicitly, then rerun the audit. Do not
 make the audit delete or reset work automatically.
 

@@ -194,8 +194,9 @@ For automation that keeps separate development and accepted-main checkouts, run
 requires each checkout's actual branch and HEAD to equal its local and fetched
 remote `main`, all expected worktrees to be clean, and no extra local branches
 or linked worktrees to remain. It also rejects remote-only merged,
-patch-equivalent, and unique branches. The audit is read-only except for the
-requested fetch; cleanup and synchronization stay explicit coordinator actions.
+patch-equivalent, and unique branches, plus stale remote-tracking refs whose
+remote is no longer configured. The audit is read-only except for the requested
+fetch; cleanup and synchronization stay explicit coordinator actions.
 
 ## Full release
 
