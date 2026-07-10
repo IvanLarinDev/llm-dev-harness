@@ -27,8 +27,11 @@ README covers the stack and installation.
 | Server enforcement | GitHub ruleset | [.github/rulesets/main.json](./.github/rulesets/main.json) |
 | Multi-stack VERIFY | local harness | [hooks/verify.js](./hooks/verify.js) |
 | GUI DESIGN gate | local harness | [hooks/design-gate.js](./hooks/design-gate.js) |
+| Release manifest bump | local harness | [hooks/release-manifest-bump.js](./hooks/release-manifest-bump.js) |
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
+| Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
+| Repository topology audit | local harness | [hooks/repo-state-audit.js](./hooks/repo-state-audit.js) |
 | Source ZIP release | GitHub Actions | [.github/workflows/release.yml](./.github/workflows/release.yml) |
 | Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
 | Agent config security audit | ecc-agentshield | [.github/workflows/ci.yml](./.github/workflows/ci.yml) |
@@ -68,12 +71,17 @@ user-visible slice.
 
 Every non-backend set contains a `DESIGN.json` manifest, four mode-appropriate
 variants, and `NOTES.md`. Create `design/mockups/<feature>/APPROVED` only after
-the user selects a direction. Legacy approved sets without `DESIGN.json` remain
-valid for compatibility.
+the user selects a direction, and include `ui: <changed-ui-path-or-glob>` so the
+approval is bound to the current UI diff. Legacy approved sets without
+`DESIGN.json` remain valid only when `APPROVED` carries that scope. For explicit
+user-approved skips, create `design/mockups/<feature>/WAIVER.json` with
+`schemaVersion`, `feature`, `uiPaths`, `reason`, `date`, and `approvedBy` or
+`approvalSource`.
 
 ## Install
 
 ```bash
+node install.js ../my-project
 node install.js --target ../my-project
 node install.js
 node install.js --dry-run
@@ -117,12 +125,35 @@ node hooks/test.js --repeat 3
 node hooks/verify.js [--list]
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
+node hooks/release-manifest-bump.js --tag vX.Y.Z --dry-run
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
+node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/release-cleanup.js --base origin/main
+node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --strict
 node hooks/doctor.js
 node hooks/apply-ruleset.js --dry-run
 ```
+
+## Branch lifecycle
+
+Development branches and releases have separate lifecycles. Merge short-lived
+feature/fix/docs/chore branches through verified PRs into `main`; after the PR
+is server-confirmed `MERGED` and the resulting `main` CI succeeds, run
+`post-merge-cleanup.js` in dry-run mode and then with `--apply`. The helper
+deletes only merged local/remote refs and clean linked worktrees.
+
+`main` may accumulate verified but unreleased changes for as long as needed.
+The eventual SemVer bump is derived from Conventional Commits since the latest
+tag. Keep incomplete behavior behind feature flags so `main` remains releasable.
+Dirty, diverged, and unmerged branches are preserved. Release/hotfix branches
+are retained until publication and artifact smoke testing complete.
+
+For automation that keeps separate development and accepted-main checkouts, run
+`repo-state-audit.js --strict` as the terminal gate. It requires both local
+`main` refs to point to the same commit, all expected worktrees to be clean, and
+no extra local branches or linked worktrees to remain. The audit is read-only;
+cleanup and synchronization stay explicit coordinator actions.
 
 ## Full release
 
@@ -143,7 +174,8 @@ The safe sequence is intentionally two-PR:
 5. Push the tag. The source release workflow verifies the exact tag, builds a
    source ZIP and SHA-256, smoke-tests the ZIP, and publishes the GitHub Release.
 6. Download the published assets, compare the checksum, repeat the smoke check,
-   then run `release-cleanup.js --apply` from a separate clean base worktree.
+   then run `release-cleanup.js --apply` from a separate clean base worktree as
+   a final audit for merged branches missed by post-merge cleanup.
 
 This repository is source-only, so its release artifact is
 `llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories

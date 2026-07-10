@@ -188,10 +188,11 @@ if (!inRepo) {
 
   // lefthook wired into .git/hooks? (lefthook install writes a stub referencing lefthook)
   const hooksDir = gitSafe(["rev-parse", "--git-path", "hooks"]) || ".git/hooks";
+  const hooksDirAbs = path.isAbsolute(hooksDir) ? hooksDir : path.join(ROOT, hooksDir);
   let wired = false;
   for (const h of ["pre-commit", "commit-msg", "pre-push"]) {
     try {
-      if (/lefthook/i.test(fs.readFileSync(path.join(ROOT, hooksDir, h), "utf8"))) { wired = true; break; }
+      if (/lefthook/i.test(fs.readFileSync(path.join(hooksDirAbs, h), "utf8"))) { wired = true; break; }
     } catch {}
   }
   wired ? ok("lefthook wired into .git/hooks") : warn("hooks are not installed; run: lefthook install");
@@ -234,8 +235,11 @@ const requiredHarnessFiles = [
   "hooks/verify.js",
   "hooks/verify-core.js",
   "hooks/design-gate.js",
+  "hooks/release-manifest-bump.js",
   "hooks/release-preflight.js",
+  "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
+  "hooks/repo-state-audit.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/apply-ruleset.js",
@@ -290,9 +294,11 @@ for (const f of textCritical) checkTextFile(f);
 
 // harness.config.json valid JSON
 const cfgPath = path.join(ROOT, "harness.config.json");
+let harnessConfig = {};
 if (fs.existsSync(cfgPath)) {
   try {
     const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+    harnessConfig = cfg;
     ok("harness.config.json is valid JSON");
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
@@ -375,7 +381,11 @@ if (fs.existsSync(path.join(ROOT, rulesetPath))) {
   checkRulesetPrReview(rulesetPath);
 }
 if (fs.existsSync(path.join(ROOT, releaseWorkflowPath))) {
-  checkReleaseWorkflowContract(releaseWorkflowPath);
+  if (harnessConfig.release && harnessConfig.release.sourceZip === true) {
+    checkReleaseWorkflowContract(releaseWorkflowPath);
+  } else {
+    ok("release workflow uses a target-specific artifact contract");
+  }
   checkWorkflowSupplyChain(releaseWorkflowPath);
 }
 

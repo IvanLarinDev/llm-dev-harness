@@ -63,8 +63,11 @@ const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
+const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
+const POST_MERGE_CLEANUP = path.join(__dirname, "post-merge-cleanup.js");
 const RELEASE_CLEANUP = path.join(__dirname, "release-cleanup.js");
+const REPO_STATE_AUDIT = path.join(__dirname, "repo-state-audit.js");
 const BRANCH_GUARD = path.join(__dirname, "branch-guard.js");
 const NO_COAUTHOR = path.join(__dirname, "no-coauthor.js");
 const REPO = path.join(__dirname, "..");
@@ -547,7 +550,7 @@ ok(loginManifest.kind === "new-ui" && loginManifest.variants.length === 4 && new
   "new-ui scaffold declares four stylistic variants");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/01-minimal-light.html"]) === 1,
   "design gate assertion 5");
-fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(fdir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]) === 0,
   "design gate assertion 6");
 ok(gateResult(dtmp, ["src/ui/main_window.ui", "design/mockups/login/APPROVED"]).mockups.kind === "new-ui",
@@ -573,10 +576,10 @@ ok(existingManifest.kind === "existing-ui" && existingManifest.baselineReference
    existingManifest.variants.every((variant) => /(?:inline|toolbar|side-panel|contextual)/.test(variant.file)) && existingRoots.size === 1,
 "existing-ui scaffold keeps one baseline and compares layouts");
 fs.writeFileSync(path.join(existingDir, "APPROVED"), "approved: test\n");
-ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 0,
+ok(gate(dtmp, ["src/ui/current-panel.ui", "design/mockups/existing-panel/APPROVED"]) === 0,
   "design gate accepts approved existing-ui layout evidence");
 fs.rmSync(baselinePath);
-ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/existing-panel/APPROVED"]) === 1,
+ok(gate(dtmp, ["src/ui/current-panel.ui", "design/mockups/existing-panel/APPROVED"]) === 1,
   "design gate rejects existing-ui evidence with a missing baseline");
 fs.writeFileSync(baselinePath, "<ui/>\n");
 
@@ -588,7 +591,7 @@ ok(motionTextManifest.kind === "animation" && motionTextManifest.fidelity === "t
    motionTextManifest.example === "Tile A moves before Tile B" && motionTextManifest.variants.every((variant) =>
      variant.file.endsWith(".md") && fs.readFileSync(path.join(motionTextDir, variant.file), "utf8").includes("Concrete example: Tile A moves before Tile B")),
 "animation/text uses four written variants instead of visual themes");
-fs.writeFileSync(path.join(motionTextDir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(motionTextDir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-text/APPROVED"]) === 0,
   "design gate accepts approved written motion evidence");
 
@@ -600,7 +603,7 @@ ok(motionJsManifest.variants.every((variant) => {
   const source = fs.readFileSync(path.join(motionJsDir, variant.file), "utf8");
   return /<script/.test(source) && /\.animate\s*\(/.test(source);
 }), "animation/js creates executable JavaScript motion variants");
-fs.writeFileSync(path.join(motionJsDir, "APPROVED"), "approved: test\n");
+fs.writeFileSync(path.join(motionJsDir, "APPROVED"), "approved: test\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/reorder-motion-js/APPROVED"]) === 0,
   "design gate accepts approved JavaScript motion evidence");
 fs.writeFileSync(path.join(motionJsDir, motionJsManifest.variants[0].file), "<!doctype html>\n");
@@ -620,9 +623,26 @@ ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1,
 const legacyDir = path.join(dtmp, "design", "mockups", "legacy-set");
 fs.mkdirSync(legacyDir, { recursive: true });
 for (let i = 1; i <= 4; i++) fs.writeFileSync(path.join(legacyDir, `${i}.html`), "<!doctype html>\n");
-fs.writeFileSync(path.join(legacyDir, "APPROVED"), "approved: legacy\n");
+fs.writeFileSync(path.join(legacyDir, "APPROVED"), "approved: legacy\nui: src/ui/main_window.ui\n");
 ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/legacy-set/APPROVED"]) === 0,
-  "design gate preserves compatibility with approved legacy sets without DESIGN.json");
+  "design gate preserves compatibility with scoped approved legacy sets without DESIGN.json");
+ok(gate(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/legacy-set/APPROVED"]) === 1,
+  "design gate rejects a touched approval scoped to an unrelated UI path");
+
+const waiverDir = path.join(dtmp, "design", "mockups", "tile-reorder");
+fs.mkdirSync(waiverDir, { recursive: true });
+fs.writeFileSync(path.join(waiverDir, "WAIVER.json"), JSON.stringify({
+  schemaVersion: 1,
+  feature: "tile-reorder",
+  uiPaths: ["src/ui/tile-reorder.ui"],
+  reason: "User approved skipping new mockups for a non-restyling interaction change.",
+  date: "2026-07-09",
+  approvedBy: "user",
+}, null, 2) + "\n");
+ok(gateResult(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/tile-reorder/WAIVER.json"]).mockups.kind === "waiver",
+  "design gate accepts a scoped explicit waiver for a UI-path change");
+ok(gate(dtmp, ["src/ui/other.ui", "design/mockups/tile-reorder/WAIVER.json"]) === 1,
+  "design gate rejects a waiver scoped to an unrelated UI path");
 // Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};
@@ -714,6 +734,8 @@ const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifychg-"));
 fs.mkdirSync(path.join(ctmp, "py")); fs.writeFileSync(path.join(ctmp, "py", "pyproject.toml"), "[project]\n");
 fs.mkdirSync(path.join(ctmp, "js")); fs.writeFileSync(path.join(ctmp, "js", "package.json"), "{}\n");
 fs.mkdirSync(path.join(ctmp, "hooks")); fs.writeFileSync(path.join(ctmp, "hooks", "verify.js"), "console.log('fake verify');\n");
+fs.mkdirSync(path.join(ctmp, ".codex", "canary-worktrees", "run", "src"), { recursive: true });
+fs.writeFileSync(path.join(ctmp, ".codex", "canary-worktrees", "run", "src", "Ignored.csproj"), "<Project/>");
 const syntaxTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verifysyntax-"));
 fs.mkdirSync(path.join(syntaxTmp, "hooks"));
 fs.writeFileSync(path.join(syntaxTmp, "hooks", "verify.js"), "function {\n");
@@ -731,6 +753,8 @@ const allIds = verifyListArgs(ctmp, []).plan.map((p) => p.stack).sort().join(","
 const fbIds = verifyListArgs(ctmp, ["--changed", "--base", "no-such-ref"]).plan.map((p) => p.stack).sort().join(",");
 ok(allIds === "harness-syntax,node,python" && fbIds === "harness-syntax,node,python",
   "verify runner assertion 10");
+ok(!verifyListArgs(ctmp, []).plan.some((p) => String(p.dir || "").includes(".codex")),
+  "verify ignores .codex automation worktrees");
 chg = verifyListArgs(ctmp, ["--changed", "--files", "hooks/verify.js"]);
 ok(chg.plan.some((p) => p.stack === "harness-syntax"),
   "verify runner assertion 11");
@@ -833,6 +857,26 @@ dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
   "doctor assertion 1");
 try { fs.rmSync(drepo, { recursive: true, force: true }); } catch {}
+
+const linkedRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-linked-main-"));
+const linkedWorktree = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-linked-wt-"));
+fs.rmSync(linkedWorktree, { recursive: true, force: true });
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: linkedRepo });
+execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: linkedRepo });
+execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: linkedRepo });
+execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: linkedRepo });
+fs.writeFileSync(path.join(linkedRepo, "README.md"), "base\n");
+execFileSync("git", ["add", "."], { cwd: linkedRepo });
+execFileSync("git", ["commit", "-q", "-m", "chore: base"], { cwd: linkedRepo });
+for (const h of ["pre-commit", "commit-msg", "pre-push"])
+  fs.writeFileSync(path.join(linkedRepo, ".git", "hooks", h), "# lefthook\n");
+execFileSync("git", ["worktree", "add", "-q", "-b", "feature/linked", linkedWorktree], { cwd: linkedRepo });
+dres = doctor(linkedWorktree);
+ok((dres.results || []).some((r) => /lefthook wired into \.git\/hooks/.test(r.msg) && r.level === "PASS"),
+  "doctor: linked worktree absolute hooks path -> PASS");
+try { execFileSync("git", ["worktree", "remove", "--force", linkedWorktree], { cwd: linkedRepo, stdio: "ignore" }); } catch {}
+try { fs.rmSync(linkedRepo, { recursive: true, force: true }); fs.rmSync(linkedWorktree, { recursive: true, force: true }); } catch {}
+
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/IvanLarinDev/llm-dev-harness.git"], { cwd: bootRepo });
@@ -872,6 +916,23 @@ fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 7");
+const targetReleaseWorkflow = path.join(bootRepo, ".github", "workflows", "release.yml");
+fs.writeFileSync(targetReleaseWorkflow,
+  "name: release\non:\n  push:\n    tags: ['v*']\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0\n      - run: echo target package\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /target-specific artifact contract/.test(r.msg) && r.level === "PASS") &&
+   !(dres.results || []).some((r) => /release workflow is missing required step/.test(r.msg)),
+  "doctor accepts a pinned target-specific release workflow without source ZIP steps");
+{
+  const configPath = path.join(bootRepo, "harness.config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.release = { sourceZip: true };
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+}
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /release workflow is missing required step/.test(r.msg) && r.level === "FAIL"),
+  "doctor enforces the source ZIP release contract only when configured");
+fs.rmSync(targetReleaseWorkflow, { force: true });
 fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
 {
   const rulesetPath = path.join(bootRepo, ".github", "rulesets", "main.json");
@@ -934,19 +995,36 @@ console.log("\nrelease-preflight:");
 function relGit(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
-function releaseJson(root, tag, extra = []) {
+function releaseJson(root, tag, extra = [], env = {}) {
   try {
     const s = execFileSync("node", [RELEASE_PREFLIGHT, "--root", root, "--tag", tag, "--json", ...extra],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
     return JSON.parse(s);
   } catch (e) {
     try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [] }; }
+  }
+}
+function releaseBumpJson(root, tag, extra = []) {
+  try {
+    const s = execFileSync("node", [RELEASE_MANIFEST_BUMP, "--root", root, "--tag", tag, "--json", ...extra],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(s);
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, results: [], manifests: [] }; }
   }
 }
 function writeReleaseProject(root, version) {
   fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
   fs.writeFileSync(path.join(root, "src", "App", "App.csproj"), `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>\n`);
   fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${version}\n\n- release\n`);
+}
+function writeReleaseProjectWithPrefixSuffix(root, versionPrefix, versionSuffix) {
+  fs.mkdirSync(path.join(root, "src", "App"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "src", "App", "App.csproj"),
+    `<Project><PropertyGroup><VersionPrefix>${versionPrefix}</VersionPrefix><VersionSuffix>${versionSuffix}</VersionSuffix></PropertyGroup></Project>\n`
+  );
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## v${versionPrefix}-${versionSuffix}\n\n- release\n`);
 }
 function releaseRepo(version, tag = "v0.10.1") {
   const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-origin-"));
@@ -967,11 +1045,40 @@ function releaseRepo(version, tag = "v0.10.1") {
   relGit(work, ["tag", "-a", tag, "-m", tag]);
   return { origin, work, base };
 }
+
 let relCase = releaseRepo("0.10.1");
 let rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
   "release-preflight: clean release with csproj version matching tag -> PASS");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = releaseRepo("1.2.3", "v1.2.3-rc.1");
+writeReleaseProjectWithPrefixSuffix(relCase.work, "1.2.3", "rc.1");
+relGit(relCase.work, ["add", "."]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(version): v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-d", "v1.2.3-rc.1"]);
+relGit(relCase.work, ["tag", "-a", "v1.2.3-rc.1", "-m", "v1.2.3-rc.1"]);
+rpre = releaseJson(relCase.work, "v1.2.3-rc.1");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release-preflight: prerelease tag matches csproj VersionPrefix + VersionSuffix -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+relCase = releaseRepo("0.10.2", "v0.10.2");
+let rbump = releaseBumpJson(relCase.work, "v0.11.0");
+let releaseCsproj = fs.readFileSync(path.join(relCase.work, "src", "App", "App.csproj"), "utf8");
+ok(rbump.ok === true && rbump.manifests.some((m) => m.rel === "src/App/App.csproj" && m.from === "0.10.2" && m.to === "0.11.0" && m.changed) &&
+   /<Version>0\.11\.0<\/Version>/.test(releaseCsproj),
+  "release-manifest-bump: updates a stale C# project version before tagging");
+relGit(relCase.work, ["add", "src/App/App.csproj"]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(release): prepare v0.11.0"]);
+fs.writeFileSync(path.join(relCase.work, "CHANGELOG.md"), "# Changelog\n\n## v0.11.0\n\n- release\n");
+relGit(relCase.work, ["add", "CHANGELOG.md"]);
+relGit(relCase.work, ["commit", "-q", "-m", "chore(release): v0.11.0"]);
+relGit(relCase.work, ["tag", "-a", "v0.11.0", "-m", "v0.11.0"]);
+rpre = releaseJson(relCase.work, "v0.11.0");
+ok(rpre.ok === true && (rpre.results || []).some((r) => /project version manifests match/.test(r.msg)),
+  "release flow fixture: manifest bump plus changelog tag passes preflight");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
 relCase = releaseRepo("0.10.0");
 rpre = releaseJson(relCase.work, "v0.10.1");
 ok(rpre.ok === false && (rpre.results || []).some((r) => /project version\(s\) do not match/.test(r.msg) && r.mismatches && /App\.csproj/.test(JSON.stringify(r.mismatches))),
@@ -991,6 +1098,32 @@ ok(rpre.ok === false && (rpre.results || []).some((r) => /remote tag already exi
 rpre = releaseJson(relCase.work, "v0.10.1", ["--allow-remote-tag"]);
 ok(rpre.ok === true && (rpre.results || []).some((r) => /remote tag already exists but allowed/.test(r.msg)),
   "release-preflight: tag workflow may allow the already-pushed remote tag");
+const slowGitDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-slow-git-"));
+const realGit = execFileSync(process.platform === "win32" ? "where.exe" : "which", ["git"],
+  { encoding: "utf8" }).split(/\r?\n/).find(Boolean);
+const slowGitShim = path.join(slowGitDir, "slow-git-shim.js");
+fs.writeFileSync(slowGitShim, [
+  "#!/usr/bin/env node",
+  "const { spawnSync } = require('child_process');",
+  "if ((process.argv[2] || '').toLowerCase() === 'ls-remote') {",
+  "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 11000);",
+  "}",
+  "const result = spawnSync(process.env.HARNESS_REAL_GIT || 'git', process.argv.slice(2), { stdio: 'inherit' });",
+  "if (result.error) { console.error(result.error.message); process.exit(1); }",
+  "process.exit(result.status ?? 1);",
+  "",
+].join("\n"));
+fs.writeFileSync(path.join(slowGitDir, "git.cmd"), "@echo off\r\nnode \"%~dp0slow-git-shim.js\" %*\r\n");
+fs.writeFileSync(path.join(slowGitDir, "git"), "#!/usr/bin/env sh\nexec node \"$(dirname \"$0\")/slow-git-shim.js\" \"$@\"\n");
+fs.chmodSync(slowGitShim, 0o755);
+fs.chmodSync(path.join(slowGitDir, "git"), 0o755);
+rpre = releaseJson(relCase.work, "v0.10.1", ["--allow-remote-tag"], {
+  PATH: slowGitDir + path.delimiter + process.env.PATH,
+  HARNESS_REAL_GIT: realGit,
+});
+ok(rpre.ok === true && (rpre.results || []).some((r) => /remote tag already exists but allowed/.test(r.msg)),
+  "release-preflight: slow remote tag check stays within timeout budget");
+fs.rmSync(slowGitDir, { recursive: true, force: true });
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 relCase = releaseRepo("0.10.1");
 relGit(relCase.work, ["tag", "-d", "v0.10.1"]);
@@ -1036,13 +1169,17 @@ fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.ori
 
 // ---------- release cleanup ----------
 console.log("\nrelease cleanup:");
-function cleanupJson(root, extra = []) {
+ok(/--force-with-lease=refs\/heads\/\$\{entry\.branch\}:\$\{entry\.remoteOid\}/.test(readRepo("hooks/release-cleanup.js")),
+"branch cleanup leases remote deletion to the OID that passed ancestry checks");
+ok(/update-ref", "-d", `refs\/heads\/\$\{entry\.branch\}`, entry\.localOid/.test(readRepo("hooks/release-cleanup.js")),
+"branch cleanup atomically deletes the local OID that passed ancestry checks");
+function cleanupJson(root, extra = [], script = RELEASE_CLEANUP) {
   try {
-    const s = execFileSync("node", [RELEASE_CLEANUP, "--root", root, "--base", "origin/main", "--json", ...extra],
+    const s = execFileSync("node", [script, "--root", root, "--base", "origin/main", "--json", ...extra],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(s);
   } catch (e) {
-    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, candidates: [], blocked: [], errors: [] }; }
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, candidates: [], blocked: [], skipped: [], errors: [] }; }
   }
 }
 const cleanupRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-cleanup-"));
@@ -1095,22 +1232,42 @@ relGit(cleanupWork, ["checkout", "-q", "main"]);
 relGit(cleanupWork, ["branch", "-f", "fix/remote-ahead", "main"]);
 relGit(cleanupWork, ["tag", "v0.10.1"]);
 
+let postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.mode === "branch" && postMerge.branch === "feat/done" &&
+   postMerge.candidates.length === 1 && postMerge.candidates[0].branch === "feat/done",
+"post-merge cleanup dry-run scopes deletion to one merged development branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch", "--apply"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.deletedLocal.includes("feat/done") && postMerge.deletedRemote.includes("feat/done"),
+"post-merge cleanup deletes the merged local and remote feature branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/done", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.absent.includes("feat/done"),
+"post-merge cleanup is idempotent after the branch is already absent");
+postMerge = cleanupJson(cleanupWork, ["--branch", "feat/wip", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.blocked.some((entry) => entry.branch === "feat/wip" && /not merged/.test(entry.reasons.join(" "))),
+"post-merge cleanup blocks an unmerged feature branch");
+postMerge = cleanupJson(cleanupWork, ["--branch", "release/v0.10.1", "--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.errors.some((error) => /not eligible/.test(error)),
+"post-merge cleanup reserves release branches for post-smoke cleanup");
+postMerge = cleanupJson(cleanupWork, ["--no-fetch"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === false && postMerge.errors.some((error) => /--branch is required/.test(error)),
+"post-merge cleanup requires an explicit branch");
+
 let cleanup = cleanupJson(cleanupWork, ["--no-fetch"]);
-ok(cleanup.apply === false && cleanup.candidates.some((entry) => entry.branch === "feat/done") &&
-   cleanup.candidates.some((entry) => entry.branch === "release/v0.10.1") &&
+ok(cleanup.apply === false && cleanup.candidates.some((entry) => entry.branch === "release/v0.10.1") &&
    cleanup.blocked.some((entry) => entry.branch === "fix/dirty" && /dirty/.test(entry.reasons.join(" "))) &&
-   cleanup.blocked.some((entry) => entry.branch === "fix/remote-ahead" && /remote branch/.test(entry.reasons.join(" "))),
-"release cleanup dry-run classifies merged clean and dirty branches");
+   cleanup.blocked.some((entry) => entry.branch === "fix/remote-ahead" && /remote branch/.test(entry.reasons.join(" "))) &&
+   cleanup.skipped.some((entry) => entry.branch === "feat/wip" && /not merged/.test(entry.reasons.join(" "))),
+"release cleanup dry-run classifies merged, dirty, diverged, and unmerged branches");
 
 cleanup = cleanupJson(cleanupWork, ["--no-fetch", "--apply"]);
 const localAfterCleanup = relGit(cleanupWork, ["for-each-ref", "--format=%(refname:short)", "refs/heads"])
   .split(/\r?\n/).filter(Boolean);
 const remoteAfterCleanup = relGit(cleanupWork, ["ls-remote", "--heads", "origin"]);
-const cleanupRemovedExpected = cleanup.ok === false && cleanup.deletedLocal.includes("feat/done") && cleanup.deletedLocal.includes("release/v0.10.1") &&
-  cleanup.deletedRemote.includes("feat/done") && cleanup.deletedRemote.includes("release/v0.10.1") &&
+const cleanupRemovedExpected = cleanup.ok === false && cleanup.deletedLocal.includes("release/v0.10.1") &&
+  cleanup.deletedRemote.includes("release/v0.10.1") &&
   cleanup.removedWorktrees.some((item) => path.basename(item).toLowerCase() === path.basename(cleanReleaseWorktree).toLowerCase());
 ok(cleanupRemovedExpected,
-"release cleanup removes merged branches and their clean linked worktrees");
+"release cleanup removes the remaining merged release branch and its clean linked worktree");
 ok(localAfterCleanup.includes("fix/dirty") && localAfterCleanup.includes("feat/wip") && localAfterCleanup.includes("fix/remote-ahead") &&
    /refs\/heads\/fix\/dirty/.test(remoteAfterCleanup) && /refs\/heads\/feat\/wip/.test(remoteAfterCleanup) &&
    /refs\/heads\/fix\/remote-ahead/.test(remoteAfterCleanup) &&
@@ -1118,7 +1275,81 @@ ok(localAfterCleanup.includes("fix/dirty") && localAfterCleanup.includes("feat/w
 "release cleanup preserves dirty, unmerged, and remote-diverged branches");
 ok(relGit(cleanupWork, ["tag", "--list", "v0.10.1"]) === "v0.10.1",
   "release cleanup never deletes release tags");
+
+relGit(cleanupWork, ["checkout", "-q", "-b", "feat/local-accepted", "main"]);
+fs.writeFileSync(path.join(cleanupWork, "local-accepted.txt"), "accepted locally\n");
+relGit(cleanupWork, ["add", "."]);
+relGit(cleanupWork, ["commit", "-q", "-m", "feat: accepted locally"]);
+relGit(cleanupWork, ["push", "-q", "-u", "origin", "feat/local-accepted"]);
+relGit(cleanupWork, ["checkout", "-q", "main"]);
+relGit(cleanupWork, ["merge", "-q", "--no-ff", "feat/local-accepted", "-m", "Merge feat/local-accepted"]);
+postMerge = cleanupJson(cleanupWork, ["--base", "main", "--branch", "feat/local-accepted", "--no-fetch", "--apply"], POST_MERGE_CLEANUP);
+ok(postMerge.ok === true && postMerge.deletedLocal.includes("feat/local-accepted") &&
+   postMerge.deletedRemote.includes("feat/local-accepted"),
+"post-merge cleanup deletes a branch merged into local main when origin/main is stale");
 try { fs.rmSync(cleanupRoot, { recursive: true, force: true }); } catch {}
+
+// ---------- repository topology audit ----------
+console.log("\nrepository topology audit:");
+function topologyJson(root, acceptedRoot) {
+  try {
+    const output = execFileSync("node", [REPO_STATE_AUDIT, "--root", root, "--accepted-root", acceptedRoot,
+      "--base", "main", "--strict", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    return JSON.parse(output);
+  } catch (e) {
+    try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, issues: [] }; }
+  }
+}
+const topologyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-topology-"));
+const topologyDevelopment = path.join(topologyRoot, "development");
+const topologyAccepted = path.join(topologyRoot, "accepted");
+const topologyExtra = path.join(topologyRoot, "extra-worktree");
+fs.mkdirSync(topologyDevelopment, { recursive: true });
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: topologyDevelopment });
+relGit(topologyDevelopment, ["config", "user.name", "Harness Test"]);
+relGit(topologyDevelopment, ["config", "user.email", "harness@example.test"]);
+relGit(topologyDevelopment, ["config", "core.autocrlf", "false"]);
+fs.writeFileSync(path.join(topologyDevelopment, "README.md"), "base\n");
+relGit(topologyDevelopment, ["add", "."]);
+relGit(topologyDevelopment, ["commit", "-q", "-m", "chore: base"]);
+execFileSync("git", ["-c", "core.autocrlf=false", "clone", "-q", topologyDevelopment, topologyAccepted], { cwd: topologyRoot });
+relGit(topologyAccepted, ["config", "user.name", "Harness Test"]);
+relGit(topologyAccepted, ["config", "user.email", "harness@example.test"]);
+relGit(topologyAccepted, ["config", "core.autocrlf", "false"]);
+let topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === true, "topology audit accepts two clean main checkouts at the same SHA");
+
+relGit(topologyDevelopment, ["checkout", "-q", "-b", "feat/unmerged"]);
+fs.writeFileSync(path.join(topologyDevelopment, "feature.txt"), "feature\n");
+relGit(topologyDevelopment, ["add", "."]);
+relGit(topologyDevelopment, ["commit", "-q", "-m", "feat: topology fixture"]);
+relGit(topologyDevelopment, ["checkout", "-q", "main"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "unmerged_branch" && item.branch === "feat/unmerged"),
+  "topology audit rejects hidden unmerged branch commits");
+
+relGit(topologyDevelopment, ["merge", "-q", "--no-ff", "feat/unmerged", "-m", "Merge feat/unmerged"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "merged_branch" && item.branch === "feat/unmerged"),
+  "topology audit rejects merged branches left behind");
+relGit(topologyDevelopment, ["branch", "-d", "feat/unmerged"]);
+relGit(topologyAccepted, ["fetch", "-q", "origin"]);
+relGit(topologyAccepted, ["merge", "-q", "--ff-only", "origin/main"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === true, "topology audit passes after branch cleanup and accepted-main synchronization");
+
+relGit(topologyDevelopment, ["worktree", "add", "-q", "--detach", topologyExtra, "main"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "extra_worktree"),
+  "topology audit rejects an unexpected linked worktree");
+relGit(topologyDevelopment, ["worktree", "remove", topologyExtra]);
+fs.writeFileSync(path.join(topologyAccepted, "accepted-only.txt"), "ahead\n");
+relGit(topologyAccepted, ["add", "."]);
+relGit(topologyAccepted, ["commit", "-q", "-m", "chore: accepted ahead"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "base_mismatch"),
+  "topology audit rejects different development and accepted main SHAs");
+try { fs.rmSync(topologyRoot, { recursive: true, force: true }); } catch {}
 
 // ---------- stop-reminder ----------
 console.log("\nstop-reminder:");
@@ -1167,15 +1398,33 @@ try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcri
 // ---------- installer (install.js) ----------
 console.log("\ninstaller:");
 const INSTALL = path.join(REPO, "install.js");
-function installJson(target, extra) {
+function installArgs(args, cwd = REPO) {
   try {
-    const s = execFileSync("node", [INSTALL, "--target", target, "--json", ...extra], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const s = execFileSync("node", [INSTALL, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     return JSON.parse(s);
   } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
+}
+function installJson(target, extra) {
+  return installArgs(["--target", target, "--json", ...extra]);
 }
 const itmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-"));
 execFileSync("git", ["init", "-q"], { cwd: itmp });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/example-target.git"], { cwd: itmp });
+const positionalPlan = installArgs([itmp, "--force", "--dry-run", "--json"]);
+ok(positionalPlan.ok === true && positionalPlan.mode === "install" && positionalPlan.target === path.resolve(itmp),
+  "install: positional target is accepted instead of silently falling back to cwd");
+const invalidArgsTarget = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-invalid-"));
+const unknownArg = installArgs([invalidArgsTarget, "--unknown-option", "--json"]);
+ok(unknownArg.ok === false && unknownArg.mode === "invalid" && /unknown option/.test(unknownArg.reason || "") &&
+   fs.readdirSync(invalidArgsTarget).length === 0,
+"install: unknown options fail before writing to the target");
+const duplicateTarget = installArgs([invalidArgsTarget, "--target", invalidArgsTarget, "--json"]);
+ok(duplicateTarget.ok === false && duplicateTarget.mode === "invalid" && /either positionally or with --target/.test(duplicateTarget.reason || "") &&
+   fs.readdirSync(invalidArgsTarget).length === 0,
+"install: positional and --target destinations cannot be combined");
+const missingTargetValue = installArgs(["--target", "--json"]);
+ok(missingTargetValue.ok === false && /--target requires a directory/.test(missingTargetValue.reason || ""),
+"install: missing --target value fails explicitly");
 // dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "installer assertion 1");
@@ -1183,7 +1432,14 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(/^# Changelog\s+- - -\s*$/s.test(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8")),
+  "install: missing target changelog is initialized for Cocogitto");
+const productChangelog = "# Changelog\n\n- - -\n\n## v9.9.9\n\n- Product history must survive harness updates.\n";
+fs.writeFileSync(path.join(itmp, "CHANGELOG.md"), productChangelog);
+installJson(itmp, ["--force"]);
+ok(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8") === productChangelog,
+  "install: --force preserves the target project's changelog");
 ok(fs.existsSync(path.join(itmp, ".github", "workflows", "ci.yml")) && fs.existsSync(path.join(itmp, ".github", "CODEOWNERS")),
   "install: CI workflow and CODEOWNERS are copied by default with the ruleset");
 ok(!fs.existsSync(path.join(itmp, ".github", "workflows", "release.yml")),
@@ -1266,7 +1522,7 @@ const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
 ok(Array.isArray(ng.notes) && ng.notes.some((n) => /not a git repository/.test(n)), "non-git target -> note about git init");
 ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "installer assertion 16");
-try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); } catch {}
+try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); fs.rmSync(invalidArgsTarget, { recursive: true, force: true }); } catch {}
 
 // ---------- hygiene: NUL bytes ----------
 console.log("\nsource hygiene:");

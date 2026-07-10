@@ -15,8 +15,9 @@
 // Double-click wrappers: install.cmd (Windows) / install.sh (POSIX).
 //
 // Usage:
-//   node install.js [--target <dir>] [--force] [--dry-run] [--with-ci]
-//                   [--with-ruleset] [--json]
+//   node install.js [<dir> | --target <dir>] [--force] [--dry-run]
+//                   [--with-ci] [--with-ruleset] [--json]
+//     <dir>           positional install destination (optional)
 //     --target        install destination (default: current directory)
 //     --force         overwrite existing harness files
 //     --dry-run       show the plan without writing
@@ -43,27 +44,46 @@ const { DEFAULT_UI_GLOBS, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_
 // release.yml is intentionally not copied: target projects must build and verify
 // artifacts appropriate to their own runtime.
 const FILES = [
-  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-preflight.js", "hooks/release-cleanup.js",
+  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
-  "lefthook.yml", "cog.toml", "CHANGELOG.md", ".gitleaks.toml", "settings.example.json",
+  "lefthook.yml", "cog.toml", ".gitleaks.toml", "settings.example.json",
   ".gitattributes", "AGENTS.md", ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/CODEOWNERS",
 ];
 const CI_FILES = [".github/dependabot.yml"];
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { target: process.cwd(), force: false, dryRun: false, withCi: false, withRuleset: false, codeOwner: "", json: false };
+  const a = {
+    target: process.cwd(), force: false, dryRun: false, withCi: false,
+    withRuleset: false, codeOwner: "", json: false, errors: [],
+  };
+  let positionalTarget = "";
+  let explicitTarget = "";
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--target") a.target = argv[++i];
-    else if (argv[i] === "--force") a.force = true;
-    else if (argv[i] === "--dry-run") a.dryRun = true;
-    else if (argv[i] === "--with-ci") a.withCi = true;
-    else if (argv[i] === "--with-ruleset") a.withRuleset = true;
-    else if (argv[i] === "--code-owner") a.codeOwner = argv[++i] || "";
-    else if (argv[i] === "--json") a.json = true;
+    const arg = argv[i];
+    if (arg === "--target") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--target requires a directory");
+      else if (explicitTarget) { a.errors.push("--target may only be provided once"); i++; }
+      else explicitTarget = argv[++i];
+    }
+    else if (arg === "--force") a.force = true;
+    else if (arg === "--dry-run") a.dryRun = true;
+    else if (arg === "--with-ci") a.withCi = true;
+    else if (arg === "--with-ruleset") a.withRuleset = true;
+    else if (arg === "--code-owner") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--code-owner requires an owner");
+      else a.codeOwner = argv[++i];
+    }
+    else if (arg === "--json") a.json = true;
+    else if (arg.startsWith("-")) a.errors.push(`unknown option: ${arg}`);
+    else if (positionalTarget) a.errors.push(`unexpected positional argument: ${arg}`);
+    else positionalTarget = arg;
   }
-  a.target = path.resolve(a.target);
+  if (positionalTarget && explicitTarget) {
+    a.errors.push("target must be provided either positionally or with --target, not both");
+  }
+  a.target = path.resolve(explicitTarget || positionalTarget || a.target);
   return a;
 }
 
@@ -181,6 +201,17 @@ function writeConfig(force, dryRun) {
   return { action: exists ? "overwrite" : "write" };
 }
 
+// A target changelog belongs to the target project. Seed the Cocogitto
+// separator when absent, but never replace product release history on --force.
+function ensureChangelog(dryRun) {
+  const dst = path.join(a.target, "CHANGELOG.md");
+  try {
+    if (fs.statSync(dst).isFile()) return { action: "already" };
+  } catch {}
+  if (!dryRun) fs.writeFileSync(dst, "# Changelog\n\n- - -\n");
+  return { action: "write" };
+}
+
 // ---------- .gitignore: only the personal runner file ----------
 // Do not ignore harness files (hooks/, lefthook.yml, configs, .github/): they must
 // be committed so lefthook, CI, and the server ruleset have check code on a fresh
@@ -252,7 +283,12 @@ function runRuleset() {
 const a = parseArgs(process.argv.slice(2));
 
 (function main() {
-  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, cog: null, codeowners: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [] };
+  const out = { ok: true, target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null, changelog: null, cog: null, codeowners: null, settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, notes: [], argumentErrors: a.errors };
+
+  if (a.errors.length) {
+    out.mode = "invalid";
+    return finish(out, false, `invalid arguments: ${a.errors.join("; ")}`);
+  }
 
   // The target directory must exist.
   try { if (!fs.statSync(a.target).isDirectory()) throw 0; }
@@ -276,6 +312,7 @@ const a = parseArgs(process.argv.slice(2));
       }
     }
     out.config = writeConfig(a.force, a.dryRun);
+    out.changelog = ensureChangelog(a.dryRun);
     out.codeowners = configureCodeOwnersAndRuleset(a.dryRun);
     if (!a.codeOwner) {
       out.notes.push("CODEOWNERS: no --code-owner was provided, so target ruleset keeps required approving review but disables required code-owner review to avoid maintainer deadlocks.");
@@ -326,6 +363,7 @@ function finish(out, ok, reason) {
     for (const f of out.files) if (f.action !== "skip") console.log(`    ${icon(f.action)} ${f.rel}`);
   }
   if (out.config) console.log(`  harness.config.json: ${out.config.action === "skip" ? "already present" : out.config.action === "write" ? "generated" : "overwritten"}`);
+  if (out.changelog) console.log(`  CHANGELOG.md: ${out.changelog.action === "write" ? "generated" : "preserved"}`);
   if (out.codeowners) console.log(`  CODEOWNERS/ruleset: ${out.codeowners.owner ? "owner " + out.codeowners.owner + " configured" : "template only, code-owner review disabled"}`);
   if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent hook(s) merged` : out.settings.status === "already" ? "agent hooks already present" : "error - " + out.settings.reason}`);
   if (out.gitignore) console.log(`  .gitignore: ${out.gitignore.action === "already" ? "already covers .claude/settings.local.json" : (out.gitignore.action === "created" ? "created" : "appended") + " -> .claude/settings.local.json"}`);

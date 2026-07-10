@@ -8,6 +8,15 @@ build/
 tmp/
 .tmp/
 
+# local lefthook output when core.hooksPath points inside the repo
+hooks/git/
+
+# local automation worktrees
+.codex/auto-fix-worktrees/
+
+# processed Dropwheel automation inbox records
+inbox/dropwheel/_processed/
+
 # agent runtime (Claude Code local/project settings; do not commit)
 .claude/
 

@@ -29,6 +29,9 @@
     "exclude": [],
     "strict": true
   },
+  "release": {
+    "sourceZip": true
+  },
   "_verify_note": "Omit verify.stacks to enable auto-detect (python/dotnet/rust/node). Here we pin the harness's own self-test as the VERIFY step.",
   "verify": {
     "failFast": true,
