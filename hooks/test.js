@@ -63,6 +63,7 @@ const DESIGN_GATE = path.join(__dirname, "design-gate.js");
 const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
+const RELEASE_START = path.join(__dirname, "release-start.js");
 const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const POST_MERGE_CLEANUP = path.join(__dirname, "post-merge-cleanup.js");
@@ -74,6 +75,7 @@ const REPO = path.join(__dirname, "..");
 const sharedLib = require(path.join(__dirname, "_lib.js"));
 const verifyCore = require(path.join(__dirname, "verify-core.js"));
 const applyRuleset = require(APPLY_RULESET);
+const releaseStart = require(RELEASE_START);
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -990,6 +992,84 @@ ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /\
   "doctor assertion 10");
 try { fs.rmSync(bootRepo, { recursive: true, force: true }); } catch {}
 
+// ---------- release start ----------
+console.log("\nrelease start:");
+function releaseStartRepo() {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-start-origin-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-start-work-"));
+  execFileSync("git", ["init", "--bare", "-q"], { cwd: origin });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: work });
+  execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: work });
+  execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: work });
+  execFileSync("git", ["remote", "add", "origin", origin], { cwd: work });
+  fs.writeFileSync(path.join(work, "README.md"), "base\n");
+  execFileSync("git", ["add", "."], { cwd: work });
+  execFileSync("git", ["commit", "-q", "-m", "chore: base"], { cwd: work });
+  fs.writeFileSync(path.join(work, "feature.txt"), "feature\n");
+  execFileSync("git", ["add", "."], { cwd: work });
+  execFileSync("git", ["commit", "-q", "-m", "feat: release fixture"], { cwd: work });
+  execFileSync("git", ["push", "-q", "-u", "origin", "main"], { cwd: work });
+  execFileSync("git", ["switch", "--detach"], { cwd: work, stdio: "ignore" });
+  return { origin, work };
+}
+function releaseStartRun(root, runCog = () => "1.1.0") {
+  return releaseStart.run({ root, base: "origin/main" }, { runCog });
+}
+function quietGit(root, args) {
+  try { return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+  catch { return ""; }
+}
+function removeReleaseStartRepo(repo) {
+  try { fs.rmSync(repo.work, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(repo.origin, { recursive: true, force: true }); } catch {}
+}
+
+let startCase = releaseStartRepo();
+const startHead = quietGit(startCase.work, ["rev-parse", "HEAD"]);
+let cogBranch = "";
+let startResult = releaseStartRun(startCase.work, (root) => {
+  cogBranch = quietGit(root, ["symbolic-ref", "--short", "HEAD"]);
+  if (!/^release\/prepare-[0-9a-f]{12}$/.test(cogBranch)) throw new Error(`unexpected cog branch: ${cogBranch}`);
+  return "1.1.0";
+});
+ok(startResult.ok === true && startResult.tag === "v1.1.0" && startResult.branch === "release/v1.1.0" &&
+   /^release\/prepare-/.test(cogBranch) && quietGit(startCase.work, ["symbolic-ref", "--short", "HEAD"]) === "release/v1.1.0" &&
+   quietGit(startCase.work, ["rev-parse", "HEAD"]) === startHead,
+  "release-start: detached fresh base is attached before Cocogitto and finalized as release/vX.Y.Z");
+removeReleaseStartRepo(startCase);
+
+startCase = releaseStartRepo();
+startResult = releaseStartRun(startCase.work, () => { throw new Error("no releasable commits"); });
+ok(startResult.ok === false && startResult.rolledBack === true && !quietGit(startCase.work, ["symbolic-ref", "--short", "HEAD"]) &&
+   !quietGit(startCase.work, ["branch", "--list", "release/prepare-*"]),
+  "release-start: Cocogitto failure restores detached HEAD and removes the temporary branch");
+removeReleaseStartRepo(startCase);
+
+startCase = releaseStartRepo();
+fs.writeFileSync(path.join(startCase.work, "dirty.txt"), "dirty\n");
+startResult = releaseStartRun(startCase.work);
+ok(startResult.ok === false && (startResult.results || []).some((result) => /worktree is dirty/.test(result.msg)) &&
+   !quietGit(startCase.work, ["branch", "--list", "release/prepare-*"]),
+  "release-start: dirty worktree is rejected before a branch is created");
+removeReleaseStartRepo(startCase);
+
+startCase = releaseStartRepo();
+execFileSync("git", ["switch", "--detach", "HEAD^"], { cwd: startCase.work, stdio: "ignore" });
+startResult = releaseStartRun(startCase.work);
+ok(startResult.ok === false && (startResult.results || []).some((result) => /HEAD must exactly match origin\/main/.test(result.msg)) &&
+   !quietGit(startCase.work, ["branch", "--list", "release/prepare-*"]),
+  "release-start: stale detached HEAD is rejected before a branch is created");
+removeReleaseStartRepo(startCase);
+
+startCase = releaseStartRepo();
+execFileSync("git", ["branch", "release/v1.1.0"], { cwd: startCase.work });
+startResult = releaseStartRun(startCase.work);
+ok(startResult.ok === false && startResult.rolledBack === true &&
+   quietGit(startCase.work, ["show-ref", "--verify", "refs/heads/release/v1.1.0"]) &&
+   !quietGit(startCase.work, ["branch", "--list", "release/prepare-*"]),
+  "release-start: an existing release branch is preserved and temporary state is rolled back");
+removeReleaseStartRepo(startCase);
+
 // ---------- release-preflight ----------
 console.log("\nrelease-preflight:");
 function relGit(root, args) {
@@ -1432,7 +1512,7 @@ ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
 // Real installation.
 installJson(itmp, []);
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 ok(/^# Changelog\s+- - -\s*$/s.test(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8")),
   "install: missing target changelog is initialized for Cocogitto");
 const productChangelog = "# Changelog\n\n- - -\n\n## v9.9.9\n\n- Product history must survive harness updates.\n";
