@@ -396,6 +396,7 @@ cases("guard: red-team adversarial fixtures", [
   { name: "block node -e fs.rmSync against hooks root", cmd: "node -e \"require('fs').rmSync('hooks',{recursive:true})\"", exit: 2 },
   { name: "block python -c traversal into hooks root", cmd: "python -c \"open('src/../hooks/agent/guard.js','w').write('x')\"", exit: 2 },
   { name: "block ruby -e File.write against protected file", cmd: "ruby -e \"File.write('lefthook.yml','x')\"", exit: 2 },
+  { name: "block installation baseline tampering", cmd: "echo x > .harness/installation.json", exit: 2 },
   { name: "allow interpreter write to ordinary src/hooks project file", cmd: "python -c \"open('src/hooks/useAuth.ts','w').write('x')\"", exit: 0 },
 ], (c) => bp(c.cmd, c.env || {}) === c.exit);
 
@@ -403,6 +404,7 @@ cases("guard: red-team file path aliases", [
   { name: "block targetFile alias with normalized protected traversal", tool: "Create", input: { targetFile: "design/../hooks/agent/guard.js" }, exit: 2 },
   { name: "block target_file alias for ruleset", tool: "Write", input: { target_file: ".github/rulesets/main.json" }, exit: 2 },
   { name: "block filename alias for .git/hooks write", tool: "Write", input: { filename: ".git/hooks/pre-commit" }, exit: 2 },
+  { name: "block file-tool installation baseline tampering", tool: "Write", input: { file_path: ".harness/installation.json" }, exit: 2 },
   { name: "allow mixed-purpose pyproject.toml", tool: "Edit", input: { file_path: "pyproject.toml" }, exit: 0 },
 ], (c) => gexit({ tool_name: c.tool, tool_input: c.input }, sess("rt-file")) === c.exit);
 
@@ -446,6 +448,17 @@ ok(/"hookSpecificOutput"/.test(dn) && /"hookEventName"\s*:\s*"PreToolUse"/.test(
   "guard design note assertion 1");
 const dn2 = gout({ tool_name: "Edit", tool_input: { file_path: "src/core/logic.py" } }, sess("dn2"));
 ok(!/DESIGN|mockup/i.test(dn2), "ordinary file -> no note");
+const dnXaml = gout({ tool_name: "Edit", tool_input: { file_path: "src/Desktop/App.xaml" } }, sess("dn-xaml"));
+const dnReact = gout({ tool_name: "Edit", tool_input: { file_path: "src/components/Toolbar.tsx" } }, sess("dn-react"));
+const dnGenerated = gout({ tool_name: "Edit", tool_input: { file_path: "src/components/Toolbar.test.tsx" } }, sess("dn-generated"));
+ok(/DESIGN|mockup/i.test(dnXaml) && /DESIGN|mockup/i.test(dnReact),
+  "UI auto-detection covers desktop XAML and React components");
+ok(!/DESIGN|mockup/i.test(dnGenerated),
+  "UI exclusions keep test/generated paths out of DESIGN routing");
+fs.writeFileSync(path.join(NEUTRAL, "harness.config.json"), JSON.stringify({ capabilities: { ui: "none" } }));
+const dnDisabled = gout({ tool_name: "Edit", tool_input: { file_path: "src/components/Disabled.tsx" } }, sess("dn-disabled"));
+fs.rmSync(path.join(NEUTRAL, "harness.config.json"), { force: true });
+ok(!/DESIGN|mockup/i.test(dnDisabled), "ui:none disables automatic DESIGN routing");
 
 // ---------- guard: CLI wrapper (spawn-based stdin/exit-code contract) ----------
 console.log("\nguard: CLI contract:");
@@ -1563,9 +1576,20 @@ let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "installer assertion 1");
 ok(Array.isArray(plan.files) && plan.files.some((f) => /agent\/guard\.js/.test(f.rel)), "installer assertion 2");
 ok(!fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")), "installer assertion 3");
-// Real installation.
-installJson(itmp, []);
+// Real installation. Untracked harness files are a successful install with a
+// separately reported bootstrap state, not an installer failure.
+const firstInstall = installJson(itmp, []);
+ok(firstInstall.ok === true && firstInstall.installed === true && firstInstall.bootstrapRequired === true && firstInstall.enforceable === false,
+  "install: fresh repository reports bootstrapRequired without failing file installation");
+const enforceableGate = installJson(itmp, ["--require-enforceable"]);
+ok(enforceableGate.ok === false && enforceableGate.installed === true && enforceableGate.bootstrapRequired === true &&
+   /not-enforceable/.test(enforceableGate.reason || ""),
+  "install: --require-enforceable turns bootstrap-pending into an automation failure");
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+const installManifest = JSON.parse(fs.readFileSync(path.join(itmp, ".harness", "installation.json"), "utf8"));
+ok(installManifest.schemaVersion === 1 && installManifest.managed["hooks/agent/guard.js"] &&
+   installManifest.ownership.projectOwned.includes("harness.config.json"),
+  "install: manifest records managed hashes and the project-owned boundary");
 ok(/^# Changelog\s+- - -\s*$/s.test(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8")),
   "install: missing target changelog is initialized for Cocogitto");
 const productChangelog = "# Changelog\n\n- - -\n\n## v9.9.9\n\n- Product history must survive harness updates.\n";
@@ -1601,7 +1625,11 @@ ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.
   "install: cog.toml remote changelog metadata is rewritten from target origin");
 ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "installer assertion 5");
 const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
-ok(!tcfg.verify && Array.isArray(tcfg.ui.globs), "installer assertion 6");
+ok(tcfg.schemaVersion === 2 && !tcfg.verify && Array.isArray(tcfg.ui.globs) && Array.isArray(tcfg.ui.exclude) &&
+   tcfg.capabilities.release === "cocogitto" && tcfg.capabilities.serverPolicy === "github",
+  "installer assertion 6");
+ok(!/Dropwheel|inbox\/dropwheel/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")),
+  "install: target AGENTS template is project-agnostic");
 const tset = JSON.parse(fs.readFileSync(path.join(itmp, ".claude", "settings.json"), "utf8"));
 ok(/guard\.js/.test(JSON.stringify(tset.hooks.PreToolUse)), "installer assertion 7");
 ok(/stop-reminder\.js/.test(JSON.stringify(tset.hooks.Stop)), "installer assertion 8");
@@ -1634,13 +1662,38 @@ ok(staleMerge.settings && staleMerge.settings.added === 2 &&
    staleAfter.hooks.PreToolUse.some((e) => JSON.stringify(e).includes("hooks/agent/guard.js")) &&
    staleAfter.hooks.Stop.some((e) => JSON.stringify(e).includes("hooks/agent/stop-reminder.js")),
   "install: unrelated guard.js basename does not mask missing harness hooks");
-// Existing files are preserved unless --force is requested.
+// Managed runtime updates are hash-aware. A local edit conflicts under --update
+// and is replaced only by explicit --replace-managed/legacy --force.
 const gp = path.join(itmp, "hooks", "agent", "guard.js");
 fs.writeFileSync(gp, "// local edit\n");
 installJson(itmp, []);
 ok(fs.readFileSync(gp, "utf8") === "// local edit\n", "installer assertion 13");
+const safeUpdate = installJson(itmp, ["--update"]);
+ok(safeUpdate.ok === false && safeUpdate.files.some((f) => f.rel === "hooks/agent/guard.js" && f.action === "conflict") &&
+   fs.readFileSync(gp, "utf8") === "// local edit\n",
+  "install: --update refuses to overwrite locally modified managed runtime");
 installJson(itmp, ["--force"]);
 ok(fs.readFileSync(gp, "utf8") !== "// local edit\n", "installer assertion 14");
+
+// Project policy survives even the compatibility force mode.
+const customConfig = { schemaVersion: 2, capabilities: { ui: "none", release: "none", serverPolicy: "none" }, product: "keep-me" };
+fs.writeFileSync(path.join(itmp, "harness.config.json"), JSON.stringify(customConfig, null, 2) + "\n");
+fs.writeFileSync(path.join(itmp, "AGENTS.md"), "# Product-owned instructions\n");
+fs.writeFileSync(path.join(itmp, ".gitleaks.toml"), "title = \"product policy\"\n");
+fs.writeFileSync(path.join(itmp, "cog.toml"), "# product release adapter\n");
+const customOwners = "* @ExampleOrg/product-team\n";
+fs.writeFileSync(path.join(itmp, ".github", "CODEOWNERS"), customOwners);
+const customRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
+customRuleset.rules.find((r) => r.type === "pull_request").parameters.required_approving_review_count = 2;
+fs.writeFileSync(path.join(itmp, ".github", "rulesets", "main.json"), JSON.stringify(customRuleset, null, 2) + "\n");
+const forced = installJson(itmp, ["--force"]);
+ok(forced.ok === true && JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8")).product === "keep-me" &&
+   fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8") === "# Product-owned instructions\n" &&
+   fs.readFileSync(path.join(itmp, ".gitleaks.toml"), "utf8") === "title = \"product policy\"\n" &&
+   fs.readFileSync(path.join(itmp, "cog.toml"), "utf8") === "# product release adapter\n" &&
+   fs.readFileSync(path.join(itmp, ".github", "CODEOWNERS"), "utf8") === customOwners &&
+   JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8")).rules.find((r) => r.type === "pull_request").parameters.required_approving_review_count === 2,
+  "install: --force updates managed runtime but preserves every project-owned policy file");
 // settings.json merge keeps foreign keys.
 const cur = JSON.parse(fs.readFileSync(dstSet, "utf8")); cur.model = "opus"; fs.writeFileSync(dstSet, JSON.stringify(cur));
 installJson(itmp, []);
@@ -1654,8 +1707,28 @@ ok(fs.readFileSync(dstSet, "utf8") === "{ broken", "invalid settings.json remain
 const nogit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-nogit-"));
 const ng = installJson(nogit, []);
 ok(Array.isArray(ng.notes) && ng.notes.some((n) => /not a git repository/.test(n)), "non-git target -> note about git init");
-ok(ng.ok === false && /fully enforceable/.test(ng.reason || ""), "installer assertion 16");
-try { fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true }); fs.rmSync(invalidArgsTarget, { recursive: true, force: true }); } catch {}
+ok(ng.ok === false && /installation failed/.test(ng.reason || ""), "installer assertion 16");
+const gitlab = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-gitlab-"));
+execFileSync("git", ["init", "-q"], { cwd: gitlab });
+execFileSync("git", ["remote", "add", "origin", "https://gitlab.com/ExampleOrg/example-target.git"], { cwd: gitlab });
+const portableInstall = installJson(gitlab, []);
+const portableConfig = JSON.parse(fs.readFileSync(path.join(gitlab, "harness.config.json"), "utf8"));
+ok(portableInstall.ok === true && portableInstall.adapters.server === "none" && portableInstall.adapters.release === "none" &&
+   portableConfig.capabilities.serverPolicy === "none" && portableConfig.capabilities.release === "none" &&
+   !fs.existsSync(path.join(gitlab, ".github")) && !fs.existsSync(path.join(gitlab, "cog.toml")) && !fs.existsSync(path.join(gitlab, "CHANGELOG.md")),
+  "install: non-GitHub origin stays provider-neutral unless adapters are selected explicitly");
+const explicitGenericRelease = fs.mkdtempSync(path.join(os.tmpdir(), "harness-install-generic-release-"));
+execFileSync("git", ["init", "-q"], { cwd: explicitGenericRelease });
+execFileSync("git", ["remote", "add", "origin", "https://gitlab.com/ExampleOrg/release-target.git"], { cwd: explicitGenericRelease });
+const genericReleaseInstall = installJson(explicitGenericRelease, ["--release-provider", "cocogitto"]);
+ok(genericReleaseInstall.ok === true && fs.readFileSync(path.join(explicitGenericRelease, "cog.toml"), "utf8").includes("Project-owned Cocogitto baseline") &&
+   JSON.parse(fs.readFileSync(path.join(explicitGenericRelease, "harness.config.json"), "utf8")).release.remote === "none",
+  "install: explicit Cocogitto adapter on a non-GitHub remote uses a provider-neutral project template");
+try {
+  fs.rmSync(itmp, { recursive: true, force: true }); fs.rmSync(nogit, { recursive: true, force: true });
+  fs.rmSync(gitlab, { recursive: true, force: true }); fs.rmSync(explicitGenericRelease, { recursive: true, force: true });
+  fs.rmSync(invalidArgsTarget, { recursive: true, force: true });
+} catch {}
 
 // ---------- hygiene: NUL bytes ----------
 console.log("\nsource hygiene:");

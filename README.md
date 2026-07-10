@@ -9,9 +9,9 @@ README covers the stack and installation.
 
 > Honest boundary: local hooks are hygiene. They catch mistakes before commit,
 > but they are not a defense against an adversarial actor with write access to
-> the worktree. Real enforcement is the server-side GitHub ruleset in
-> `.github/rulesets/main.json`, where the required `verify` check is pinned to
-> GitHub Actions through `integration_id`.
+> the worktree. When the GitHub server-policy adapter is enabled, the strongest
+> repository gate is `.github/rulesets/main.json`, where the required `verify`
+> check is pinned to GitHub Actions through `integration_id`.
 > This source repository uses a solo-maintainer ruleset: PR + pinned `verify`
 > are required, while approving/code-owner review is advisory to avoid a
 > self-approval deadlock. Target installs keep regular approving review by
@@ -40,6 +40,8 @@ README covers the stack and installation.
 Shared helpers live in [hooks/_lib.js](./hooks/_lib.js). VERIFY planning and
 debug-audit policy live in [hooks/verify-core.js](./hooks/verify-core.js), with
 [hooks/verify.js](./hooks/verify.js) kept as the CLI/runner wrapper.
+The cross-project ownership, capabilities, state model, and threat boundary are
+defined in [docs/universal-contract.md](./docs/universal-contract.md).
 
 ## DESIGN routing
 
@@ -48,7 +50,7 @@ unrelated themes for every UI-path change.
 
 | Change type | Required evidence |
 |---|---|
-| Backend with no UI impact | None. `design-gate.js` skips when no changed path matches `ui.globs`. |
+| Backend with no UI impact | None. `design-gate.js` skips when no changed path matches `ui.globs` after `ui.exclude`. |
 | Animation, low cost | Four written motion variants for one concrete scenario. |
 | Animation, high fidelity | Four executable HTML/JavaScript motion prototypes. |
 | Existing UI element or flow | The current visual language with four layout, placement, or interaction alternatives. |
@@ -86,6 +88,7 @@ node install.js ../my-project
 node install.js --target ../my-project
 node install.js
 node install.js --dry-run
+node install.js --target ../my-project --update
 ```
 
 Double-click wrappers are also available: `install.cmd` on Windows and
@@ -93,13 +96,25 @@ Double-click wrappers are also available: `install.cmd` on Windows and
 
 Useful flags:
 
-- `--force`: overwrite existing harness files.
+- `--update`: update harness-managed runtime files that still match their recorded installation hashes.
+- `--replace-managed`: explicitly replace locally modified managed runtime; project-owned files remain untouched.
+- `--force`: compatibility alias for `--update --replace-managed`; it no longer overwrites project policy.
+- `--require-enforceable`: return non-zero while bootstrap or hook activation is pending.
 - `--with-ci`: add optional Dependabot; CI, CODEOWNERS, and ruleset templates are installed by default.
 - `--code-owner @org/team`: write a real CODEOWNERS owner and enable required code-owner review in the target ruleset.
 - `--with-ruleset`: apply the server ruleset immediately; requires `gh` admin access and a plan/repo that supports rulesets.
+- `--server-provider auto|github|none`: auto enables GitHub policy only for a GitHub origin.
+- `--release-provider auto|cocogitto|none`: auto enables Cocogitto only for a GitHub origin.
 - `--json`: emit a machine-readable report.
 
-Without `--code-owner`, the installer writes a CODEOWNERS template but keeps
+The installer records managed hashes in `.harness/installation.json`. It only
+seeds `AGENTS.md`, `harness.config.json`, release config, secret policy, and
+`.github/` when those project-owned files are missing. Subsequent install/update
+runs preserve them byte-for-byte.
+For non-GitHub and local origins, auto mode writes no `.github/`, `cog.toml`, or
+`CHANGELOG.md`; select an adapter explicitly when the project needs one.
+
+Without `--code-owner`, a new install writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the
 regular approving-review requirement without deadlocking solo-maintainer
 repositories on an owner that does not exist in the target project. The target
@@ -110,13 +125,17 @@ ruleset comment is rewritten to match that policy; re-run with
 
 After installation, commit the harness into the target repository through a
 separate bootstrap PR before treating the loop as mandatory. At minimum, commit
-`hooks/`, `AGENTS.md`, `harness.config.json`, `lefthook.yml`, `cog.toml`,
-`.gitleaks.toml`, `settings.example.json`, and `.github/` when CI/rulesets are
-enabled.
+`hooks/`, `.harness/installation.json`, `AGENTS.md`, `harness.config.json`,
+`lefthook.yml`, `.gitleaks.toml`, and `settings.example.json`; add `cog.toml` and
+`CHANGELOG.md` when release is enabled, and `.github/` for GitHub server policy.
 
 `node hooks/doctor.js` checks both presence and git tracking. If harness files
 are local but untracked, a clean worktree from `origin/main` cannot run
 `node hooks/verify.js`, `design-gate.js`, or `cog bump --auto`.
+The installer reports this expected first-run state as `bootstrapRequired: true`
+and exits zero. Missing local Lefthook is reported separately as
+`activationRequired: true`; use `--require-enforceable` when automation needs a
+hard gate.
 
 ## Verify
 

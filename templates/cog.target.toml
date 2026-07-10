@@ -1,0 +1,13 @@
+# Project-owned Cocogitto baseline for non-GitHub repositories.
+# Add provider-specific changelog metadata here when the project needs it.
+from_latest_tag = true
+ignore_merge_commits = true
+tag_prefix = "v"
+branch_whitelist = ["main", "master", "feat/**", "fix/**", "docs/**", "hotfix/**", "chore/**", "refactor/**", "release/**"]
+
+[changelog]
+path = "CHANGELOG.md"
+authors = []
+
+[commit_types]
+improvement = { changelog_title = "Improvements" }
