@@ -104,6 +104,7 @@ Useful flags:
 - `--code-owner @org/team`: write a real CODEOWNERS owner and enable required code-owner review in the target ruleset.
 - `--with-ruleset`: apply the server ruleset immediately; requires `gh` admin access and a plan/repo that supports rulesets.
 - `--server-provider auto|github|none`: auto enables GitHub policy only for a GitHub origin.
+- `--ruleset-profile auto|solo|team`: explicitly select advisory solo reviews or required team review.
 - `--release-provider auto|cocogitto|none`: auto enables Cocogitto only for a GitHub origin.
 - `--json`: emit a machine-readable report.
 
@@ -153,7 +154,9 @@ node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/release-cleanup.js --base origin/main
 node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --strict
 node hooks/doctor.js
+node hooks/doctor.js --server
 node hooks/apply-ruleset.js --dry-run
+node hooks/apply-ruleset.js --check
 ```
 
 ## Branch lifecycle
@@ -171,10 +174,11 @@ Dirty, diverged, and unmerged branches are preserved. Release/hotfix branches
 are retained until publication and artifact smoke testing complete.
 
 For automation that keeps separate development and accepted-main checkouts, run
-`repo-state-audit.js --strict` as the terminal gate. It requires both local
-`main` refs to point to the same commit, all expected worktrees to be clean, and
-no extra local branches or linked worktrees to remain. The audit is read-only;
-cleanup and synchronization stay explicit coordinator actions.
+`repo-state-audit.js --strict --remote origin --fetch` as the terminal gate. It
+requires each checkout's actual branch and HEAD to equal its local and fetched
+remote `main`, all expected worktrees to be clean, and no extra local branches
+or linked worktrees to remain. The audit is read-only except for the requested
+fetch; cleanup and synchronization stay explicit coordinator actions.
 
 ## Full release
 

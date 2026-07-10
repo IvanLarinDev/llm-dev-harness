@@ -154,6 +154,12 @@ ok(applyRuleset.compareRuleset(strictExpectedRuleset, liveLikeRuleset).some((m) 
   "apply-ruleset readback comparison catches PR review policy drift");
 ok(applyRuleset.parseRulesetList(JSON.stringify([{ name: "a" }]) + "\n" + JSON.stringify([{ name: "b" }])).length === 2,
   "apply-ruleset parses paginated ruleset list output");
+ok(applyRuleset.driftReport(ruleset, [], null, "example/repo").mismatches.some((m) => /missing/.test(m)),
+  "apply-ruleset read-only drift check reports a missing live ruleset");
+ok(applyRuleset.driftReport(ruleset, [{ name: ruleset.name, id: 7 }], liveLikeRuleset, "example/repo").ok === true,
+  "apply-ruleset read-only drift check accepts matching live policy");
+ok(applyRuleset.driftReport(strictExpectedRuleset, [{ name: ruleset.name, id: 7 }], liveLikeRuleset, "example/repo").ok === false,
+  "apply-ruleset read-only drift check rejects review-policy drift");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/runs-on:\s*windows-latest/.test(ci), "CI: verify job runs on Windows for WPF/net*-windows targets");
 ok(/uses:\s*actions\/setup-dotnet@[0-9a-f]{40}\s*# actions\/setup-dotnet@v\d/.test(ci) && /dotnet-version:\s*"10\.0\.x"/.test(ci),
@@ -1437,10 +1443,12 @@ try { fs.rmSync(cleanupRoot, { recursive: true, force: true }); } catch {}
 
 // ---------- repository topology audit ----------
 console.log("\nrepository topology audit:");
-function topologyJson(root, acceptedRoot) {
+function topologyJson(root, acceptedRoot, extra = []) {
   try {
-    const output = execFileSync("node", [REPO_STATE_AUDIT, "--root", root, "--accepted-root", acceptedRoot,
-      "--base", "main", "--strict", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const args = [REPO_STATE_AUDIT, "--root", root];
+    if (acceptedRoot) args.push("--accepted-root", acceptedRoot);
+    args.push("--base", "main", "--strict", "--json", ...extra);
+    const output = execFileSync("node", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return JSON.parse(output);
   } catch (e) {
     try { return JSON.parse(String(e.stdout || "{}")); } catch { return { ok: false, issues: [] }; }
@@ -1464,6 +1472,11 @@ relGit(topologyAccepted, ["config", "user.email", "harness@example.test"]);
 relGit(topologyAccepted, ["config", "core.autocrlf", "false"]);
 let topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === true, "topology audit accepts two clean main checkouts at the same SHA");
+relGit(topologyAccepted, ["checkout", "-q", "--detach", "main"]);
+topology = topologyJson(topologyDevelopment, topologyAccepted);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "checkout_branch" && item.role === "accepted"),
+  "topology strict audit rejects a detached checkout even when its local main ref is correct");
+relGit(topologyAccepted, ["checkout", "-q", "main"]);
 
 relGit(topologyDevelopment, ["checkout", "-q", "-b", "feat/unmerged"]);
 fs.writeFileSync(path.join(topologyDevelopment, "feature.txt"), "feature\n");
@@ -1478,6 +1491,9 @@ relGit(topologyDevelopment, ["merge", "-q", "--no-ff", "feat/unmerged", "-m", "M
 topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === false && topology.issues.some((item) => item.code === "merged_branch" && item.branch === "feat/unmerged"),
   "topology audit rejects merged branches left behind");
+topology = topologyJson(topologyAccepted, "", ["--remote", "origin", "--fetch"]);
+ok(topology.ok === false && topology.issues.some((item) => item.code === "remote_base_mismatch"),
+  "topology audit fetches and rejects a local main that is stale against its remote");
 relGit(topologyDevelopment, ["branch", "-d", "feat/unmerged"]);
 relGit(topologyAccepted, ["fetch", "-q", "origin"]);
 relGit(topologyAccepted, ["merge", "-q", "--ff-only", "origin/main"]);
@@ -1620,6 +1636,22 @@ ok(ownerPrRule.parameters.required_approving_review_count === 1,
   "install: explicit --code-owner target ruleset keeps regular approving review");
 ok(/Code-owner review is required/.test(ownerRuleset._comment || ""),
   "install: explicit --code-owner ruleset comment matches required code-owner policy");
+const invalidSoloOwner = installJson(itmp, ["--ruleset-profile", "solo", "--code-owner", "@ExampleOrg/team"]);
+ok(invalidSoloOwner.ok === false && invalidSoloOwner.mode === "invalid",
+  "install: solo ruleset profile rejects required code-owner review");
+installJson(itmp, ["--ruleset-profile", "solo"]);
+let profiledRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
+let profiledPr = profiledRuleset.rules.find((r) => r.type === "pull_request");
+let profiledConfig = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
+ok(profiledPr.parameters.required_approving_review_count === 0 && profiledPr.parameters.require_code_owner_review === false &&
+   profiledConfig.serverPolicy.profile === "solo" && profiledConfig.serverPolicy.provider === "github",
+  "install: explicit solo profile structurally updates project config and review policy");
+installJson(itmp, ["--ruleset-profile", "team"]);
+profiledRuleset = JSON.parse(fs.readFileSync(path.join(itmp, ".github", "rulesets", "main.json"), "utf8"));
+profiledPr = profiledRuleset.rules.find((r) => r.type === "pull_request");
+profiledConfig = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
+ok(profiledPr.parameters.required_approving_review_count === 1 && profiledConfig.serverPolicy.profile === "team",
+  "install: explicit team profile restores required approving review");
 const tcog = fs.readFileSync(path.join(itmp, "cog.toml"), "utf8");
 ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.test(tcog),
   "install: cog.toml remote changelog metadata is rewritten from target origin");

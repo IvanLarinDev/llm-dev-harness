@@ -44,6 +44,11 @@ After first installation, commit the harness through a bootstrap PR. Until that
 PR is merged, installer output reports `bootstrapRequired: true` and the loop is
 not fully enforceable from a clean checkout.
 
+When GitHub server policy is enabled, use `node hooks/apply-ruleset.js --check`
+for read-only live drift detection. Apply policy only as a separate explicit
+operation. Use `repo-state-audit.js --strict --remote origin --fetch` as the
+terminal gate when automation coordinates multiple checkouts.
+
 ## Release
 
 Run a release only on explicit user request and only when the configured release

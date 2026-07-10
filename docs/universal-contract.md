@@ -50,6 +50,14 @@ uses a provider-neutral, project-owned Cocogitto template.
 Unknown or future adapters must fail as unsupported where enforcement depends on
 them; they must not silently inherit GitHub or source-ZIP behavior.
 
+The GitHub adapter supports `solo` and `team` profiles. `solo` keeps PR and
+trusted verify requirements but makes approving/code-owner review advisory;
+`team` requires an approving review and can additionally require CODEOWNERS.
+Profile flags are explicit structured edits to project config/policy. Ordinary
+install/update/force runs still preserve those files byte-for-byte. Use
+`apply-ruleset.js --check` or `doctor.js --server` for a read-only live drift
+check before deciding whether to apply policy.
+
 ## State Model
 
 Installation and enforceability are separate states:
