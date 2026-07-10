@@ -125,7 +125,7 @@ const DEFAULT_STACKS = [
   ] },
 ];
 
-const SKIP_DIRS = new Set([".git", "node_modules", "target", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".idea", ".vscode"]);
+const SKIP_DIRS = new Set([".git", ".codex", "node_modules", "target", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__", ".next", ".idea", ".vscode"]);
 const MAX_DEPTH = 6;
 const HARNESS_CHANGED = [
   "hooks/", "lefthook.yml", "harness.config.json", ".gitleaks.toml", "cog.toml",
