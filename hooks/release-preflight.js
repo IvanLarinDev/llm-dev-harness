@@ -15,6 +15,7 @@
 //     --allow-missing-tag do not require a local tag at HEAD yet
 //     --allow-remote-tag  allow the tag to already exist on origin
 //     --require-tag-in-base require the tag commit to be an ancestor of --base
+//     --require-release-tip require --base to be the exact merge commit for the tagged release PR
 
 const fs = require("fs");
 const path = require("path");
@@ -33,6 +34,7 @@ function parseArgs(argv) {
     allowMissingTag: false,
     allowRemoteTag: false,
     requireTagInBase: false,
+    requireReleaseTip: false,
   };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") a.root = argv[++i];
@@ -43,6 +45,7 @@ function parseArgs(argv) {
     else if (argv[i] === "--allow-missing-tag") a.allowMissingTag = true;
     else if (argv[i] === "--allow-remote-tag") a.allowRemoteTag = true;
     else if (argv[i] === "--require-tag-in-base") a.requireTagInBase = true;
+    else if (argv[i] === "--require-release-tip") { a.requireReleaseTip = true; a.requireTagInBase = true; }
   }
   a.root = path.resolve(a.root);
   return a;
@@ -182,6 +185,20 @@ function checkGitState(a, res) {
         fail(res, `cannot verify tag ancestry in ${a.base}: local tag is missing`);
       } else if (gitOk(a.root, ["merge-base", "--is-ancestor", tagRef, a.base])) {
         pass(res, `tag ${a.tag} is included in ${a.base}`);
+        if (a.requireReleaseTip) {
+          const tagCommit = gitOut(a.root, ["rev-parse", tagRef]);
+          const baseCommit = gitOut(a.root, ["rev-parse", a.base]);
+          const parents = gitOut(a.root, ["show", "-s", "--format=%P", baseCommit]).split(/\s+/).filter(Boolean);
+          if (parents.length !== 2) {
+            fail(res, `${a.base} must be the exact two-parent release merge commit`, { base: baseCommit, parents });
+          } else if (parents[1] !== tagCommit) {
+            fail(res, `release merge second parent must equal tag ${a.tag}`, { tag: tagCommit, secondParent: parents[1] });
+          } else if (!gitOk(a.root, ["merge-base", "--is-ancestor", parents[0], tagRef])) {
+            fail(res, `release tag ${a.tag} does not include the merge base parent`, { firstParent: parents[0], tag: tagCommit });
+          } else {
+            pass(res, `${a.base} is the exact release merge for ${a.tag}`);
+          }
+        }
       } else {
         fail(res, `tag ${a.tag} is not included in ${a.base}`);
       }
@@ -264,7 +281,7 @@ function main() {
     ok: true,
     tag: a.tag,
     root: a.root,
-    mode: a.requireTagInBase ? "post-merge" : "prepare",
+    mode: a.requireReleaseTip ? "release-tip" : a.requireTagInBase ? "post-merge" : "prepare",
     results: [],
   };
   const version = semverFromTag(a.tag);

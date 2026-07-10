@@ -175,7 +175,9 @@ The safe sequence is intentionally two-PR:
 3. Run prepare preflight, push only the release branch, and merge its PR with a
    merge commit so the locally tagged release commit remains in `main`.
 4. Wait for `main` CI and run post-merge preflight with
-   `--require-tag-in-base`.
+   `--require-tag-in-base --require-release-tip`. The gate requires the tag to
+   be the exact release-PR head and rejects any concurrent `main` history that
+   the tag does not contain.
 5. Push the tag. The source release workflow verifies the exact tag, builds a
    source ZIP and SHA-256, smoke-tests the ZIP, and publishes the GitHub Release.
 6. Download the published assets, compare the checksum, repeat the smoke check,
