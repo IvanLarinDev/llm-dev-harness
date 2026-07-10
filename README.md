@@ -156,7 +156,7 @@ node hooks/release-start.js --base origin/main
 node hooks/release-manifest-bump.js --tag vX.Y.Z --dry-run
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
-node hooks/release-artifacts.js --tag vX.Y.Z --phase all
+node hooks/release-artifacts.js --tag vX.Y.Z --phase all --evidence <download-dir>/release-evidence.json
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/github-branch-cleanup.js --merge-sha <full-main-sha> --apply
 node hooks/release-cleanup.js --base origin/main
@@ -174,6 +174,12 @@ feature/fix/docs/chore branches through verified PRs into `main`; after the PR
 is server-confirmed `MERGED` and the resulting `main` CI succeeds, run
 `post-merge-cleanup.js` in dry-run mode and then with `--apply`. The helper
 deletes only merged local/remote refs and clean linked worktrees.
+
+Branch naming is project-owned through `branchLifecycle.managedPrefixes`,
+`protectedBranches`, and `retainedPrefixes` in `harness.config.json`. The
+installer seeds common prefixes, including `task/` and `story/`; projects with
+another convention must declare it instead of weakening the ancestry, provider,
+or exact-OID deletion gates.
 
 For GitHub targets, `.github/workflows/branch-cleanup.yml` performs this step
 after the `verify` workflow succeeds on the default branch. The adapter binds
@@ -223,13 +229,17 @@ The safe sequence is intentionally two-PR:
    be the exact release-PR head and rejects any concurrent `main` history that
    the tag does not contain.
 5. Push the tag. The source release workflow verifies the exact tag, builds a
-   source ZIP and SHA-256, smoke-tests the ZIP, and publishes the GitHub Release.
-6. Download the published assets, compare the checksum, repeat the smoke check,
-   then run `release-cleanup.js --apply` from a separate clean base worktree as
-   a final audit for merged branches missed by post-merge cleanup.
+   source ZIP and SHA-256, smoke-tests the ZIP, records `release-evidence.json`,
+   and publishes all three files in the GitHub Release.
+6. Download the published assets together, then run
+   `release-artifacts.js --tag vX.Y.Z --phase all --evidence <dir>/release-evidence.json`.
+   After it verifies the tag/version, workflow and Release links, smoke result,
+   and downloaded SHA-256, run `release-cleanup.js --apply` from a separate clean
+   base worktree as the final branch audit.
 
-This repository is source-only, so its release artifact is
-`llm-dev-harness-vX.Y.Z.zip` plus a checksum file. Installed target repositories
+This repository is source-only, so its release assets are
+`llm-dev-harness-vX.Y.Z.zip`, its checksum, and `release-evidence.json`.
+Installed target repositories
 do not receive this source-specific workflow; they must define artifacts and
 version checks appropriate to their own runtime.
 
@@ -239,8 +249,10 @@ monorepos should always list only the package(s) released by this tag. Runnable
 `release.artifacts` entries declare an exact repository-relative path plus
 `build`, `smoke`, and `versionCommand`; commands receive
 `HARNESS_RELEASE_TAG`, `HARNESS_RELEASE_VERSION`, and `HARNESS_ARTIFACT_PATH`.
-Use `workflowOwned: true` only when the project workflow performs and proves the
-same checks.
+Use `workflowOwned: true` only when the project workflow performs the same checks
+and publishes schema-version-1 evidence beside the asset and checksum. For
+`--phase all`, the helper fails closed without that evidence and recomputes the
+downloaded asset's SHA-256 itself.
 
 Do not add `HEAD` to Cocogitto's `branch_whitelist`. That would also permit a
 real bump commit and tag from an arbitrary detached commit. `release-start.js`

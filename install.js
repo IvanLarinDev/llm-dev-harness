@@ -41,6 +41,7 @@ const { spawnSync } = require("child_process");
 
 const SRC = __dirname;
 const { DEFAULT_UI_GLOBS, DEFAULT_UI_EXCLUDE, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_lib.js"));
+const { loadBranchPolicy } = require(path.join(SRC, "hooks", "release-cleanup.js"));
 
 const INSTALL_MANIFEST = ".harness/installation.json";
 
@@ -128,11 +129,13 @@ function parseArgs(argv) {
 // Reuse UI glob/mockup defaults from _lib. Do not pin verify: target projects need
 // stack auto-detection, not this source repo's self-test.
 function defaultConfig(adapters) {
+  const branchLifecycle = loadBranchPolicy(SRC);
   return JSON.stringify({
     schemaVersion: 2,
     capabilities: { ui: "auto", release: adapters.release, serverPolicy: adapters.server },
     ui: { globs: DEFAULT_UI_GLOBS, exclude: DEFAULT_UI_EXCLUDE, mockups: DEFAULT_MOCKUPS },
     debugAudit: { enabled: true, base: "main", soft: false, exclude: [], strict: true },
+    branchLifecycle,
     release: {
       provider: adapters.release, remote: adapters.detectedGitHub ? "github" : "none",
       changelog: adapters.release === "cocogitto", versioning: { exclude: [], allowMissing: false }, artifacts: [],
@@ -329,6 +332,8 @@ function writeConfig(adapters, dryRun) {
         migrations.push("release-contract-v2-review");
       if (!config.serverPolicy || !config.serverPolicy.provider || !config.serverPolicy.profile)
         migrations.push("server-policy-v2-review");
+      if (!config.branchLifecycle || !Array.isArray(config.branchLifecycle.managedPrefixes))
+        migrations.push("branch-lifecycle-policy-review");
       return { action: "preserve", ownership: "project", migrations };
     }
     config.schemaVersion = config.schemaVersion || 2;

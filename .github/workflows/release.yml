@@ -72,17 +72,42 @@ jobs:
           node hooks/new-mockups.js --help
           Pop-Location
 
+      - name: Record published artifact evidence
+        id: evidence
+        env:
+          TAG: ${{ github.ref_name }}
+          ZIP_PATH: ${{ steps.package.outputs.zip }}
+          CHECKSUM_PATH: ${{ steps.package.outputs.checksum }}
+        run: |
+          $evidencePath = Join-Path $env:RUNNER_TEMP "release-evidence.json"
+          $evidence = @{
+            schemaVersion = 1
+            tag = $env:TAG
+            artifacts = @(@{
+              id = "source-zip-and-sha256"
+              assetPath = [IO.Path]::GetFileName($env:ZIP_PATH)
+              checksumPath = [IO.Path]::GetFileName($env:CHECKSUM_PATH)
+              workflowUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+              releaseUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$env:TAG"
+              smokePassed = $true
+              version = $env:TAG.Substring(1)
+            })
+          }
+          $evidence | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 -LiteralPath $evidencePath
+          "path=$evidencePath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           ZIP_PATH: ${{ steps.package.outputs.zip }}
           CHECKSUM_PATH: ${{ steps.package.outputs.checksum }}
+          EVIDENCE_PATH: ${{ steps.evidence.outputs.path }}
         run: |
           gh release view $env:TAG *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:TAG $env:ZIP_PATH $env:CHECKSUM_PATH --clobber
+            gh release upload $env:TAG $env:ZIP_PATH $env:CHECKSUM_PATH $env:EVIDENCE_PATH --clobber
           } else {
-            gh release create $env:TAG $env:ZIP_PATH $env:CHECKSUM_PATH --verify-tag --title $env:TAG --generate-notes
+            gh release create $env:TAG $env:ZIP_PATH $env:CHECKSUM_PATH $env:EVIDENCE_PATH --verify-tag --title $env:TAG --generate-notes
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -13,6 +13,7 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 
 if (process.argv.includes("--repeat")) {
   const i = process.argv.indexOf("--repeat");
@@ -80,6 +81,7 @@ const applyRuleset = require(APPLY_RULESET);
 const releaseStart = require(RELEASE_START);
 const repoStateAudit = require(REPO_STATE_AUDIT);
 const githubBranchCleanup = require(GITHUB_BRANCH_CLEANUP);
+const releaseCleanup = require(RELEASE_CLEANUP);
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -174,6 +176,8 @@ ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &
    /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
    /uses:\s*actions\/setup-go@[0-9a-f]{40}\s*# actions\/setup-go@v\d/.test(ci),
   "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
+ok(/actions\/setup-go@[\s\S]*go-version:\s*"1\.24\.x"[\s\S]*cache:\s*false/.test(ci),
+  "CI: setup-go disables module caching when Go is only a tool bootstrap");
 ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/zricethezav\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
   "CI: gitleaks installs through Go on the Windows runner");
 ok(/AGENTSHIELD_INTEGRITY:\s*"sha512-/.test(ci) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*"true"/.test(ci),
@@ -230,8 +234,9 @@ ok(/release-preflight\.js[^\n]*--require-tag-in-base[^\n]*--require-release-tip[
    /node hooks\/verify\.js/.test(releaseWorkflow),
 "release workflow rejects tags outside main and runs VERIFY");
 ok(/git archive/.test(releaseWorkflow) && /Get-FileHash[^\n]*SHA256/.test(releaseWorkflow) &&
-   /Expand-Archive/.test(releaseWorkflow) && /gh release (?:create|upload)/.test(releaseWorkflow),
-"release workflow builds, checksums, smoke-tests, and publishes a source ZIP");
+   /Expand-Archive/.test(releaseWorkflow) && /release-evidence\.json/.test(releaseWorkflow) &&
+   /smokePassed/.test(releaseWorkflow) && /gh release (?:create|upload)/.test(releaseWorkflow),
+"release workflow builds, checksums, smoke-tests, records evidence, and publishes a source ZIP");
 
 // ---------- no-coauthor policy ----------
 console.log("\nno-coauthor policy:");
@@ -1462,10 +1467,49 @@ fs.writeFileSync(path.join(artifactRoot, "harness.config.json"), JSON.stringify(
 artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3");
 ok(artifactReport.ok === false && artifactReport.results.some((r) => /repository-external path/.test(r.message)),
   "release artifact contract rejects paths outside the repository");
+const downloadedAsset = path.join(artifactRoot, "app-v1.2.3.zip");
+const downloadedChecksum = downloadedAsset + ".sha256";
+const evidencePath = path.join(artifactRoot, "release-evidence.json");
+fs.writeFileSync(downloadedAsset, "published app 1.2.3\n");
+const downloadedHash = crypto.createHash("sha256").update(fs.readFileSync(downloadedAsset)).digest("hex");
+fs.writeFileSync(downloadedChecksum, `${downloadedHash}  ${path.basename(downloadedAsset)}\n`);
+fs.writeFileSync(path.join(artifactRoot, "harness.config.json"), JSON.stringify({ release: { artifacts: [{
+  id: "app", workflowOwned: true,
+}] } }, null, 2) + "\n");
+artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3");
+ok(artifactReport.ok === false && artifactReport.results.some((r) => /require --evidence/.test(r.message)),
+  "workflow-owned artifact contract fails phase all without published evidence");
+fs.writeFileSync(evidencePath, JSON.stringify({
+  schemaVersion: 1, tag: "v1.2.3", artifacts: [{
+    id: "app", assetPath: path.basename(downloadedAsset), checksumPath: path.basename(downloadedChecksum),
+    workflowUrl: "https://github.com/example/app/actions/runs/1",
+    releaseUrl: "https://github.com/example/app/releases/tag/v1.2.3",
+    smokePassed: true, version: "1.2.3",
+  }],
+}, null, 2) + "\n");
+artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3", ["--evidence", evidencePath]);
+ok(artifactReport.ok === true && artifactReport.artifacts[0].sha256 === downloadedHash &&
+   artifactReport.results.some((r) => /published evidence passed/.test(r.message)),
+  "workflow-owned artifact contract verifies downloaded asset evidence and SHA-256");
+fs.appendFileSync(downloadedAsset, "tampered\n");
+artifactReport = releaseArtifactsJson(artifactRoot, "v1.2.3", ["--evidence", evidencePath]);
+ok(artifactReport.ok === false && artifactReport.results.some((r) => /SHA-256 does not match/.test(r.message)),
+  "workflow-owned artifact contract rejects a downloaded asset that differs from its checksum");
 fs.rmSync(artifactRoot, { recursive: true, force: true });
 
 // ---------- release cleanup ----------
 console.log("\nrelease cleanup:");
+const customBranchPolicyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-branch-policy-"));
+fs.writeFileSync(path.join(customBranchPolicyRoot, "harness.config.json"), JSON.stringify({ branchLifecycle: {
+  managedPrefixes: ["ticket/"], protectedBranches: ["trunk"], retainedPrefixes: ["ship/"],
+} }));
+const customBranchPolicy = releaseCleanup.loadBranchPolicy(customBranchPolicyRoot, "origin/trunk");
+ok(releaseCleanup.isPostMergeBranch("ticket/ABC-1", customBranchPolicy) &&
+   !releaseCleanup.isPostMergeBranch("feat/legacy", customBranchPolicy) &&
+   releaseCleanup.isRetainedBranch("ship/v1", customBranchPolicy) &&
+   !releaseCleanup.isManagedBranch("trunk", customBranchPolicy),
+  "branch cleanup uses project-configured managed, protected, and retained branch policy");
+fs.rmSync(customBranchPolicyRoot, { recursive: true, force: true });
 ok(/--force-with-lease=refs\/heads\/\$\{entry\.branch\}:\$\{entry\.remoteOid\}/.test(readRepo("hooks/release-cleanup.js")),
 "branch cleanup leases remote deletion to the OID that passed ancestry checks");
 ok(/update-ref", "-d", `refs\/heads\/\$\{entry\.branch\}`, entry\.localOid/.test(readRepo("hooks/release-cleanup.js")),
@@ -1641,6 +1685,9 @@ relGit(topologyAccepted, ["config", "user.email", "harness@example.test"]);
 relGit(topologyAccepted, ["config", "core.autocrlf", "false"]);
 let topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === true, "topology audit accepts two clean main checkouts at the same SHA");
+topology = topologyJson(topologyAccepted, "", ["--base", "origin/main", "--remote", "origin", "--fetch"]);
+ok(topology.ok === true && !topology.issues.some((item) => item.branch === "main"),
+  "topology audit normalizes origin/main without classifying local main as an unmerged branch");
 relGit(topologyAccepted, ["checkout", "-q", "--detach", "main"]);
 topology = topologyJson(topologyDevelopment, topologyAccepted);
 ok(topology.ok === false && topology.issues.some((item) => item.code === "checkout_branch" && item.role === "accepted"),
@@ -1861,7 +1908,8 @@ ok(/owner\s*=\s*"ExampleOrg"/.test(tcog) && /repository\s*=\s*"example-target"/.
 ok(!fs.existsSync(path.join(itmp, "hooks", "test.js")), "installer assertion 5");
 const tcfg = JSON.parse(fs.readFileSync(path.join(itmp, "harness.config.json"), "utf8"));
 ok(tcfg.schemaVersion === 2 && !tcfg.verify && Array.isArray(tcfg.ui.globs) && Array.isArray(tcfg.ui.exclude) &&
-   tcfg.capabilities.release === "cocogitto" && tcfg.capabilities.serverPolicy === "github",
+   tcfg.capabilities.release === "cocogitto" && tcfg.capabilities.serverPolicy === "github" &&
+   Array.isArray(tcfg.branchLifecycle.managedPrefixes) && tcfg.branchLifecycle.managedPrefixes.includes("task/"),
   "installer assertion 6");
 ok(!/Dropwheel|inbox\/dropwheel/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")) &&
    /MERGE\+CLEANUP/.test(fs.readFileSync(path.join(itmp, "AGENTS.md"), "utf8")) &&

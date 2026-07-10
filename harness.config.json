@@ -71,6 +71,15 @@
     "exclude": [],
     "strict": true
   },
+  "branchLifecycle": {
+    "managedPrefixes": [
+      "codex/", "feat/", "feature/", "fix/", "bugfix/", "docs/", "chore/",
+      "refactor/", "perf/", "build/", "style/", "release/", "hotfix/", "test/",
+      "ci/", "task/", "story/", "improvement/", "dependabot/", "renovate/", "automation/"
+    ],
+    "protectedBranches": ["main", "master"],
+    "retainedPrefixes": ["release/", "hotfix/"]
+  },
   "release": {
     "provider": "cocogitto",
     "remote": "github",
