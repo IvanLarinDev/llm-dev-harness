@@ -1,6 +1,12 @@
 # Changelog
 
 - - -
+## [v0.3.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/78ca25c6608913c624f8f7f4f0e6f53e48fa8697..v0.3.0) - 2026-07-10
+#### Features
+- (**release**) enforce full release lifecycle - ([5001cc7](https://github.com/IvanLarinDev/llm-dev-harness/commit/5001cc735ebe4143e33432a678279d772c39c61f)) - agidevway
+
+- - -
+
 ## [v0.2.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/5463aa53ccdf6ca19669a5594c18d26cc4b4d64d..v0.2.0) - 2026-07-09
 #### Features
 - (**design**) route mockups by UI change type - ([5463aa5](https://github.com/IvanLarinDev/llm-dev-harness/commit/5463aa53ccdf6ca19669a5594c18d26cc4b4d64d)) - agidevway
