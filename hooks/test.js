@@ -916,6 +916,23 @@ fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 7");
+const targetReleaseWorkflow = path.join(bootRepo, ".github", "workflows", "release.yml");
+fs.writeFileSync(targetReleaseWorkflow,
+  "name: release\non:\n  push:\n    tags: ['v*']\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0\n      - run: echo target package\n");
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /target-specific artifact contract/.test(r.msg) && r.level === "PASS") &&
+   !(dres.results || []).some((r) => /release workflow is missing required step/.test(r.msg)),
+  "doctor accepts a pinned target-specific release workflow without source ZIP steps");
+{
+  const configPath = path.join(bootRepo, "harness.config.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  config.release = { sourceZip: true };
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+}
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /release workflow is missing required step/.test(r.msg) && r.level === "FAIL"),
+  "doctor enforces the source ZIP release contract only when configured");
+fs.rmSync(targetReleaseWorkflow, { force: true });
 fs.rmSync(path.join(bootRepo, ".github", "CODEOWNERS"), { force: true });
 {
   const rulesetPath = path.join(bootRepo, ".github", "rulesets", "main.json");
