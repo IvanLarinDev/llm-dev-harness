@@ -1,6 +1,15 @@
 # Changelog
 
 - - -
+## [v0.6.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/f9da8c725243ddfeabc068853e0d3a437537af41..v0.6.0) - 2026-07-10
+#### Features
+- (**harness**) enforce branch lifecycle cleanup - ([77f2a1a](https://github.com/IvanLarinDev/llm-dev-harness/commit/77f2a1adeb8a3a805a5230568e05f26e88eb55ac)) - agidevway
+#### Bug Fixes
+- (**harness**) default to one canonical checkout - ([6ec1fc5](https://github.com/IvanLarinDev/llm-dev-harness/commit/6ec1fc5412ea73041b6a0c8cdc7c0e1ea2601b46)) - agidevway
+- (**harness**) detect orphaned remote refs - ([79e9bfb](https://github.com/IvanLarinDev/llm-dev-harness/commit/79e9bfbe2ad6934f136bea2b39e658061b5ebfb8)) - agidevway
+
+- - -
+
 ## [v0.5.1](https://github.com/IvanLarinDev/llm-dev-harness/compare/00b5f87702e3764ec393bb3c7d98d9f7311b5cfe..v0.5.1) - 2026-07-10
 #### Bug Fixes
 - (**policy**) allow slower topology fetches - ([a15ec08](https://github.com/IvanLarinDev/llm-dev-harness/commit/a15ec081f838a3c6e2703f07d571b4179e607f4b)) - agidevway
