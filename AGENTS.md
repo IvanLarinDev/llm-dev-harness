@@ -120,6 +120,18 @@ never forced. `release/*` and `hotfix/*` are deliberately ineligible: retain
 them until their tag, published artifacts, and smoke tests succeed. The
 release-wide cleanup remains a final audit for merged branches missed earlier.
 
+For pipelines with separate development and accepted-main roots, finish the
+merge/cleanup sequence with a strict, read-only topology audit:
+
+```powershell
+node hooks/repo-state-audit.js --root <development-root> --accepted-root <accepted-main-root> --base main --strict
+```
+
+Completion requires matching local `main` SHAs, clean expected worktrees, and
+no leftover local branches or linked worktrees. A mismatch means the pipeline
+is still active or incomplete; synchronize and clean it explicitly, then rerun
+the audit. Do not make the audit delete or reset work automatically.
+
 **6. REPORT.** Report what changed, what was verified with commands and results,
 what remains, and how the user can test manually.
 

@@ -31,6 +31,7 @@ README covers the stack and installation.
 | Release preflight | local harness | [hooks/release-preflight.js](./hooks/release-preflight.js) |
 | Post-merge branch cleanup | local harness | [hooks/post-merge-cleanup.js](./hooks/post-merge-cleanup.js) |
 | Release branch cleanup | local harness | [hooks/release-cleanup.js](./hooks/release-cleanup.js) |
+| Repository topology audit | local harness | [hooks/repo-state-audit.js](./hooks/repo-state-audit.js) |
 | Source ZIP release | GitHub Actions | [.github/workflows/release.yml](./.github/workflows/release.yml) |
 | Agent adapter | local harness | [hooks/agent/guard.js](./hooks/agent/guard.js) |
 | Agent config security audit | ecc-agentshield | [.github/workflows/ci.yml](./.github/workflows/ci.yml) |
@@ -129,6 +130,7 @@ node hooks/release-preflight.js --tag vX.Y.Z --base origin/main
 node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base
 node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
 node hooks/release-cleanup.js --base origin/main
+node hooks/repo-state-audit.js --root ../development --accepted-root ../accepted-main --base main --strict
 node hooks/doctor.js
 node hooks/apply-ruleset.js --dry-run
 ```
@@ -146,6 +148,12 @@ The eventual SemVer bump is derived from Conventional Commits since the latest
 tag. Keep incomplete behavior behind feature flags so `main` remains releasable.
 Dirty, diverged, and unmerged branches are preserved. Release/hotfix branches
 are retained until publication and artifact smoke testing complete.
+
+For automation that keeps separate development and accepted-main checkouts, run
+`repo-state-audit.js --strict` as the terminal gate. It requires both local
+`main` refs to point to the same commit, all expected worktrees to be clean, and
+no extra local branches or linked worktrees to remain. The audit is read-only;
+cleanup and synchronization stay explicit coordinator actions.
 
 ## Full release
 

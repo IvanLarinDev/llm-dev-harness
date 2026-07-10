@@ -239,6 +239,7 @@ const requiredHarnessFiles = [
   "hooks/release-preflight.js",
   "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
+  "hooks/repo-state-audit.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/apply-ruleset.js",

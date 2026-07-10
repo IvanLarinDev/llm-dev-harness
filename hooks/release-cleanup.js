@@ -7,7 +7,7 @@
 // with a known development prefix whose commits are ancestors of --base.
 // Dirty worktrees and diverged refs block cleanup. Unmerged branches block
 // exact mode and are reported-but-skipped in release-wide mode. Tags are never
-// touched. Remote deletion uses a lease on the OID that passed ancestry checks.
+// touched. Local and remote deletion use the OIDs that passed ancestry checks.
 //
 // Usage:
 //   node hooks/release-cleanup.js [--root <dir>] [--base origin/main]
@@ -137,7 +137,11 @@ function main(argv = process.argv.slice(2), options = {}) {
   }
 
   if (report.errors.length === 0) {
-    const localRefs = lines(run(a.root, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]));
+    const localRefs = lines(run(a.root, ["for-each-ref", "--format=%(refname:short)%09%(objectname)", "refs/heads"]))
+      .map((line) => {
+        const [name, oid] = line.split("\t");
+        return { name, oid };
+      });
     const remotePrefix = `${a.remote}/`;
     const remoteRefs = lines(run(a.root, ["for-each-ref", "--format=%(refname:short)%09%(objectname)", `refs/remotes/${a.remote}`]))
       .map((line) => {
@@ -147,13 +151,14 @@ function main(argv = process.argv.slice(2), options = {}) {
       .filter((item) => item.name && item.ref !== `${a.remote}/HEAD`);
     const worktrees = parseWorktrees(run(a.root, ["worktree", "list", "--porcelain"]));
     const worktreeByBranch = new Map(worktrees.filter((item) => item.branch).map((item) => [item.branch, item.path]));
-    const localSet = new Set(localRefs);
+    const localMap = new Map(localRefs.map((item) => [item.name, item]));
     const remoteMap = new Map(remoteRefs.map((item) => [item.name, item]));
-    const names = new Set([...localRefs, ...remoteRefs.map((item) => item.name)]);
+    const names = new Set([...localRefs.map((item) => item.name), ...remoteRefs.map((item) => item.name)]);
     const scopedNames = a.branch ? [a.branch] : [...names].filter(isManagedBranch).sort();
 
     for (const name of scopedNames) {
-      const localExists = localSet.has(name);
+      const local = localMap.get(name);
+      const localExists = !!local;
       const remote = remoteMap.get(name);
       const remoteRef = remote ? remote.ref : "";
       if (!localExists && !remoteRef) {
@@ -165,6 +170,7 @@ function main(argv = process.argv.slice(2), options = {}) {
       const entry = {
         branch: name,
         local: localExists,
+        localOid: local ? local.oid : "",
         remote: !!remoteRef,
         remoteOid: remote ? remote.oid : "",
         worktree: worktreeByBranch.get(name) || "",
@@ -204,10 +210,10 @@ function main(argv = process.argv.slice(2), options = {}) {
           }
         }
         if (entry.local && localSafe) {
-          const deleted = result(a.root, ["branch", "-d", entry.branch]);
+          const deleted = result(a.root, ["update-ref", "-d", `refs/heads/${entry.branch}`, entry.localOid]);
           if (!deleted.ok) {
             localSafe = false;
-            report.errors.push(`cannot delete local branch ${entry.branch}: ${deleted.error}`);
+            report.errors.push(`cannot delete local branch ${entry.branch} at ${entry.localOid}: ${deleted.error}`);
           } else {
             report.deletedLocal.push(entry.branch);
           }
