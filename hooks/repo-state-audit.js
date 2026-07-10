@@ -4,7 +4,7 @@
 //
 // Usage:
 //   node hooks/repo-state-audit.js [--root <dir>] [--accepted-root <dir>]
-//     [--base main] [--strict] [--json]
+//     [--base main] [--remote origin] [--fetch] [--strict] [--json]
 
 const fs = require("fs");
 const path = require("path");
@@ -12,16 +12,19 @@ const { execFileSync } = require("child_process");
 
 function parseArgs(argv) {
   const out = {
-    root: process.cwd(), acceptedRoot: "", base: "main",
-    strict: false, json: false, errors: [],
+    root: process.cwd(), acceptedRoot: "", base: "main", remote: "",
+    fetch: false, strict: false, json: false, errors: [],
   };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--root" || arg === "--accepted-root" || arg === "--base") {
+    if (arg === "--root" || arg === "--accepted-root" || arg === "--base" || arg === "--remote") {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) out.errors.push(`${arg} requires a value`);
       else if (arg === "--root") out.root = argv[++i];
       else if (arg === "--accepted-root") out.acceptedRoot = argv[++i];
-      else out.base = argv[++i];
+      else if (arg === "--base") out.base = argv[++i];
+      else out.remote = argv[++i];
+    } else if (arg === "--fetch") {
+      out.fetch = true;
     } else if (arg === "--strict") out.strict = true;
     else if (arg === "--json") out.json = true;
     else out.errors.push(`unknown option: ${arg}`);
@@ -71,7 +74,17 @@ function issue(report, code, message, details = {}) {
   report.issues.push({ code, message, ...details });
 }
 
-function inspectRoot(root, role, base, report) {
+function baseBranch(base) {
+  return String(base).replace(/^refs\/heads\//, "").replace(/^refs\/remotes\/[^/]+\//, "").replace(/^[^/]+\//, "");
+}
+
+function baseRefName(base) {
+  if (String(base).startsWith("refs/")) return String(base);
+  if (String(base).includes("/")) return `refs/remotes/${base}`;
+  return `refs/heads/${base}`;
+}
+
+function inspectRoot(root, role, args, report) {
   if (!fs.existsSync(root)) {
     issue(report, "missing_root", `${role} root does not exist: ${root}`, { role, root });
     return null;
@@ -81,23 +94,46 @@ function inspectRoot(root, role, base, report) {
     return null;
   }
   const common = result(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  const baseRef = base.startsWith("refs/") ? base : `refs/heads/${base}`;
+  const base = args.base;
+  const branchName = baseBranch(base);
+  const baseRef = baseRefName(base);
+  if (args.fetch && args.remote) {
+    const fetched = result(root, ["fetch", "--prune", args.remote, branchName]);
+    if (!fetched.ok) issue(report, "fetch_failed", `${role} cannot fetch ${args.remote}/${branchName}: ${fetched.error}`, { role, root });
+  }
   const baseResult = result(root, ["rev-parse", "--verify", baseRef]);
   if (!baseResult.ok) {
     issue(report, "missing_base", `${role} base ref does not exist: ${base}`, { role, root, base });
   }
+  const headResult = result(root, ["rev-parse", "HEAD"]);
+  const branchResult = result(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const remoteResult = args.remote
+    ? result(root, ["rev-parse", "--verify", `refs/remotes/${args.remote}/${branchName}`])
+    : { ok: false, out: "" };
   const info = {
     role, root, commonDir: common.ok ? normalized(common.out) : normalized(path.join(root, ".git")),
-    baseSha: baseResult.ok ? baseResult.out : "",
+    branch: branchResult.ok ? branchResult.out : "", headSha: headResult.ok ? headResult.out : "",
+    baseSha: baseResult.ok ? baseResult.out : "", remoteSha: remoteResult.ok ? remoteResult.out : "",
   };
   report.roots.push(info);
+  if (args.strict && info.branch !== branchName) {
+    issue(report, "checkout_branch", `${role} checkout is ${info.branch || "detached"}; expected ${branchName}`, { role, root, expected: branchName, actual: info.branch || "detached" });
+  }
+  if (args.strict && info.headSha && info.baseSha && info.headSha !== info.baseSha) {
+    issue(report, "checkout_not_at_base", `${role} HEAD does not equal ${base}`, { role, root, headSha: info.headSha, baseSha: info.baseSha });
+  }
+  if (args.remote && !remoteResult.ok) {
+    issue(report, "missing_remote_base", `${role} remote base ref does not exist: ${args.remote}/${branchName}`, { role, root });
+  } else if (args.remote && info.baseSha && info.remoteSha && info.baseSha !== info.remoteSha) {
+    issue(report, "remote_base_mismatch", `${role} ${base} is stale or diverged from ${args.remote}/${branchName}`, { role, root, baseSha: info.baseSha, remoteSha: info.remoteSha });
+  }
   return info;
 }
 
 function audit(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const report = {
-    ok: true, strict: args.strict, base: args.base, roots: [], issues: [],
+    ok: true, strict: args.strict, base: args.base, remote: args.remote, fetch: args.fetch, roots: [], issues: [],
     mergedBranches: [], unmergedBranches: [], dirtyWorktrees: [], extraWorktrees: [],
   };
   for (const error of args.errors) issue(report, "invalid_argument", error);
@@ -105,7 +141,7 @@ function audit(argv = process.argv.slice(2)) {
 
   const inputs = [{ root: args.root, role: "development" }];
   if (args.acceptedRoot) inputs.push({ root: args.acceptedRoot, role: "accepted" });
-  const inspected = inputs.map((item) => inspectRoot(item.root, item.role, args.base, report)).filter(Boolean);
+  const inspected = inputs.map((item) => inspectRoot(item.root, item.role, args, report)).filter(Boolean);
   const groups = new Map();
   for (const item of inspected) {
     if (!groups.has(item.commonDir)) groups.set(item.commonDir, []);
@@ -172,7 +208,7 @@ function main(argv = process.argv.slice(2)) {
   if (json) console.log(JSON.stringify(report));
   else {
     console.log(`repo state audit: ${report.base}`);
-    for (const root of report.roots) console.log(`  ${root.role}: ${root.baseSha || "missing"} (${root.root})`);
+    for (const root of report.roots) console.log(`  ${root.role}: ${root.branch || "detached"} HEAD=${root.headSha || "missing"} base=${root.baseSha || "missing"}${root.remoteSha ? ` remote=${root.remoteSha}` : ""} (${root.root})`);
     for (const item of report.issues) console.log(`  ${item.code}: ${item.message}`);
     console.log(report.ok ? "\nRepository topology is converged." : "\nRepository topology is not converged.");
   }

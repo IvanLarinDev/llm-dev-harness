@@ -3,7 +3,7 @@
 // hit in development: hooks not wired, CRLF, NUL bytes, bad config, missing git identity.
 // Checks the migrated stack (lefthook + gitleaks + cocogitto). Run: node hooks/doctor.js
 //
-// [--root <dir>] [--json].  Exit 0 = no FAIL (WARN allowed), 1 = at least one FAIL.
+// [--root <dir>] [--server] [--json]. Exit 0 = no FAIL (WARN allowed), 1 = FAIL.
 
 const fs = require("fs");
 const path = require("path");
@@ -129,15 +129,20 @@ function codeownersInfo(rel = ".github/CODEOWNERS") {
     .filter((line) => line && !line.startsWith("#") && /\s@[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?\b/.test(line));
   return { rel, exists, hasOwner: ownerLines.length > 0, tracked: !inRepo || tracked(rel) };
 }
-function checkRulesetPrReview(rel) {
+function checkRulesetPrReview(rel, profile) {
   let ruleset = {};
   try { ruleset = JSON.parse(readText(rel)); } catch { return; }
   const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
   const p = (pr && pr.parameters) || {};
   const codeowners = codeownersInfo();
-  if (Number(p.required_approving_review_count || 0) < 1)
-    warn("ruleset: pull_request does not require approving review; this is only appropriate for a solo-maintainer source repo");
-  else ok("ruleset: pull_request requires approving review");
+  const reviewCount = Number(p.required_approving_review_count || 0);
+  if (profile === "solo") {
+    reviewCount === 0 ? ok("ruleset: solo profile keeps approving review advisory") :
+      fail("ruleset: solo profile must set required_approving_review_count=0");
+  } else {
+    reviewCount >= 1 ? ok("ruleset: team profile requires approving review") :
+      fail("ruleset: team profile must require at least one approving review");
+  }
   if (p.require_code_owner_review === true) {
     ok("ruleset: code-owner review required");
     if (!codeowners.exists) fail("ruleset: code-owner review requires .github/CODEOWNERS");
@@ -260,6 +265,7 @@ if (fs.existsSync(cfgPath)) {
 const capabilities = harnessConfig.capabilities || {};
 const releaseProvider = sourceHarness ? "cocogitto" : String(capabilities.release || (harnessConfig.release && harnessConfig.release.provider) || "cocogitto");
 const serverProvider = sourceHarness ? "github" : String(capabilities.serverPolicy || (harnessConfig.serverPolicy && harnessConfig.serverPolicy.provider) || "github");
+const serverProfile = sourceHarness ? "solo" : String((harnessConfig.serverPolicy && harnessConfig.serverPolicy.profile) || "team");
 
 // runner + delegated tools in PATH (WARN, not FAIL; CI provides them)
 const tools = [
@@ -347,6 +353,8 @@ if (fs.existsSync(cfgPath)) {
       fail(`harness.config.json: unsupported release provider ${releaseProvider}`);
     if (!["github", "none"].includes(serverProvider))
       fail(`harness.config.json: unsupported server-policy provider ${serverProvider}`);
+    if (!["solo", "team"].includes(serverProfile))
+      fail(`harness.config.json: unsupported server-policy profile ${serverProfile}`);
     const hasSelfTest = fs.existsSync(path.join(ROOT, "hooks", "test.js"));
     const stacks = cfg.verify && Array.isArray(cfg.verify.stacks) ? cfg.verify.stacks : null;
     if (sourceHarness || hasSelfTest) {
@@ -429,7 +437,25 @@ if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath))) 
     }
     checkWorkflowSupplyChain(workflowPath);
   }
-  checkRulesetPrReview(rulesetPath);
+  checkRulesetPrReview(rulesetPath, serverProfile);
+}
+if (process.argv.includes("--server")) {
+  if (serverProvider === "none") {
+    ok("server-policy capability is disabled; no live drift check requested by configuration");
+  } else if (serverProvider === "github") {
+    try {
+      const output = execFileSync(process.execPath, [path.join(ROOT, "hooks", "apply-ruleset.js"), "--check", "--json"], {
+        cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, killSignal: "SIGKILL",
+      });
+      const live = JSON.parse(output);
+      live.ok ? ok(`live GitHub ruleset matches project policy (${live.repo || "repository"})`) :
+        fail(`live GitHub ruleset drift: ${(live.mismatches || []).join("; ") || live.error || "unknown mismatch"}`);
+    } catch (e) {
+      let live = null;
+      try { live = JSON.parse(String(e.stdout || "")); } catch {}
+      fail(`live GitHub ruleset check failed: ${live ? (live.mismatches || []).join("; ") || live.error : String(e.stderr || e.message || "").trim()}`);
+    }
+  }
 }
 if (!sourceHarness && fs.existsSync(path.join(ROOT, ".harness", "installation.json"))) {
   try {

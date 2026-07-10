@@ -227,6 +227,9 @@ supports rulesets, or the repository must be public.
 This source repository uses a solo-maintainer variant: approving/code-owner
 review is advisory, while target installs keep regular approving review by
 default through `install.js`.
+Use `node hooks/apply-ruleset.js --check` or `node hooks/doctor.js --server` to
+detect live drift without writing. Installer `--ruleset-profile solo|team` is an
+explicit structured policy change; ordinary update/force preserves server files.
 
 **Layer 1 - lefthook.** Local hygiene for humans and agents:
 commit-msg runs `cog verify` and rejects co-author trailers; pre-commit runs

@@ -27,6 +27,7 @@
 //     --with-ruleset  apply the server ruleset (requires gh admin; see apply-ruleset.js)
 //     --code-owner    CODEOWNERS owner such as @org/team or @user
 //     --server-provider auto|github|none
+//     --ruleset-profile auto|solo|team
 //     --release-provider auto|cocogitto|none
 //     --json          machine-readable report
 //
@@ -72,7 +73,7 @@ function parseArgs(argv) {
     target: process.cwd(), force: false, update: false, replaceManaged: false,
     requireEnforceable: false, dryRun: false, withCi: false,
     withRuleset: false, codeOwner: "", serverProvider: "auto",
-    releaseProvider: "auto", json: false, errors: [],
+    rulesetProfile: "auto", releaseProvider: "auto", json: false, errors: [],
   };
   let positionalTarget = "";
   let explicitTarget = "";
@@ -98,6 +99,10 @@ function parseArgs(argv) {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--release-provider requires auto, cocogitto, or none");
       else a.releaseProvider = argv[++i];
     }
+    else if (arg === "--ruleset-profile") {
+      if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--ruleset-profile requires auto, solo, or team");
+      else a.rulesetProfile = argv[++i];
+    }
     else if (arg === "--code-owner") {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) a.errors.push("--code-owner requires an owner");
       else a.codeOwner = argv[++i];
@@ -111,7 +116,9 @@ function parseArgs(argv) {
     a.errors.push("target must be provided either positionally or with --target, not both");
   }
   if (!["auto", "github", "none"].includes(a.serverProvider)) a.errors.push(`unsupported --server-provider: ${a.serverProvider}`);
+  if (!["auto", "solo", "team"].includes(a.rulesetProfile)) a.errors.push(`unsupported --ruleset-profile: ${a.rulesetProfile}`);
   if (!["auto", "cocogitto", "none"].includes(a.releaseProvider)) a.errors.push(`unsupported --release-provider: ${a.releaseProvider}`);
+  if (a.rulesetProfile === "solo" && a.codeOwner) a.errors.push("--ruleset-profile solo cannot require --code-owner review");
   a.target = path.resolve(explicitTarget || positionalTarget || a.target);
   return a;
 }
@@ -126,7 +133,7 @@ function defaultConfig(adapters) {
     ui: { globs: DEFAULT_UI_GLOBS, exclude: DEFAULT_UI_EXCLUDE, mockups: DEFAULT_MOCKUPS },
     debugAudit: { enabled: true, base: "main", soft: false, exclude: [], strict: true },
     release: { provider: adapters.release, remote: adapters.detectedGitHub ? "github" : "none", artifacts: [] },
-    serverPolicy: { provider: adapters.server, profile: "team" },
+    serverPolicy: { provider: adapters.server, profile: adapters.profile },
   }, null, 2) + "\n";
 }
 
@@ -210,7 +217,8 @@ function resolveAdapters() {
   const github = !!githubRepoFromUrl(gitRemoteUrl(a.target));
   const server = a.serverProvider === "auto" ? (github ? "github" : "none") : a.serverProvider;
   const release = a.releaseProvider === "auto" ? (github ? "cocogitto" : "none") : a.releaseProvider;
-  return { server, release, detectedGitHub: github };
+  const profile = a.rulesetProfile === "auto" ? "team" : a.rulesetProfile;
+  return { server, release, profile, detectedGitHub: github };
 }
 
 function rewriteCogRemoteMetadata(dryRun) {
@@ -253,21 +261,23 @@ function codeOwnerFile(owner) {
   ].join("\n");
 }
 
-function rulesetComment(owner) {
+function rulesetComment(owner, profile) {
   const base = "Installed GitHub branch ruleset for llm-dev-harness: the server-side gate that local hooks cannot replace. It requires PRs, the GitHub Actions verify check pinned by integration_id, and blocks force-push/delete on main.";
+  if (profile === "solo") return base + " Solo profile: approving and code-owner reviews are advisory to avoid self-approval deadlock.";
   if (owner) {
     return base + " Code-owner review is required because install.js was run with --code-owner; keep .github/CODEOWNERS in sync with this setting.";
   }
   return base + " Code-owner review is disabled because install.js was run without --code-owner; the regular approving-review requirement remains enabled. Re-run install.js with --code-owner @org/team to require CODEOWNERS review.";
 }
 
-function configureCodeOwnersAndRuleset(dryRun, projectWrites) {
+function configureCodeOwnersAndRuleset(dryRun, projectWrites, profile) {
   const owner = String(a.codeOwner || "").trim();
   const codeownersPath = path.join(a.target, ".github", "CODEOWNERS");
   const rulesetPath = path.join(a.target, ".github", "rulesets", "main.json");
   const explicit = !!owner;
   const codeownersCreated = projectWrites.has(".github/CODEOWNERS");
   const rulesetCreated = projectWrites.has(".github/rulesets/main.json");
+  const profileExplicit = a.rulesetProfile !== "auto";
   const out = { owner, codeowners: "preserve", ruleset: "preserve", requireCodeOwnerReview: explicit };
   if ((codeownersCreated || explicit) && !dryRun) {
     fs.mkdirSync(path.dirname(codeownersPath), { recursive: true });
@@ -280,12 +290,12 @@ function configureCodeOwnersAndRuleset(dryRun, projectWrites) {
     try { ruleset = JSON.parse(fs.readFileSync(path.join(SRC, ".github", "rulesets", "main.json"), "utf8")); } catch {}
   }
   if (ruleset) {
-    if (rulesetCreated || explicit) {
-      ruleset._comment = rulesetComment(owner);
+    if (rulesetCreated || explicit || profileExplicit) {
+      ruleset._comment = rulesetComment(owner, profile);
       const pr = (ruleset.rules || []).find((r) => r.type === "pull_request");
       if (pr && pr.parameters) {
-        pr.parameters.required_approving_review_count = 1;
-        pr.parameters.require_code_owner_review = explicit;
+        pr.parameters.required_approving_review_count = profile === "solo" ? 0 : 1;
+        pr.parameters.require_code_owner_review = profile === "solo" ? false : explicit;
         if (!dryRun) fs.writeFileSync(rulesetPath, JSON.stringify(ruleset, null, 2) + "\n");
         out.ruleset = owner ? "code-owner-required" : "code-owner-disabled";
       }
@@ -299,7 +309,33 @@ function writeConfig(adapters, dryRun) {
   const dst = path.join(a.target, "harness.config.json");
   let exists = false;
   try { fs.accessSync(dst); exists = true; } catch {}
-  if (exists) return { action: "preserve", ownership: "project" };
+  if (exists) {
+    const explicit = a.serverProvider !== "auto" || a.releaseProvider !== "auto" || a.rulesetProfile !== "auto";
+    if (!explicit) return { action: "preserve", ownership: "project" };
+    let config;
+    try { config = JSON.parse(fs.readFileSync(dst, "utf8")); }
+    catch (e) { return { action: "error", ownership: "project", reason: `cannot apply explicit adapter selection to invalid JSON: ${e.message}` }; }
+    config.schemaVersion = config.schemaVersion || 2;
+    config.capabilities = config.capabilities || {};
+    config.release = config.release || {};
+    config.serverPolicy = config.serverPolicy || {};
+    if (a.serverProvider !== "auto") {
+      config.capabilities.serverPolicy = adapters.server;
+      config.serverPolicy.provider = adapters.server;
+    }
+    if (a.releaseProvider !== "auto") {
+      config.capabilities.release = adapters.release;
+      config.release.provider = adapters.release;
+      config.release.remote = adapters.detectedGitHub ? "github" : "none";
+    }
+    if (a.rulesetProfile !== "auto") {
+      config.capabilities.serverPolicy = adapters.server;
+      config.serverPolicy.provider = adapters.server;
+      config.serverPolicy.profile = adapters.profile;
+    }
+    if (!dryRun) fs.writeFileSync(dst, JSON.stringify(config, null, 2) + "\n");
+    return { action: "update-explicit", ownership: "project" };
+  }
   if (!dryRun) fs.writeFileSync(dst, defaultConfig(adapters));
   return { action: "write", ownership: "project" };
 }
@@ -408,9 +444,9 @@ const a = parseArgs(process.argv.slice(2));
 
   const selfInstall = path.resolve(a.target) === path.resolve(SRC);
   out.mode = selfInstall ? "bootstrap" : "install";
-  out.adapters = selfInstall ? { server: "github", release: "cocogitto", detectedGitHub: true } : resolveAdapters();
-  if (out.adapters.server !== "github" && (a.withRuleset || a.codeOwner)) {
-    return finish(out, false, "--with-ruleset/--code-owner require --server-provider github or a GitHub origin");
+  out.adapters = selfInstall ? { server: "github", release: "cocogitto", profile: "solo", detectedGitHub: true } : resolveAdapters();
+  if (out.adapters.server !== "github" && (a.withRuleset || a.codeOwner || a.rulesetProfile !== "auto")) {
+    return finish(out, false, "--with-ruleset/--code-owner/--ruleset-profile require --server-provider github or a GitHub origin");
   }
 
   // 1. Files.
@@ -439,7 +475,7 @@ const a = parseArgs(process.argv.slice(2));
     }
     out.config = writeConfig(out.adapters, a.dryRun);
     if (out.adapters.release === "cocogitto") out.changelog = ensureChangelog(a.dryRun);
-    if (out.adapters.server === "github") out.codeowners = configureCodeOwnersAndRuleset(a.dryRun, projectWrites);
+    if (out.adapters.server === "github") out.codeowners = configureCodeOwnersAndRuleset(a.dryRun, projectWrites, out.adapters.profile);
     out.installManifest = writeInstallManifest(managedHashes, a.dryRun);
     if (a.force) out.notes.push("--force is a compatibility alias for --update --replace-managed; project-owned files were preserved.");
     if (out.adapters.server === "github" && !a.codeOwner && (projectWrites.has(".github/CODEOWNERS") || projectWrites.has(".github/rulesets/main.json"))) {
@@ -479,6 +515,7 @@ const a = parseArgs(process.argv.slice(2));
   out.activationRequired = !a.dryRun && !!(out.lefthook && !out.lefthook.ok);
   out.enforceable = out.installed && isGit && !!(out.lefthook && out.lefthook.ok) && !!(out.doctor && out.doctor.ok);
   if (out.settings.status === "error") hardFailures.push("settings");
+  if (out.config && out.config.action === "error") hardFailures.push("harness-config");
   if (conflicts.length) hardFailures.push("managed-file-conflict");
   if (!a.dryRun && nonBootstrapDoctorFails.length) hardFailures.push("doctor");
   if (!a.dryRun && a.withRuleset && out.ruleset && !out.ruleset.ok) hardFailures.push("ruleset");
@@ -496,7 +533,7 @@ function finish(out, ok, reason) {
 
   const icon = (x) => (x === "write" ? "+" : x === "overwrite" ? "~" : x === "conflict" ? "!" : "-");
   console.log(`\nllm-dev-harness -> ${out.target}  [${out.mode}${out.dryRun ? ", dry-run" : ""}]`);
-  if (out.adapters) console.log(`  adapters: server=${out.adapters.server}, release=${out.adapters.release}${out.adapters.detectedGitHub ? " (GitHub origin detected)" : ""}`);
+  if (out.adapters) console.log(`  adapters: server=${out.adapters.server}${out.adapters.server === "github" ? "/" + out.adapters.profile : ""}, release=${out.adapters.release}${out.adapters.detectedGitHub ? " (GitHub origin detected)" : ""}`);
   if (out.files.length) {
     const w = out.files.filter((f) => f.action === "write").length;
     const o = out.files.filter((f) => f.action === "overwrite").length;
@@ -505,7 +542,7 @@ function finish(out, ok, reason) {
     console.log(`  files: +${w} new, ${o} updated, ${p} preserved, ${c} conflict(s)`);
     for (const f of out.files) if (f.action !== "already") console.log(`    ${icon(f.action)} ${f.rel}${f.ownership ? " [" + f.ownership + "]" : ""}${f.reason ? " - " + f.reason : ""}`);
   }
-  if (out.config) console.log(`  harness.config.json: ${out.config.action === "write" ? "generated" : "project-owned; preserved"}`);
+  if (out.config) console.log(`  harness.config.json: ${out.config.action === "write" ? "generated" : out.config.action === "update-explicit" ? "updated by explicit adapter/profile selection" : out.config.action === "error" ? "error - " + out.config.reason : "project-owned; preserved"}`);
   if (out.installManifest) console.log(`  ${INSTALL_MANIFEST}: managed-file baseline recorded`);
   if (out.changelog) console.log(`  CHANGELOG.md: ${out.changelog.action === "write" ? "generated" : "preserved"}`);
   if (out.codeowners) console.log(`  CODEOWNERS/ruleset: ${out.codeowners.owner ? "owner " + out.codeowners.owner + " configured" : "template only, code-owner review disabled"}`);
