@@ -1,6 +1,12 @@
 # Changelog
 
 - - -
+## [v0.6.1](https://github.com/IvanLarinDev/llm-dev-harness/compare/eb4f3b88fe30f3f1783562df6eae7b0e0417f0e8..v0.6.1) - 2026-07-10
+#### Bug Fixes
+- (**harness**) harden release and branch lifecycle gates - ([0527d43](https://github.com/IvanLarinDev/llm-dev-harness/commit/0527d43134df417284b8969a9ec691576482449c)) - agidevway
+
+- - -
+
 ## [v0.6.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/f9da8c725243ddfeabc068853e0d3a437537af41..v0.6.0) - 2026-07-10
 #### Features
 - (**harness**) enforce branch lifecycle cleanup - ([77f2a1a](https://github.com/IvanLarinDev/llm-dev-harness/commit/77f2a1adeb8a3a805a5230568e05f26e88eb55ac)) - agidevway
