@@ -1863,6 +1863,8 @@ ok(taskPlan.createWorktree && taskPlan.branch === "codex/assist" && taskPlan.bas
   "task start plans an isolated worktree from protected main");
 ok(!taskCoordinator.commitBranch(taskRepo).allowed,
   "task finish refuses an automated commit on protected main");
+ok(readRepo("hooks/task.js").includes('["run", "pre-commit", "--force"]'),
+  "task finish runs pre-commit directly even when hook activation is unavailable");
 fs.writeFileSync(path.join(taskRepo, "README.md"), "pre-existing\n");
 taskState.saveBaseline(taskRepo);
 ok(taskState.unchangedFromBaseline(taskRepo), "task baseline recognizes unchanged pre-existing dirt");

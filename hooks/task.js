@@ -83,7 +83,7 @@ function start(root, args) {
   const notes = [];
   const lefthook = process.platform === "win32" ? "lefthook.cmd" : "lefthook";
   const hook = runInherited(lefthook, ["install"], plan.worktree);
-  if (!hook.ok) notes.push(`lefthook activation needs attention${hook.error ? `: ${hook.error}` : ""}`);
+  if (!hook.ok) notes.push(`lefthook activation needs attention; task finish will still run pre-commit directly${hook.error ? `: ${hook.error}` : ""}`);
   taskState.saveBaseline(plan.worktree);
   return { ok: true, command: "start", ...plan, notes, next: "node hooks/task.js check" };
 }
@@ -124,6 +124,11 @@ function finish(root, args) {
   const notes = [];
   if (args.commit) {
     git(root, ["add", "-A"]);
+    const stagedAfterAdd = runInherited("git", ["diff", "--cached", "--check"], root);
+    if (!stagedAfterAdd.ok) return { ok: false, command: "finish", worktree: root, notes: ["staged diff check failed after git add"], code: stagedAfterAdd.code };
+    const lefthook = process.platform === "win32" ? "lefthook.cmd" : "lefthook";
+    const preCommit = runInherited(lefthook, ["run", "pre-commit", "--force"], root);
+    if (!preCommit.ok) return { ok: false, command: "finish", worktree: root, notes: ["pre-commit checks failed"], code: preCommit.code };
     const committed = runInherited("git", ["commit", "-m", args.commit], root);
     if (!committed.ok) return { ok: false, command: "finish", worktree: root, notes: ["commit failed"], code: committed.code };
     notes.push("changes committed; push remains explicit");
