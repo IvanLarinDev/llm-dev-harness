@@ -28,6 +28,7 @@ const DEFAULT_MOCKUPS = {
   manifestFile: "DESIGN.json",
   approvalFile: "APPROVED",
   waiverFile: "WAIVER.json",
+  cosmeticFile: "COSMETIC.json",
 };
 const DEFAULT_PROTECTED = [
   "hooks/", ".harness/", "lefthook.yml", "harness.config.json", ".gitleaks.toml", "cog.toml",

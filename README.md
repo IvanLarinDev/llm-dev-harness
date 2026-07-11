@@ -53,6 +53,7 @@ unrelated themes for every UI-path change.
 | Change type | Required evidence |
 |---|---|
 | Backend with no UI impact | None. `design-gate.js` skips when no changed path matches `ui.globs` after `ui.exclude`. |
+| Cosmetic fix | One scoped `COSMETIC.json` with approval and screenshot/regression/manual verification. |
 | Animation, low cost | Four written motion variants for one concrete scenario. |
 | Animation, high fidelity | Four executable HTML/JavaScript motion prototypes. |
 | Existing UI element or flow | The current visual language with four layout, placement, or interaction alternatives. |
@@ -65,6 +66,7 @@ node hooks/new-mockups.js <feature> --kind existing-ui --baseline <repo-path>
 node hooks/new-mockups.js <feature> --kind new-ui
 node hooks/new-mockups.js <feature> --kind animation --fidelity text --example "<scenario>"
 node hooks/new-mockups.js <feature> --kind animation --fidelity js --example "<scenario>"
+node hooks/new-mockups.js <feature> --kind cosmetic --ui <path> --reason "<why low risk>" --verification "<evidence>" --approved-by <source>
 node hooks/new-mockups.js <feature> --kind backend
 ```
 
@@ -147,9 +149,19 @@ hard gate.
 ## Verify
 
 ```bash
+node hooks/task.js start <slug>
+node hooks/task.js status
+node hooks/task.js check
+node hooks/task.js finish
+node hooks/task.js report
+node hooks/task.js report --json
+node hooks/task.js finish --commit "feat(scope): subject"
 node hooks/test.js
+node hooks/test.js --only verify,doctor
 node hooks/test.js --repeat 3
-node hooks/verify.js [--list]
+node hooks/verify.js --mode fast --base origin/main
+node hooks/verify.js --mode full
+node hooks/verify.js --mode release --base origin/main
 node hooks/verify.js --changed --base origin/main
 node hooks/design-gate.js --base origin/main
 node hooks/release-start.js --base origin/main
@@ -166,6 +178,39 @@ node hooks/doctor.js --server
 node hooks/apply-ruleset.js --dry-run
 node hooks/apply-ruleset.js --check
 ```
+
+`task start` creates a temporary feature worktree when invoked on a protected
+base branch, activates Lefthook, and records pre-existing dirt. `task check`
+runs changed stacks and focused source-harness groups; `task finish` runs the
+full pre-push contract. Commit is optional and explicit, and push/merge/release
+are never inferred. `task status` is the one-screen health panel for the current
+worktree; `task report` summarizes changed, verified, remaining, and manual-test
+handoff notes, with `--json` for automation.
+
+## Papercuts
+
+This source repository tracks agent-facing friction in the append-only
+`.papercuts.jsonl` log. Install the CLI with `cargo install papercuts`, then file
+an actionable report from a feature branch without interrupting the current
+task:
+
+```bash
+papercuts add "verify output hid the failing subcommand" --tag verify --severity major
+papercuts list --format md
+papercuts resolve pc_1234 --note "fixed by reporting the failed step"
+```
+
+Do not put credentials, tokens, private data, or raw secret-bearing output in a
+papercut. Gitleaks scans the log before commit, and `.gitattributes` uses Git's
+union merge driver so concurrent appends survive branch merges.
+
+Every tagged source release renders the log into a deterministic, Markdown-safe
+snapshot directly in the GitHub Release notes. The release workflow reads JSONL
+directly, so GitHub Actions does not need Rust or the Papercuts binary. Contract
+v1 stores absolute `cwd`/`repo` in tracked mode; use `PAPERCUTS_FILE` outside the
+repository when publishing those paths is not acceptable. The release snapshot
+also groups open records into automation candidates so repeated friction becomes
+visible follow-up work instead of background noise.
 
 ## Branch lifecycle
 

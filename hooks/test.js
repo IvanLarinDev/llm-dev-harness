@@ -39,6 +39,21 @@ function cases(title, list, run) {
   console.log("\n" + title + ":");
   for (const c of list) ok(run(c), c.name);
 }
+const TEST_GROUPS = ["configs", "guard", "design-gate", "verify", "doctor", "release", "topology", "task", "stop-reminder", "installer", "hygiene"];
+const onlyIndex = process.argv.indexOf("--only");
+const ONLY = onlyIndex >= 0
+  ? String(process.argv[onlyIndex + 1] || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean)
+  : null;
+if (process.argv.includes("--list")) {
+  console.log("test groups:");
+  for (const group of TEST_GROUPS) console.log("  " + group);
+  process.exit(0);
+}
+function runGroup(name) {
+  const selected = !ONLY || ONLY.some((value) => name.includes(value) || value.includes(name));
+  if (!selected) console.log(`\n[skip] ${name}`);
+  return selected;
+}
 function runHook(hookPath, payloadObj, env = {}) {
   try {
     execFileSync("node", [hookPath], {
@@ -82,6 +97,9 @@ const releaseStart = require(RELEASE_START);
 const repoStateAudit = require(REPO_STATE_AUDIT);
 const githubBranchCleanup = require(GITHUB_BRANCH_CLEANUP);
 const releaseCleanup = require(RELEASE_CLEANUP);
+const papercutsRelease = require(path.join(REPO, "scripts", "papercuts-release.js"));
+const taskCoordinator = require(path.join(__dirname, "task.js"));
+const taskState = require(path.join(__dirname, "task-state.js"));
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -108,6 +126,7 @@ const gexit = (payload, env = {}) => grun(payload, env).exitCode;
 function gout(payload, env = {}) { const r = grun(payload, env); return String(r.stdout) + String(r.stderr); }
 
 // ---------- delegated tool configs ----------
+if (runGroup("configs")) {
 console.log("\nconfigs (lefthook + gitleaks + cocogitto + ruleset + ci):");
 const lh = readRepo("lefthook.yml");
 ok(/commit-msg:/.test(lh) && /cog verify/.test(lh), "lefthook commit-msg -> cog verify (conventional)");
@@ -176,8 +195,10 @@ ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &
    /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
    /uses:\s*actions\/setup-go@[0-9a-f]{40}\s*# actions\/setup-go@v\d/.test(ci),
   "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
-ok(/actions\/setup-go@[\s\S]*go-version:\s*"1\.24\.x"[\s\S]*cache:\s*false/.test(ci),
-  "CI: setup-go disables module caching when Go is only a tool bootstrap");
+ok(/actions\/setup-go@[\s\S]*go-version:\s*"1\.25\.x"[\s\S]*cache:\s*false/.test(ci),
+  "CI: setup-go uses the actionlint-compatible Go toolchain and disables module caching");
+ok(/ACTIONLINT_VERSION:\s*"v1\.7\.12"/.test(ci) && /go install github\.com\/rhysd\/actionlint\/cmd\/actionlint@\$ACTIONLINT_VERSION/.test(ci),
+  "CI pins actionlint and validates workflow syntax without a local dependency");
 ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/zricethezav\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
   "CI: gitleaks installs through Go on the Windows runner");
 ok(/AGENTSHIELD_INTEGRITY:\s*"sha512-/.test(ci) && /NPM_CONFIG_IGNORE_SCRIPTS:\s*"true"/.test(ci),
@@ -237,8 +258,39 @@ ok(/git archive/.test(releaseWorkflow) && /Get-FileHash[^\n]*SHA256/.test(releas
    /Expand-Archive/.test(releaseWorkflow) && /release-evidence\.json/.test(releaseWorkflow) &&
    /smokePassed/.test(releaseWorkflow) && /gh release (?:create|upload)/.test(releaseWorkflow),
 "release workflow builds, checksums, smoke-tests, records evidence, and publishes a source ZIP");
+ok(/\.papercuts\.jsonl\s+text eol=lf merge=union export-ignore/.test(readRepo(".gitattributes")) &&
+   /papercuts add/.test(readRepo("AGENTS.md")),
+"papercuts integration tracks append-only reports with agent guidance and union merges");
+ok(/scripts\/papercuts-release\.js/.test(releaseWorkflow) && /PAPERCUTS_PATH/.test(releaseWorkflow) &&
+   /papercuts-release-digest/.test(releaseWorkflow) && /gh release edit/.test(releaseWorkflow),
+"release workflow publishes and links the Papercuts snapshot");
+const papercutId = "pc_0123456789ab";
+const resolvedPapercutId = "pc_abcdef012345";
+const papercutsFolded = papercutsRelease.foldLog([
+  JSON.stringify({ kind: "resolve", id: resolvedPapercutId, ts: "2026-07-11T02:00:00.000Z", agent: "codex", note: "fixed" }),
+  JSON.stringify({ kind: "cut", id: papercutId, ts: "2026-07-11T01:00:00.000Z", agent: "codex", text: "pipe | and <markup>", tags: ["verify"], severity: "major", cwd: "C:\\repo", repo: "C:\\repo" }),
+  JSON.stringify({ kind: "cut", id: resolvedPapercutId, ts: "2026-07-10T01:00:00.000Z", agent: "codex", text: "resolved friction", tags: [], severity: "minor", cwd: "C:\\repo", repo: "C:\\repo" }),
+  JSON.stringify({ kind: "future" }),
+  "",
+].join("\n"));
+const papercutsDigest = papercutsRelease.renderDigest(papercutsFolded, { tag: "v1.2.3", repository: "owner/repo" });
+const papercutsCandidates = papercutsRelease.automationCandidates(papercutsFolded);
+ok(papercutsFolded.items.length === 2 && papercutsFolded.items[0].status === "open" &&
+   papercutsFolded.items[1].status === "resolved" && papercutsFolded.warnings.length === 1 &&
+   /Papercuts snapshot for v1\.2\.3/.test(papercutsDigest) && /pipe \\| and &lt;markup&gt;/.test(papercutsDigest) &&
+   /Resolved \| 1/.test(papercutsDigest) && /Automation candidates/.test(papercutsDigest) &&
+   papercutsCandidates.length === 1 && papercutsCandidates[0].label === "verify",
+"Papercuts release digest folds first-wins JSONL, escapes Markdown, and reports status counts");
+const malformedPapercut = papercutsRelease.foldLog(JSON.stringify({ kind: "cut", id: papercutId, ts: "2026-07-11", agent: "codex", text: "bad timestamp", tags: [], severity: "minor", cwd: "C:\\repo", repo: null }) + "\n");
+ok(malformedPapercut.items.length === 0 && /malformed/.test(malformedPapercut.warnings[0] || ""),
+  "Papercuts release digest rejects records outside strict contract-v1 RFC3339 milliseconds");
+const activeMarkdown = papercutsRelease.renderDigest({ items: [{ status: "open", resolution: null, cut: { id: papercutId, ts: "2026-07-11T01:00:00.000Z", agent: "codex", text: "[click](https://example.invalid) ![pixel](https://example.invalid/p.png)", tags: [], severity: "minor" } }], warnings: [] }, { tag: "v1.2.3", repository: "owner/repo" });
+ok(!/\[click\]\(https:/.test(activeMarkdown) && /\\\[click\\\]/.test(activeMarkdown),
+  "Papercuts release digest renders record text as inert Markdown");
 
+}
 // ---------- no-coauthor policy ----------
+if (runGroup("guard")) {
 console.log("\nno-coauthor policy:");
 const noCoauthor = require(NO_COAUTHOR);
 ok(noCoauthor.hasForbiddenTrailer("Co-Authored-By: Claude <noreply@anthropic.com>"), "detects Co-Authored-By");
@@ -359,7 +411,7 @@ ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node h
 console.log("\nguard: stream corruption:");
 ok(bp("cd /x && echo garbage 183<tool_call>") === 2, "guard stream corruption assertion 1");
 ok(bp("echo garbage </tool_use> x") === 2, "guard stream corruption assertion 2");
-ok(bp("echo a echo a echo a echo a echo a") === 2, "guard stream corruption assertion 3");
+ok(bp("echo a echo a echo a echo a echo a") === 0, "guard stream corruption assertion 3");
 ok(bp("cat > a.html <<EOF\n<toolbar>hi</toolbar>\nEOF") === 0, "guard stream corruption assertion 4");
 
 // ---------- guard: shell loops ----------
@@ -367,7 +419,7 @@ console.log("\nguard: shell loops:");
 let S = sess("triv");
 let last = 0;
 for (const c of ["echo a", "echo b", "ls", "pwd", "echo c"]) last = gexit({ tool_name: "Bash", tool_input: { command: c } }, S);
-ok(last === 2, "guard shell loops assertion 1");
+ok(last === 0, "guard shell loops assertion 1");
 S = sess("real-reset");
 gexit({ tool_name: "Bash", tool_input: { command: "echo a" } }, S);
 gexit({ tool_name: "Bash", tool_input: { command: "npm run build -- --verbose" } }, S);
@@ -375,13 +427,13 @@ for (const c of ["echo b", "echo c", "ls"]) last = gexit({ tool_name: "Bash", to
 ok(last === 0, "guard shell loops assertion 2");
 S = sess("ident");
 for (let i = 0; i < 5; i++) last = gexit({ tool_name: "Bash", tool_input: { command: "npm run build -- --verbose" } }, S);
-ok(last === 2, "guard shell loops assertion 3");
+ok(last === 0, "guard shell loops assertion 3");
 S = sess("alt");
 for (let i = 0; i < 5; i++) {
   gexit({ tool_name: "Bash", tool_input: { command: "npm test -- --run-suite alpha" } }, S);
   last = gexit({ tool_name: "Bash", tool_input: { command: "git diff --stat HEAD~1" } }, S);
 }
-ok(last === 2, "guard shell loops assertion 4");
+ok(last === 0, "guard shell loops assertion 4");
 S = sess("alt-break");
 for (let i = 0; i < 4; i++) {
   gexit({ tool_name: "Bash", tool_input: { command: "npm test -- --run-suite alpha" } }, S);
@@ -394,7 +446,7 @@ ok(last === 0, "guard shell loops assertion 5");
 console.log("\nguard: file-tool loops:");
 S = sess("ft");
 for (let i = 0; i < 12; i++) last = gexit({ tool_name: "Read", tool_input: { file_path: "/tmp/same.txt" } }, S);
-ok(last === 2, "guard file tool loops assertion 1");
+ok(last === 0, "guard file tool loops assertion 1");
 S = sess("ft2");
 for (let i = 0; i < 11; i++) gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/a.py" } }, S);
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: "/tmp/b.py" } }, S) === 0, "guard file tool loops assertion 2");
@@ -419,14 +471,14 @@ ok(ed("hooks2/readme.md") === 0, "guard protected harness files assertion 10");
 // ---------- guard: lint-config protection (ECC config-protection pattern) ----------
 console.log("\nguard: lint-config protection:");
 fs.writeFileSync(path.join(NEUTRAL, ".eslintrc.json"), "{}");
-ok(ed(".eslintrc.json") === 2, "guard lint config protection assertion 1");
+ok(ed(".eslintrc.json") === 0, "guard lint config protection assertion 1");
 ok(ed("ruff.toml") === 0, "guard lint config protection assertion 2");
 ok(ed(".eslintrc.json", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard lint config protection assertion 3");
 ok(ed("pyproject.toml") === 0, "guard lint config protection assertion 4");
-ok(bp("sed -i 's/select/ignore/' ruff.toml") === 2, "guard lint config protection assertion 5");
-ok(bp("Set-Content src\\.eslintrc.json -Value x") === 2, "guard lint config protection assertion 6");
-ok(bp("del ruff.toml") === 2, "guard lint config protection assertion 7");
-ok(bp("echo lax >> src/.eslintrc.json") === 2, "guard lint config protection assertion 8");
+ok(bp("sed -i 's/select/ignore/' ruff.toml") === 0, "guard lint config protection assertion 5");
+ok(bp("Set-Content src\\.eslintrc.json -Value x") === 0, "guard lint config protection assertion 6");
+ok(bp("del ruff.toml") === 0, "guard lint config protection assertion 7");
+ok(bp("echo lax >> src/.eslintrc.json") === 0, "guard lint config protection assertion 8");
 ok(bp("cat ruff.toml") === 0, "guard lint config protection assertion 9");
 ok(bp("rm myruff.toml") === 0, "guard lint config protection assertion 10");
 ok(bp("echo x > src/hooks/useAuth.ts") === 0, "guard lint config protection assertion 11");
@@ -483,6 +535,11 @@ for (let i = 0; i < 3; i++) lastP = gexit({ tool_name: "Bash", tool_input: { com
 ok(lastP === 2, "guard strictness profiles assertion 5");
 ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf6"), HARNESS_DISABLED_CHECKS: "lintconfig" }) === 0,
   "guard strictness profiles assertion 6");
+ok(gexit({ tool_name: "Edit", tool_input: { file_path: ".eslintrc.json" } }, { ...sess("pf7"), HARNESS_PROFILE: "strict" }) === 2,
+  "strict profile keeps lint-config edits blocking");
+let advisoryLoop = sess("pf8"), advisoryOutput = "";
+for (let i = 0; i < 5; i++) advisoryOutput = gout({ tool_name: "Bash", tool_input: { command: "npm run build -- --verbose" } }, advisoryLoop);
+ok(/looks like a loop/i.test(advisoryOutput), "standard profile reports loops without blocking");
 
 // ---------- guard: DESIGN note ----------
 console.log("\nguard: design note:");
@@ -523,11 +580,13 @@ function runRaw(hookPath, rawStr, env = {}) {
 ok(runRaw(GUARD, "{broken json...", sess("fc1")) === 2, "guard fail closed input assertion 1");
 ok(runRaw(GUARD, "", sess("fc2")) === 0, "guard fail closed input assertion 2");
 
+}
 // ---------- design-gate ----------
+if (runGroup("design-gate")) {
 console.log("\ndesign-gate:");
-function gate(root, files) {
+function gate(root, files, extra = []) {
   try {
-    execFileSync("node", [DESIGN_GATE, "--root", root, "--files", files.join(",")], { encoding: "utf8", stdio: "pipe" });
+    execFileSync("node", [DESIGN_GATE, "--root", root, "--files", files.join(","), ...extra], { encoding: "utf8", stdio: "pipe" });
     return 0;
   } catch (e) { return e.status || 1; }
 }
@@ -544,6 +603,8 @@ function mockupExit(root, args) {
 }
 const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-design-"));
 ok(gate(dtmp, ["src/ui/main_window.ui"]) === 1, "design gate assertion 1");
+ok(gate(dtmp, ["src/ui/main_window.ui"], ["--advisory"]) === 0,
+  "design gate advisory mode warns during the inner loop without blocking");
 ok((gateResult(dtmp, ["src/Dropwheel/UI/Foo.xaml"]).uiChanged || []).includes("src/Dropwheel/UI/Foo.xaml"),
   "design gate assertion 2");
 ok(gate(dtmp, ["src/core/logic.py"]) === 0, "design gate assertion 3");
@@ -642,6 +703,15 @@ ok(gate(dtmp, ["src/ui/current-panel.ui", "design/mockups/existing-panel/APPROVE
   "design gate rejects existing-ui evidence with a missing baseline");
 fs.writeFileSync(baselinePath, "<ui/>\n");
 
+ok(mockupExit(dtmp, ["copy-fix", "--kind", "cosmetic", "--ui", "src/ui/current-panel.ui",
+  "--reason", "Copy-only correction with no interaction change", "--verification", "manual screenshot checked", "--approved-by", "user"]) === 0,
+"cosmetic scaffold captures one approved low-risk verification instead of four variants");
+const cosmeticDir = path.join(dtmp, "design", "mockups", "copy-fix");
+const cosmetic = JSON.parse(fs.readFileSync(path.join(cosmeticDir, "COSMETIC.json"), "utf8"));
+ok(cosmetic.uiPaths[0] === "src/ui/current-panel.ui" && cosmetic.approvedBy === "user" &&
+   gateResult(dtmp, ["src/ui/current-panel.ui", "design/mockups/copy-fix/COSMETIC.json"]).mockups.kind === "cosmetic",
+"design gate accepts scoped cosmetic evidence without unrelated visual variants");
+
 ok(mockupExit(dtmp, ["reorder-motion-text", "--kind", "animation", "--fidelity", "text", "--example", "Tile A moves before Tile B"]) === 0,
   "animation/text scaffold is generated for a concrete example");
 const motionTextDir = path.join(dtmp, "design", "mockups", "reorder-motion-text");
@@ -724,10 +794,17 @@ ok(strictExit === 1 && strictJson.skipped === true && strictJson.ok === false,
 try { fs.rmSync(noGit, { recursive: true, force: true }); } catch {}
 try { fs.rmSync(dtmp, { recursive: true, force: true }); } catch {}
 
+}
 // ---------- verify runner ----------
+if (runGroup("verify")) {
 console.log("\nverify runner:");
 ok(typeof verifyCore.planVerifyTargets === "function" && typeof verifyCore.debugAudit === "function",
   "verify-core exports planning and audit policy");
+const stopGroups = verifyCore.testGroupsForFiles(["hooks/agent/stop-reminder.js"]);
+ok(stopGroups.includes("guard") && stopGroups.includes("stop-reminder") && stopGroups.includes("hygiene") && !stopGroups.includes("release"),
+  "fast VERIFY maps changed harness files to focused self-test groups");
+const taskGroups = verifyCore.testGroupsForFiles(["hooks/task.js"]);
+ok(taskGroups.join(",") === "task,hygiene", "fast VERIFY isolates task coordinator tests plus hygiene");
 const sourceIntegrityTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-source-integrity-"));
 fs.mkdirSync(path.join(sourceIntegrityTmp, "hooks"));
 fs.writeFileSync(path.join(sourceIntegrityTmp, "install.js"), "// source marker\n");
@@ -929,7 +1006,9 @@ ok(dbgExit("hooks/comment.js", {}) === 0, "debug audit assertion 11");
 ok(verifyExitArgs(dbgtmp, ["--strict-audit"]) === 1, "debug audit assertion 12");
 try { fs.rmSync(dbgtmp, { recursive: true, force: true }); } catch {}
 
+}
 // ---------- doctor ----------
+if (runGroup("doctor")) {
 console.log("\ndoctor:");
 const DOCTOR = path.join(__dirname, "doctor.js");
 function doctor(root) {
@@ -941,6 +1020,8 @@ execFileSync("git", ["init", "-q"], { cwd: drepo });
 let dres = doctor(drepo);
 ok((dres.results || []).some((r) => /atomic lock operations/.test(r.msg) && r.level === "PASS"),
   "doctor: .git supports write+unlink lock operations -> PASS on a normal filesystem");
+ok(typeof dres.blocked === "boolean" && typeof dres.envs === "number" && typeof dres.environmentCode === "number",
+  "doctor JSON separates repository blocking state from environment classification");
 fs.writeFileSync(path.join(drepo, ".git", "index.lock"), "");
 dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
@@ -1105,7 +1186,9 @@ ok((dres.results || []).some((result) => /missing:.*hooks\/test\.js/.test(result
   "doctor source integrity: missing test file and self-test config fail closed");
 fs.rmSync(sourceDoctorRepo, { recursive: true, force: true });
 
+}
 // ---------- release start ----------
+if (runGroup("release")) {
 console.log("\nrelease start:");
 function releaseStartRepo() {
   const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-release-start-origin-"));
@@ -1651,7 +1734,9 @@ ok(postMerge.ok === true && postMerge.deletedLocal.includes("feat/local-accepted
 "post-merge cleanup deletes a branch merged into local main when origin/main is stale");
 try { fs.rmSync(cleanupRoot, { recursive: true, force: true }); } catch {}
 
+}
 // ---------- repository topology audit ----------
+if (runGroup("topology")) {
 console.log("\nrepository topology audit:");
 ok(repoStateAudit.commandTimeoutMs({ remote: true }) === 60000 &&
    repoStateAudit.commandTimeoutMs() === 10000,
@@ -1759,13 +1844,76 @@ ok(topology.ok === false && topology.issues.some((item) => item.code === "base_m
   "topology audit rejects different development and accepted main SHAs");
 try { fs.rmSync(topologyRoot, { recursive: true, force: true }); } catch {}
 
+}
+// ---------- task coordinator ----------
+if (runGroup("task")) {
+console.log("\ntask coordinator:");
+const parsedTask = taskCoordinator.parseArgs(["start", "fix-login", "--base", "origin/main", "--dry-run"]);
+ok(parsedTask.errors.length === 0 && parsedTask.slug === "fix-login" && parsedTask.dryRun,
+  "task start parses an explicit safe slug and dry-run");
+ok(taskCoordinator.parseArgs(["start", "Bad Slug"]).errors.length > 0,
+  "task start rejects unsafe branch slugs");
+ok(taskCoordinator.parseArgs(["report", "--json"]).errors.length === 0,
+  "task report is available as a machine-readable handoff");
+const taskRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-task-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: taskRepo });
+execFileSync("git", ["config", "user.email", "task@example.test"], { cwd: taskRepo });
+execFileSync("git", ["config", "user.name", "Task Test"], { cwd: taskRepo });
+fs.writeFileSync(path.join(taskRepo, "README.md"), "base\n");
+fs.mkdirSync(path.join(taskRepo, ".github", "workflows"), { recursive: true });
+fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: ci\n");
+execFileSync("git", ["add", "."], { cwd: taskRepo });
+execFileSync("git", ["commit", "-q", "-m", "chore: init"], { cwd: taskRepo });
+const taskPlan = taskCoordinator.startPlan(taskRepo, { slug: "assist", base: "main", branch: "", dir: "" });
+ok(taskPlan.createWorktree && taskPlan.branch === "codex/assist" && taskPlan.base === "main",
+  "task start plans an isolated worktree from protected main");
+ok(!taskCoordinator.commitBranch(taskRepo).allowed,
+  "task finish refuses an automated commit on protected main");
+ok(readRepo("hooks/task.js").includes('["run", "pre-commit", "--force"]'),
+  "task finish runs pre-commit directly even when hook activation is unavailable");
+if (process.platform === "win32") {
+  const cmdHook = path.join(taskRepo, "ok.cmd");
+  fs.writeFileSync(cmdHook, "@echo off\r\nexit /b 0\r\n");
+  ok(taskCoordinator.runInherited(cmdHook, [], taskRepo).ok,
+    "task runner executes Windows .cmd hooks without spawn EINVAL");
+}
+fs.writeFileSync(path.join(taskRepo, "README.md"), "pre-existing\n");
+taskState.saveBaseline(taskRepo);
+ok(taskState.unchangedFromBaseline(taskRepo), "task baseline recognizes unchanged pre-existing dirt");
+fs.writeFileSync(path.join(taskRepo, "README.md"), "agent changed it\n");
+fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: changed\n");
+ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline detects changes made after start");
+taskState.recordEvent(taskRepo, { kind: "check", ok: true, base: "main", branch: "main", commands: ["node hooks/verify.js --mode fast --base main"] });
+const taskStatus = taskCoordinator.worktreeStatus(taskRepo, { command: "status", base: "main" });
+ok(taskStatus.ok === false && /protected main has local dirt/.test(taskStatus.health.items.join("\n")),
+  "task status highlights dirty protected main before more work");
+ok(taskStatus.status.dirty.some((entry) => entry.path === ".github/workflows/ci.yml"),
+  "task status preserves leading-dot paths in porcelain output");
+const taskReport = taskCoordinator.report(taskRepo, { command: "report", base: "main" });
+ok(taskReport.report.changed.some((line) => /working-tree change/.test(line)) &&
+   taskReport.report.verified.some((line) => /check passed/.test(line)) &&
+   taskReport.report.remaining.some((line) => /feature\/release worktree/.test(line)),
+  "task report summarizes changed, verified, and remaining work");
+fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "first\n");
+taskState.saveBaseline(taskRepo);
+fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "second\n");
+ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline hashes non-ASCII untracked paths without Git quoting loss");
+taskState.clearBaseline(taskRepo);
+try { fs.rmSync(taskState.eventFile(taskRepo), { force: true }); } catch {}
+try { fs.rmSync(taskRepo, { recursive: true, force: true }); } catch {}
+}
 // ---------- stop-reminder ----------
+if (runGroup("stop-reminder")) {
 console.log("\nstop-reminder:");
 const stopRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo });
 let stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
 ok(stopOut.trim() === "", "stop reminder assertion 1");
 fs.writeFileSync(path.join(stopRepo, "wip.txt"), "x");
+taskState.saveBaseline(stopRepo);
+stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
+ok(stopOut.trim() === "", "stop reminder ignores unchanged pre-task dirt recorded by task start");
+fs.writeFileSync(path.join(stopRepo, "wip.txt"), "changed after baseline");
 stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopRepo });
 ok(/VERIFY/.test(stopOut) && /wip\.txt/.test(stopOut), "stop reminder assertion 2");
 ok(/"decision"\s*:\s*"block"/.test(stopOut), "stop reminder assertion 3");
@@ -1778,6 +1926,7 @@ ok(/another\.txt/.test(stopOut) && /"decision"\s*:\s*"block"/.test(stopOut),
 stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: stopRepo });
 ok(stopOut.trim() === "", "stop reminder assertion 6");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
+taskState.clearBaseline(stopRepo);
 const stopRepo2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-explained-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo2 });
 fs.mkdirSync(path.join(stopRepo2, "hooks"), { recursive: true });
@@ -1803,7 +1952,9 @@ stopOut = hookOutput(STOP, { transcript_path: transcript2 }, { HARNESS_PROJECT_D
 ok(stopOut.trim() === "", "review-only report explains dirty tree -> Stop does not override the final answer");
 try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcript2, { force: true }); } catch {}
 
+}
 // ---------- installer (install.js) ----------
+if (runGroup("installer")) {
 console.log("\ninstaller:");
 const INSTALL = path.join(REPO, "install.js");
 function installArgs(args, cwd = REPO) {
@@ -1849,7 +2000,7 @@ const enforceableGate = installJson(itmp, ["--require-enforceable"]);
 ok(enforceableGate.ok === false && enforceableGate.installed === true && enforceableGate.bootstrapRequired === true &&
    /not-enforceable/.test(enforceableGate.reason || ""),
   "install: --require-enforceable turns bootstrap-pending into an automation failure");
-ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-state.js")) && fs.existsSync(path.join(itmp, "hooks", "github-branch-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
+ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "task.js")) && fs.existsSync(path.join(itmp, "hooks", "task-state.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-state.js")) && fs.existsSync(path.join(itmp, "hooks", "github-branch-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 const installManifest = JSON.parse(fs.readFileSync(path.join(itmp, ".harness", "installation.json"), "utf8"));
 ok(installManifest.schemaVersion === 1 && installManifest.managed["hooks/agent/guard.js"] &&
    installManifest.ownership.projectOwned.includes("harness.config.json"),
@@ -2029,7 +2180,9 @@ try {
   fs.rmSync(invalidArgsTarget, { recursive: true, force: true });
 } catch {}
 
+}
 // ---------- hygiene: NUL bytes ----------
+if (runGroup("hygiene")) {
 console.log("\nsource hygiene:");
 function walk(dir) {
   const out = [];
@@ -2070,16 +2223,17 @@ for (const rel of ["AGENTS.md", "README.md"]) {
   ok(d.exists && d.noReplacement, rel + "docs integrity assertion 4");
 }
 const agentsDoc = docCheck("AGENTS.md");
-ok(agentsDoc.exists && /^##\s+Env\b/m.test(agentsDoc.text),
+ok(agentsDoc.exists && /node hooks\/task\.js start/.test(agentsDoc.text) && /docs\/release-flow\.md/.test(agentsDoc.text),
   "docs integrity assertion 5");
-ok(agentsDoc.exists && /one canonical repository directory/.test(agentsDoc.text) &&
-   /Never\s+create or depend on a persistent sibling such as `<repo>-main`/.test(agentsDoc.text),
+ok(agentsDoc.exists && /one\s+persistent canonical checkout/.test(agentsDoc.text) &&
+   /temporary feature\/release\s+worktrees must be removed/.test(agentsDoc.text),
   "docs require a single persistent canonical checkout by default");
 const targetAgentsDoc = docCheck("templates/AGENTS.target.md");
 ok(targetAgentsDoc.exists && /one persistent canonical project directory/.test(targetAgentsDoc.text) &&
    /never create a persistent sibling `<repo>-main`/.test(targetAgentsDoc.text),
   "target policy forbids implicit persistent accepted-main clones");
 
+}
 try { fs.rmSync(NEUTRAL, { recursive: true, force: true }); } catch {}
 console.log(`\n${fail ? "FAIL" : "PASS"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

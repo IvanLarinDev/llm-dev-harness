@@ -51,6 +51,9 @@ function checkEnabled(id, env) {
   if (off.includes(id)) return false;
   return PROFILES[getProfile(env)].has(id);
 }
+function advisoryInStandard(id, env) {
+  return getProfile(env) === "standard" && new Set(["lintconfig", "entropy", "loops"]).has(id);
+}
 function envAllow(env, name) {
   return ["1", "true", "yes", "on"].includes(String(env[name] || "").trim().toLowerCase());
 }
@@ -145,15 +148,15 @@ function loopCheck(st, p, T) {
   const rep = tailRepeat(st.hist);
   if (rep >= T) {
     writeState(p, { hist: [], streak: 0, seen: st.seen });
-    return blockRes(`guard: same action repeated ${rep} times; this looks like a loop.\n` +
+    return `guard: same action repeated ${rep} times; this looks like a loop.\n` +
       `   ${st.hist[st.hist.length - 1].slice(0, 120)}\n` +
-      `   Stop, compare with the plan/TodoWrite, and change approach. Threshold: ${T}.`);
+      `   Stop, compare with the plan/TodoWrite, and change approach. Threshold: ${T}.`;
   }
   const alt = tailAlt(st.hist);
   if (alt >= 2 * T) {
     writeState(p, { hist: [], streak: 0, seen: st.seen });
-    return blockRes(`guard: two actions alternated for ${alt} steps (A-B-A-B); this is a no-progress loop.\n` +
-      `   Stop, compare with the plan/TodoWrite, and change approach. Threshold: ${2 * T}.`);
+    return `guard: two actions alternated for ${alt} steps (A-B-A-B); this is a no-progress loop.\n` +
+      `   Stop, compare with the plan/TodoWrite, and change approach. Threshold: ${2 * T}.`;
   }
   return null;
 }
@@ -222,15 +225,16 @@ function run(ctx, env = process.env) {
       const scrubbed = scrubQuotes(command);
       const pathScan = unquoteShellPaths(scrubGitMessageArgs(command));
 
-      // 1) harness bypass or shell writes to protected paths and lint configs
-      const hit =
+      // 1) hard safety boundaries stay blocking; standard-mode lint policy is advisory.
+      const hardHit =
         (checkEnabled("bypass", env) &&
           (BYPASS.find((b) => b.re.test(scrubbed)) ||
             (isGitHooksWrite(pathScan) ? { why: "direct write/delete under .git/hooks" } : null))) ||
         (checkEnabled("protected", env) && isProtectedShellWrite(pathScan, cfg.protected)
-          ? { why: "shell write to harness files (hooks/, configs, workflows)" } : null) ||
-        (checkEnabled("lintconfig", env) && isLintConfigShellWrite(pathScan, cfg.lintConfigs)
-          ? { why: "shell write to lint/format config; fix code instead of weakening config" } : null);
+          ? { why: "shell write to harness files (hooks/, configs, workflows)" } : null);
+      const lintHit = checkEnabled("lintconfig", env) && isLintConfigShellWrite(pathScan, cfg.lintConfigs)
+        ? { why: "shell write to lint/format config; review why project policy must change" } : null;
+      const hit = hardHit || (lintHit && !advisoryInStandard("lintconfig", env) ? lintHit : null);
       if (hit) {
         if (envAllow(env, "HARNESS_ACK_BYPASS")) {
           notes.push(`guard: harness bypass was explicitly approved by the user: ${hit.why}. Explain this in the report.`);
@@ -238,6 +242,7 @@ function run(ctx, env = process.env) {
           return blockRes(`guard: command bypasses the harness; blocked.\n   Reason: ${hit.why}.\n   ${BYPASS_HINT}`);
         }
       }
+      if (lintHit && advisoryInStandard("lintconfig", env)) notes.push(`guard advisory: ${lintHit.why}.`);
 
       // 1c) writes to harness files through inline interpreter eval.
       if (checkEnabled("protected", env)) {
@@ -259,7 +264,9 @@ function run(ctx, env = process.env) {
       }
       if (checkEnabled("entropy", env) && isLowEntropy(command)) {
         writeState(p, { hist: [], streak: 0, seen: st.seen });
-        return blockRes(`guard: command token entropy is abnormally low.\n   ${JSON.stringify(command.slice(0, 120))}`);
+        const message = `guard: command token entropy is abnormally low.\n   ${JSON.stringify(command.slice(0, 120))}`;
+        if (advisoryInStandard("entropy", env)) notes.push(message);
+        else return blockRes(message);
       }
 
       // 3) loops
@@ -269,11 +276,16 @@ function run(ctx, env = process.env) {
         if (st.hist.length > HIST_MAX) st.hist.shift();
         if (st.streak >= T_SH) {
           writeState(p, { hist: [], streak: 0, seen: st.seen });
-          return blockRes(`guard: ${st.streak} trivial commands in a row; this is a degenerate pattern.\n` +
-            `   Stop and make one meaningful step. Threshold: HARNESS_LOOP_THRESHOLD=${T_SH}.`);
+          const message = `guard: ${st.streak} trivial commands in a row; this is a degenerate pattern.\n` +
+            `   Stop and make one meaningful step. Threshold: HARNESS_LOOP_THRESHOLD=${T_SH}.`;
+          if (advisoryInStandard("loops", env)) notes.push(message);
+          else return blockRes(message);
         }
         const lr = loopCheck(st, p, T_SH);
-        if (lr) return lr;
+        if (lr) {
+          if (advisoryInStandard("loops", env)) notes.push(lr);
+          else return blockRes(lr);
+        }
         writeState(p, st);
       }
 
@@ -311,6 +323,8 @@ function run(ctx, env = process.env) {
         if (exists) {
           if (envAllow(env, "HARNESS_ACK_BYPASS")) {
             notes.push(`guard: lint config edit (${rel}) was explicitly approved by the user.`);
+          } else if (advisoryInStandard("lintconfig", env)) {
+            notes.push(`guard advisory: editing lint/format policy ${rel}; explain the project-policy reason in the report.`);
           } else {
             return blockRes(`guard: existing lint/format config edit blocked: ${rel}\n` +
               `   Fix failing gates in code instead of weakening config.\n` +
@@ -336,7 +350,10 @@ function run(ctx, env = process.env) {
         st.hist.push(tool.toLowerCase() + "::" + rel);
         if (st.hist.length > HIST_MAX) st.hist.shift();
         const lr = loopCheck(st, p, T_FT);
-        if (lr) return lr;
+        if (lr) {
+          if (advisoryInStandard("loops", env)) notes.push(lr);
+          else return blockRes(lr);
+        }
       }
       writeState(p, st);
 

@@ -1,372 +1,181 @@
-# AGENTS.md - Dev Loop
+# AGENTS.md - Assistive Dev Loop
 
-Every agent pass through code follows one loop. Anything that can be checked by
-code belongs in hooks; this document keeps the behavior that hooks cannot fully
-enforce.
+This harness should remove coordination work while keeping expensive boundaries
+safe. The inner loop is fast and advisory; commit, push, merge, and release gates
+remain strict.
 
-## Loop
+## Default loop
 
 ```text
-1. EXPLORE          - read the codebase, patterns, and risks
-2. PLAN             - plan -> user approval
-2.5 DESIGN (GUI)    - classify UI impact -> matching variants -> approval
-3. IMPLEMENT+TEST   - code and tests together; edge cases become tests
-4. VERIFY           - node hooks/verify.js + read output + git diff self-review
-   - failure/new warnings -> return to step 3
-   - green              -> step 5
-5. COMMIT on branch -> PR, never directly on main
-5.5 MERGE+CLEANUP   - confirmed MERGED + green main -> exact branch cleanup
-6. REPORT           - changed / verified / remaining / manual test notes
-7. USER DECISION    - accept = DONE; revise -> 2 or 3; reject -> revert
+1. EXPLORE        read relevant code, tests, and risks
+2. PLAN           get approval for non-trivial scope
+3. IMPLEMENT      code and tests together
+4. CHECK          node hooks/task.js check (fast, changed groups)
+5. FINISH         node hooks/task.js finish (full VERIFY + DESIGN)
+6. COMMIT/REPORT  feature branch only; push/PR only when authorized
+7. USER DECISION  accept, revise, or reject
 ```
 
-Shortcut: a trivial typo or one-line fix can skip plan mode, but VERIFY and a
-feature branch are always required.
+An explicit “do it”/“делай” approves normal reversible implementation steps in
+the stated scope; do not stop for a second approval unless authority expands,
+data could be lost, or a meaningful product choice is missing.
 
-## Bootstrap
-
-Before requiring this loop from a target repository, commit the harness to
-`main` through a separate bootstrap PR. Minimum set: `hooks/`, `AGENTS.md`,
-`.harness/installation.json`, `harness.config.json`, `lefthook.yml`,
-`.gitleaks.toml`, and `settings.example.json`; release and server-policy files
-are required only when their capabilities are enabled.
-
-`node hooks/doctor.js` checks not only that these files exist, but also that they
-are tracked in git. If harness files are untracked, a clean worktree from
-`origin/main` cannot run `node hooks/verify.js`, `design-gate.js`, or release
-through `cog bump --auto`. In that state, create the bootstrap PR first; release
-flow is not fully enforceable.
-
-Installer state is explicit: a successful first install exits zero with
-`installed=true`, `bootstrapRequired=true`, and `enforceable=false` until the
-bootstrap files are tracked. A missing local Lefthook is
-`activationRequired=true`, not a failed file install. Automation that requires the final state uses
-`install.js --require-enforceable`.
-
-## Universal Contract
-
-The harness is project-agnostic; Dropwheel is only a canary. Managed runtime is
-limited to `hooks/`, `lefthook.yml`, and `settings.example.json`, with hashes in
-`.harness/installation.json`. `AGENTS.md`, `harness.config.json`, `cog.toml`,
-`.gitleaks.toml`, `.gitattributes`, `CHANGELOG.md`, and `.github/` are
-project-owned and are never replaced by install/update/force. `--update` is
-hash-aware; `--replace-managed` explicitly replaces reviewed managed drift.
-
-`harness.config.json` schema version 2 selects UI, release, and server-policy
-capabilities independently. `none` disables a capability contract; do not infer
-GitHub, Cocogitto, source ZIPs, one-package SemVer, or a GUI from the presence of
-the harness. See `docs/universal-contract.md`.
-
-## Stage Rules
-
-**1. EXPLORE.** Do not assume structure. Verify it with `rg`, file reads, and
-existing tests. Changes across more than two or three files, or behavior changes,
-need a plan.
-
-**2. PLAN.** Non-trivial work goes through plan mode and user approval before
-implementation. The plan names the files, rationale, tests, risks, and edge
-cases.
-
-**2.5 DESIGN (GUI).** Classify the user-visible change before generating DESIGN
-evidence. Do not use four unrelated visual themes for every kind of UI work.
-
-- Backend-only work with no user-visible UI impact skips DESIGN. A mixed task
-  designs only its UI slice. `design-gate.js` skips automatically when no changed
-  file matches `harness.config.json -> ui.globs` after `ui.exclude`.
-- Animation uses one concrete scenario. The low-cost option is at least four
-  written motion variants (`--fidelity text`); use executable HTML/JavaScript
-  variants (`--fidelity js`) when timing, gesture, or physical feel cannot be
-  judged from prose.
-- Changes to an existing UI keep its real visual language and components while
-  comparing layouts, placement, or interaction patterns. Pass at least one
-  current UI source file through `--baseline`.
-- UI created from scratch compares at least four stylistically distinct visual
-  directions.
-
-Use one explicit mode; the generator has no generic default:
+Use the coordinator when possible:
 
 ```text
-node hooks/new-mockups.js <feature> --kind existing-ui --baseline <repo-path>
+node hooks/task.js start <slug>
+node hooks/task.js status
+node hooks/task.js check
+node hooks/task.js finish
+node hooks/task.js report
+node hooks/task.js finish --commit "feat(scope): subject"
+```
+
+`start` creates a temporary worktree from the accepted base when invoked on
+`main`, activates Lefthook, and records pre-existing dirt so read-only work does
+not trigger false Stop reminders. `status` shows branch health, local dirt,
+recent gates, and Papercuts follow-up candidates. `report` produces the changed /
+verified / remaining / manual-test handoff. `finish` never pushes, merges, or
+releases.
+
+## Boundaries
+
+- Inner work: focused tests, advisory DESIGN, advisory loop/lint-policy notes.
+- Commit: Gitleaks, branch guard, Conventional Commit, no AI trailers.
+- Push/CI: full VERIFY and hard DESIGN gate.
+- Release: exact tag, evidence, checksum, smoke, and cleanup contract.
+- Never bypass hooks, force-push, reset hard, or discard a dirty tree without
+  explicit authority.
+
+Work on `codex/*`, `feat/*`, `fix/*`, `docs/*`, or another configured managed
+prefix; never commit directly on `main`/`master`. A trivial typo may skip a
+formal plan, but still needs the relevant check and a feature branch.
+
+## Explore and edit
+
+- Verify structure with `rg`, file reads, and existing tests; do not assume it.
+- Read existing files/call sites before editing them.
+- Preserve user changes in a dirty worktree. Use a temporary worktree when
+  changes overlap or the canonical checkout is not clean.
+- Code and regression tests move together. If no runner exists, report it and
+  propose the smallest useful one.
+- Debug leftovers (`debugger`, `breakpoint`, `pdb.set_trace`, `dbg!`) fail VERIFY.
+
+## VERIFY
+
+```text
+node hooks/verify.js --mode fast --base origin/main
+node hooks/verify.js --mode full
+node hooks/verify.js --mode release --base origin/main
+node hooks/test.js --only verify,doctor
+node hooks/test.js --list
+```
+
+`fast` selects changed stacks and source-harness test groups. `full` is the
+pre-push/CI contract. `release` is full plus strict audit behavior. A failed or
+warning-producing run must be read, not judged only by its exit code.
+
+`doctor` distinguishes repository defects from environment provisioning:
+
+```text
+node hooks/doctor.js
+node hooks/doctor.js --strict-env
+node hooks/doctor.js --server
+```
+
+Missing tools/mount/network are visible `ENV` results and do not block locally
+unless `--strict-env` is requested. Real contract drift remains `FAIL`.
+
+## DESIGN
+
+Backend-only changes outside configured UI globs skip DESIGN.
+
+- `cosmetic`: copy, accessibility text, spacing, or a proven visual regression;
+  one scoped approval plus screenshot/regression/manual verification.
+- `existing-ui`: preserve the current visual language; compare four layouts or
+  interaction placements and include a real baseline.
+- `new-ui`: compare four distinct visual directions.
+- `animation`: compare four text or executable variants for one scenario.
+
+```text
+node hooks/new-mockups.js <feature> --kind cosmetic --ui <path> --reason <why> --verification <evidence> --approved-by <source>
+node hooks/new-mockups.js <feature> --kind existing-ui --baseline <path>
 node hooks/new-mockups.js <feature> --kind new-ui
 node hooks/new-mockups.js <feature> --kind animation --fidelity text|js --example <scenario>
-node hooks/new-mockups.js <feature> --kind backend
 ```
 
-The generator writes `DESIGN.json`, mode-appropriate variants, and `NOTES.md`.
-After user selection, create `design/mockups/<feature>/APPROVED` with a
-`ui: <changed-ui-path-or-glob>` line. The gate checks the manifest and passes UI
-changes only when that approved set is both touched and scoped to the changed UI
-paths in the same branch diff. Legacy sets without `DESIGN.json` remain valid
-only when `APPROVED` carries the same `ui:` scope. If the user explicitly waives
-new mockups for a UI-path change, create `design/mockups/<feature>/WAIVER.json`
-with `schemaVersion`, `feature`, `uiPaths`, `reason`, `date`, and
-`approvedBy` or `approvalSource`.
+`task check` reports missing approval without blocking. `task finish`, pre-push,
+and CI block unresolved UI evidence. `WAIVER.json` remains available only for an
+explicit user-approved skip.
 
-**3. IMPLEMENT+TEST.** Code and tests move together. If a target project has no
-test runner, report that and propose a minimal one.
+## Git lifecycle
 
-**4. VERIFY before commit.** `node hooks/verify.js` auto-detects common stacks:
-Python uses ruff and pytest; C# uses dotnet format, build with warnings as
-errors, and test; Rust uses fmt, clippy with warnings as errors, and test; Node
-uses npm lint/build/test. Overrides live in `harness.config.json -> verify`.
-`--list` prints the plan without running it.
+Use Conventional Commits: `<type>(<scope>): <subject>`. `feat` is MINOR, `fix`
+is PATCH, and `!`/`BREAKING CHANGE` is MAJOR. Do not add co-author or generated
+trailers.
 
-VERIFY also runs a debug audit on changed files. Hard markers such as
-`debugger;`, `breakpoint()`, `pdb.set_trace()`, and `dbg!()` fail VERIFY. Soft
-markers such as `console.log` and `print` are notes when configured. Beyond the
-exit code, read build output for new warnings, deprecations, and fallbacks, and
-run a git diff self-review for debug logs, commented-out code, and debris.
+Push only when requested. After a PR is server-confirmed `MERGED` and resulting
+`main` CI is green, use the exact cleanup helper, then the terminal audit:
 
-**5. COMMIT -> PR.** Work on a feature branch such as `feat/...`, `fix/...`, or
-`docs/...`, never directly on `main`. Use Conventional Commits:
-`<type>(<scope>): <subject>`. `feat:` means MINOR, `fix:` means PATCH, and `!`
-or `BREAKING CHANGE:` means MAJOR. Lefthook rejects co-author and generated-by
-trailers. `git push`, force-push, and `reset --hard` require an explicit user
-request.
-
-**5.5 MERGE -> CLEANUP.** Feature, fix, docs, chore, refactor, test, CI, and
-other development branches do not wait for a release. After the PR is confirmed
-server-side `MERGED` and the resulting `main` push CI is green, synchronize the
-one canonical checkout back to clean `main`, or use a disposable base worktree
-that is removed before completion:
-
-```powershell
-node hooks/post-merge-cleanup.js --branch feat/example --base origin/main
-node hooks/post-merge-cleanup.js --branch feat/example --base origin/main --apply
-```
-
-The helper normally requires both local and remote refs to be ancestors of the
-base. A provider-confirmed squash/rebase cleanup may explicitly admit a
-patch-equivalent ref; unique or ambiguous work remains blocked. It removes only
-clean linked worktrees and is idempotent when the branch was already deleted.
-Dirty, diverged, or unmerged refs are never forced. `release/*` and `hotfix/*` are deliberately ineligible: retain
-them until their tag, published artifacts, and smoke tests succeed. The
-release-wide cleanup remains a final audit for merged branches missed earlier.
-
-With the GitHub server adapter, `.github/workflows/branch-cleanup.yml` runs
-after a successful default-branch `verify` workflow. It resolves the exact
-MERGED PR and required check from GitHub, verifies that the branch still points
-at the reviewed head SHA, and then invokes cleanup with exact OID leases.
-Squash/rebase heads are eligible only when every non-merge patch is already in
-`main`; ambiguous merge histories remain blocked. Fork heads and
-`release/*`/`hotfix/*` are never deleted by this workflow.
-
-Persistent checkout topology defaults to one canonical repository directory.
-Keep it on clean `main` when idle; create feature/release work only in temporary
-worktrees outside the sibling project list and remove them after cleanup. Never
-create or depend on a persistent sibling such as `<repo>-main` unless the user
-explicitly chooses a two-root external pipeline.
-
-Finish the merge/cleanup sequence with a strict, non-destructive topology audit
-(the optional fetch updates remote-tracking refs only):
-
-```powershell
+```text
+node hooks/post-merge-cleanup.js --branch <branch> --base origin/main
+node hooks/post-merge-cleanup.js --branch <branch> --base origin/main --apply
 node hooks/repo-state-audit.js --root <canonical-root> --base main --remote origin --fetch --strict
 ```
 
-`--accepted-root` remains available only for an explicitly configured external
-pipeline with a genuinely independent accepted checkout; it is not a reason to
-create a local `<repo>-main` clone.
+Cleanup never forces dirty, diverged, ambiguous, or unmerged refs. Keep one
+persistent canonical checkout on clean `main`; temporary feature/release
+worktrees must be removed after acceptance.
 
-Completion requires every actual checkout branch/HEAD plus local and fetched
-remote `main` SHAs to match, clean expected worktrees, and no leftover local
-or remote branches or linked worktrees. Remote-only branches are classified as
-merged, patch-equivalent, or unique and all block strict completion until the
-lifecycle is resolved. Remote-tracking refs whose remote is no longer configured
-also block completion as orphaned state. A mismatch means the pipeline is still active or
-incomplete; synchronize and clean it explicitly, then rerun the audit. Do not
-make the audit delete or reset work automatically.
+## Release routing
 
-**6. REPORT.** Report what changed, what was verified with commands and results,
-what remains, and how the user can test manually.
+Run the release flow only on an explicit full-release request. Before any
+release action, read `docs/release-flow.md` completely. A full-release request
+authorizes the normal branch/PR/tag/GitHub Release/cleanup sequence described
+there, but never bypasses, force-pushes, history repair, or data loss.
 
-**7. USER DECISION.** The loop is complete only when the user accepts the result.
+## Ownership and capabilities
 
-## Release Flow
+The cross-project contract is `docs/universal-contract.md`.
 
-Run this only on an explicit release request. A request to make a **full
-release** is standing authorization for the normal release actions below:
-pushing feature/release branches, creating and merging their PRs, pushing the
-computed SemVer tag, publishing the GitHub Release, and deleting merged
-development/release branches after smoke testing. Do not pause for a second
-approval after the SemVer preview.
+- Harness-managed: `hooks/`, `lefthook.yml`, `settings.example.json`.
+- Project-owned: `AGENTS.md`, `harness.config.json`, `cog.toml`, secret policy,
+  changelog, attributes, and `.github/`; install/update never replaces them.
+- `harness.config.json` selects UI, release, and server-policy capabilities.
+- A fresh install is not enforceable until bootstrap files are tracked through
+  a separate PR and Lefthook is active.
 
-Standing authorization does not allow bypassing hooks/rulesets, force-pushing,
-continuing after a failed gate, deleting unmerged branches, or discarding a
-dirty worktree. Unexpected history repair, rollback, or destructive recovery
-still requires a new user decision.
+Local hooks protect against mistakes; the server ruleset is the strongest gate.
+Standard guard mode blocks bypass/protected-file/corruption hazards and reports
+loops or lint-policy edits as advice. `HARNESS_PROFILE=strict` restores hard
+loop/lint blocking; `minimal` keeps only anti-bypass and protected files.
 
-| Step | Action | Gate |
-|---|---|---|
-| R0 | Merge all intended feature/fix work through PRs into `main`; verify each PR and the resulting `main` push are green, then run exact post-merge cleanup for each branch. | No release from an unmerged feature branch; merged development branches should not accumulate while releases are deferred. |
-| R1 | Fetch/prune, then create a new clean release worktree from `origin/main`. Run `node hooks/doctor.js`, `node hooks/verify.js`, and `git describe --tags --abbrev=0`. | The latest tag must be an ancestor of `origin/main`; stop on a broken release graph. |
-| R2 | Run `node hooks/release-start.js --base origin/main`. It requires detached clean HEAD exactly at the base, creates an allowed temporary branch for `cog bump --auto --dry-run`, and renames it to `release/vX.Y.Z`. Report the computed tag/diff/notes, run `node hooks/release-manifest-bump.js --tag vX.Y.Z`, commit manifest changes as `chore(release): prepare vX.Y.Z`, then run `cog bump --auto --annotated "vX.Y.Z"`. | A full-release request continues without another approval. Stop if the bump is inconsistent with the merged commits or manifests. The helper rolls back its temporary branch when version discovery fails. |
-| R2.5 | Run prepare preflight: `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main`. | Clean tree; annotated local tag points at release HEAD; remote tag absent; manifests and CHANGELOG match. |
-| R3 | Push **only** `release/vX.Y.Z`, create its PR to `main`, wait for required checks, merge it with a merge commit, and verify server-side `MERGED`. | Do not squash/rebase the PR: the locally tagged release commit must remain in `main`. Do not push the tag yet. |
-| R4 | Fetch `origin/main`, wait for its push CI, then run `node hooks/release-preflight.js --tag vX.Y.Z --base origin/main --require-tag-in-base --require-release-tip`. | `origin/main` must be the exact two-parent release merge: second parent equals the tag and first parent is included by the tag. This rejects concurrent main changes, updated release branches, and commits after the release merge. Remote tag must still be absent. |
-| R5 | Push `vX.Y.Z`. Watch the tag-triggered release workflow and require every release step to pass. | The workflow must build from the exact tag, verify, create the project artifacts and checksums, smoke-test them, record `release-evidence.json` for workflow-owned artifacts, and publish the GitHub Release. |
-| R6 | Run `gh release view vX.Y.Z`; download the published assets together and execute their configured contract (`node hooks/release-artifacts.js --tag vX.Y.Z --phase all --evidence <download-dir>/release-evidence.json`). | Workflow-owned evidence must identify the exact tag/version, HTTPS workflow and Release URLs, successful smoke result, downloaded asset, and checksum. The helper recomputes SHA-256 and fails closed when evidence is absent or inconsistent. |
-| R7 | From a separate clean base worktree run `node hooks/release-cleanup.js --base origin/main` and then `node hooks/release-cleanup.js --base origin/main --apply`. | Final audit: delete any remaining merged managed branches and clean linked worktrees. Dirty merged branches block cleanup; unmerged branches are skipped and reported. Tags are retained. |
-| R8 | Report tag, merge SHAs, workflow URL, Release URL, asset hash, smoke results, cleanup results, and rollback boundary. | The release is complete only after R6 and R7. |
+## Papercuts
 
-The source repository's `.github/workflows/release.yml` implements the source
-ZIP path. Installed target repositories must provide a release workflow suited
-to their own binary/package artifacts; when none exists, reproduce R5-R6
-manually from the exact tag and do not claim the release is complete early.
+Record concrete friction while it is fresh and continue working:
 
-Hotfix: branch from the previous tag, fix, PR to `main`, then follow R1-R8.
-Do not make a release commit directly on `main`; the version/changelog commit
-uses the release PR in R3.
-
-`release-manifest-bump.js` synchronizes only `release.versioning.manifests` when
-configured, otherwise it auto-detects known manifests for compatibility.
-`release-preflight.js` fails if an in-scope manifest disagrees with the tag.
-Independent-version monorepos must configure scope explicitly. If no version
-manifest exists, `allowMissing` controls the contract; R6 still verifies the
-published artifact version.
-
-Do not whitelist `HEAD` in `cog.toml`: that would permit a real bump from an
-arbitrary detached commit. `release-start.js` attaches the clean release
-worktree to a named `release/**` branch before invoking Cocogitto and leaves no
-temporary branch behind when startup fails.
-
-After `gh pr merge --delete-branch`, GitHub can merge the PR server-side even if
-the local post-merge pull/rebase fails because of a dirty worktree. Verify with
-`gh pr view <num> --json state,mergedAt,mergeCommit`; if `state` is `MERGED`, the
-merge happened. Sync locally only from a clean tree with `git fetch origin` and
-`git merge --ff-only origin/main`. For releases, prefer a new clean worktree from
-`origin/main`.
-
-Rollback remains a separate decision: before publication, delete/recreate the
-tag only with approval; after publication, use `gh release delete` plus a revert
-PR with approval. Branch cleanup never deletes tags, so published release
-anchors remain available.
-
-## Harness Layers
-
-**Layer 0 - server policy adapter.** The strongest repository enforcement layer
-when enabled. The bundled GitHub adapter is versioned in
-`.github/rulesets/main.json` and applied with `node hooks/apply-ruleset.js`.
-It requires PRs, the `verify` required check, and blocks force-push/delete on
-main. It cannot be bypassed locally. Private repositories need a plan that
-supports rulesets, or the repository must be public.
-This source repository uses a solo-maintainer variant: approving/code-owner
-review is advisory, while target installs keep regular approving review by
-default through `install.js`.
-Use `node hooks/apply-ruleset.js --check` or `node hooks/doctor.js --server` to
-detect live drift without writing. Installer `--ruleset-profile solo|team` is an
-explicit structured policy change; ordinary update/force preserves server files.
-
-**Layer 1 - lefthook.** Local hygiene for humans and agents:
-commit-msg runs `cog verify` and rejects co-author trailers; pre-commit runs
-gitleaks and branch guard; pre-push runs `verify.js` and `design-gate.js`.
-
-On Windows, diagnose commands through `.cmd` to avoid PowerShell ExecutionPolicy:
-
-```powershell
-lefthook.cmd run pre-commit --command branch-guard --force --verbose
-$msg = Join-Path $env:TEMP "commit-msg.txt"; Set-Content $msg "fix(hooks): test"; lefthook.cmd run commit-msg $msg --command no-coauthor --force --verbose
+```text
+papercuts add "<what failed and what would have prevented it>" --tag <area>
 ```
 
-Use `--command`, not `--commands`.
+Do not log secrets, private output, general status, or speculation. Contract v1
+stores absolute `cwd`/`repo` in tracked JSONL; use `PAPERCUTS_FILE` outside the
+repository when those paths are not acceptable. Tracked mode is append-only and
+Gitleaks-scanned. Releases render sanitized record text and automation candidate
+groups directly into release notes; the raw paths are never copied into that
+section.
 
-**Layer 2 - agent adapter.** Optional per-runtime hooks. `hooks/agent/guard.js`
-runs on PreToolUse and `hooks/agent/stop-reminder.js` runs on Stop. Input is
-normalized JSON through `hooks/agent/_input.js`. Guard logic is exported as
-`run(ctx, env) -> {exitCode, stdout, stderr}` so tests and dispatchers can call
-it in-process; the CLI wrapper is for runners.
+## Special routing
 
-Stop-reminder is a reminder, not hard enforcement. First Stop with a dirty tree
-blocks and shows status; a second Stop with the same status passes so intentional
-uncommitted bootstrap/local files do not trap the user.
+- Dropwheel installer/doctor/guard/design/verify reports: use
+  `$harness-triage` and `docs/dropwheel-harness-inbox.md`.
+- Color Team Review: use `$color-team-review`; report verdict, evidence-based
+  findings, good decisions, priority fixes, minimal plan, and verdict-changing
+  questions only.
 
-Strictness:
+## Report
 
-- `HARNESS_PROFILE=minimal|standard|strict`; minimal keeps only anti-bypass and
-  harness-file protection, strict halves loop thresholds.
-- `HARNESS_DISABLED_CHECKS=<id,id>` disables targeted checks. These are human
-  runner env knobs; agent shell commands should not change hook env.
-
-Contract: exit 0 allows, exit 2 blocks. Notes are emitted through
-`hookSpecificOutput.additionalContext` plus a top-level duplicate for simpler
-runners. Stop communicates only through `{"decision":"block","reason":"..."}`.
-Install by copying the `hooks` block from `settings.example.json` to
-`.claude/settings.json`.
-
-| guard.js catches | Type |
-|---|---|
-| Harness bypass: `--no-verify`, `commit -n`, `core.hooksPath`, `LEFTHOOK=0`, `lefthook uninstall`, writes under `.git/hooks`. | block |
-| Edits to harness files: `hooks/`, `lefthook.yml`, configs, workflows, `.claude/settings.json`; both file tools and shell writes are covered, including quoted paths. | block |
-| Edits to existing lint/format configs such as `.eslintrc*`, `ruff.toml`, `biome.json`, `clippy.toml`, `pytest.ini`. Mixed files such as `pyproject.toml`, `package.json`, and `tsconfig.json` are intentionally excluded. | block |
-| Degenerate loops: trivial command streaks, same action repeated N times, A-B-A-B alternation, for shell and file tools. | block |
-| Tool markup debris, low-entropy commands, and unreadable non-empty hook payloads. | block |
-| git commit/merge/push or edits while on `main`/`master`. | note |
-| UI file edit requiring DESIGN stage. | note |
-| fact-force: editing an existing file before reading it in the session. | note |
-
-Approved bypass of a guard block: `HARNESS_ACK_BYPASS=1`, with an audit note in
-context. Guard does not catch subtle meaningful-looking loops or adversarial
-string construction; Todo progress, user decision, and the server ruleset cover
-that boundary.
-
-## Env
-
-Human runner knobs:
-
-| Variable | Purpose | Default |
-|---|---|---|
-| `HARNESS_ALLOW_MAIN=1` | Legitimate release/hotfix/bootstrap commit on `main`; bypasses branch guard in pre-commit. | unset |
-| `HARNESS_ACK_BYPASS=1` | User-approved bypass of a guard block; emits an audit note. | unset |
-| `HARNESS_PROFILE` | Guard strictness: `minimal`, `standard`, `strict`. | `standard` |
-| `HARNESS_DISABLED_CHECKS` | Disable targeted checks: `loops,entropy,lintconfig,design-note,fact-force,...`. | unset |
-| `HARNESS_LOOP_THRESHOLD` | Shell loop threshold. | `5` |
-| `HARNESS_TOOLLOOP_THRESHOLD` | File-tool loop threshold. | `12` |
-| `HARNESS_SESSION_ID` / `HARNESS_PROJECT_DIR` | Guard state key when the runner did not provide one. | unset |
-| `HARNESS_ROOT` | Root for `new-mockups.js` when scaffolding mockups. | repo root |
-| `LEFTHOOK=0` | Skip lefthook for humans only; guard blocks agent use. | unset |
-
-## Dropwheel Canary Inbox
-
-Dropwheel at `C:\Users\poweruser\projects\csharp\dropwheel` is the canary
-target for this harness.
-
-When a report arrives under `inbox/dropwheel` or from a Dropwheel Codex thread,
-use `$harness-triage` and follow `docs/dropwheel-harness-inbox.md`.
-
-Routing rule:
-
-- installer, doctor, harness syntax, guard, design gate, verify runner, or
-  generated harness file failure caused by source harness behavior belongs in
-  this repo;
-- installer-created files that only need to be accepted/tracked in Dropwheel are
-  `dropwheel-harness-update` and should be routed back to Dropwheel auto-fix;
-- Dropwheel build/test failure after a green install and doctor belongs in
-  Dropwheel unless the report proves a bad harness contract;
-- unclear owner starts here as triage, then routes to the right project.
-
-For valid harness bugs, reproduce against a disposable Dropwheel canary
-worktree, fix the smallest harness behavior, add regression coverage, run
-`node hooks\verify.js`, and rerun:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File C:\Users\poweruser\projects\csharp\dropwheel\scripts\harness-canary.ps1
-```
-
-The Dropwheel inbox automation is allowed to perform these harness fixes
-automatically. If the main checkout is dirty, make code changes in an isolated
-local worktree under `.codex\auto-fix-worktrees` and keep inbox bookkeeping in
-the main checkout. After `node hooks\verify.js` and the Dropwheel canary pass,
-create a local feature-branch commit with a Conventional Commit message. Do not
-push, merge, release, reset, force-push, or bypass hooks without an explicit
-user request.
-
-## Color Team Review
-
-When the user asks for Color Team Review, use `$color-team-review` instead of
-expanding a long prompt inline. Keep the compact format: verdict, evidence-based
-findings, what is good, priority fixes, minimal safe plan, useful tests, and
-verdict-changing questions only.
-
-For Dropwheel handoffs, read `docs/dropwheel-harness-inbox.md` and process
-`inbox/dropwheel/review-handoff-*` files as first-class harness triage inputs,
-even when the related canary report is green.
+Report changed behavior, exact verification commands/results, remaining work,
+and manual test notes. Read-only/review tasks must explicitly say why pre-existing
+dirty files remain uncommitted. The loop is complete only after the user accepts
+the result.

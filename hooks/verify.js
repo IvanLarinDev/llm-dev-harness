@@ -9,7 +9,7 @@
 //   Node (npm lint/build/test).
 //
 // Usage:
-//   node hooks/verify.js [--root <dir>] [--stack <id>] [--changed [--base <ref>]] [--list] [--json] [--strict-audit]
+//   node hooks/verify.js [--mode fast|full|release] [--root <dir>] [--stack <id>] [--changed [--base <ref>]] [--list] [--json] [--strict-audit]
 //     --list     detect + print the plan, do not run
 //     --stack    run only the named stack
 //     --root     repo root (default: cwd)
@@ -42,10 +42,12 @@ const DEFAULT_STEP_TIMEOUT_MS = 15 * 60 * 1000;
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { root: process.cwd(), stack: null, list: false, json: false, changed: false, base: "main", files: null, checkHarnessSyntax: false, strictAudit: false };
+  const a = { root: process.cwd(), stack: null, mode: "full", list: false, json: false, changed: false, base: "main", files: null, checkHarnessSyntax: false, strictAudit: false, errors: [] };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--stack") a.stack = argv[++i];
+    else if (argv[i] === "--mode") a.mode = String(argv[++i] || "");
+    else if (argv[i] === "--fast") a.mode = "fast";
     else if (argv[i] === "--list") a.list = true;
     else if (argv[i] === "--json") a.json = true;
     else if (argv[i] === "--changed") a.changed = true;
@@ -54,6 +56,9 @@ function parseArgs(argv) {
     else if (argv[i] === "--check-harness-syntax") a.checkHarnessSyntax = true;
     else if (argv[i] === "--strict-audit") a.strictAudit = true;
   }
+  if (!["fast", "full", "release"].includes(a.mode)) a.errors.push("--mode must be fast, full, or release");
+  if (a.mode === "fast") a.changed = true;
+  if (a.mode === "release") a.strictAudit = true;
   return a;
 }
 
@@ -185,19 +190,23 @@ function cleanupStepOutput(dir) {
 // ---------- main ----------
 (function main() {
   const a = parseArgs(process.argv.slice(2));
+  if (a.errors.length) {
+    console.error("verify: " + a.errors.join("; "));
+    process.exit(2);
+  }
   if (a.checkHarnessSyntax) checkHarnessSyntax(a.root);
   let { stacks, failFast, explicit } = loadStacks(a.root);
   if (a.stack) stacks = stacks.filter((s) => s.id === a.stack);
 
-  const targetPlan = planVerifyTargets(a.root, stacks, { changed: a.changed, base: a.base, files: a.files });
+  const targetPlan = planVerifyTargets(a.root, stacks, { changed: a.changed, base: a.base, files: a.files, fast: a.mode === "fast" });
   if (targetPlan.warning) console.error(targetPlan.warning);
   const targets = targetPlan.targets;
 
   if (a.list) {
     const plan = targets.map((t) => ({ stack: t.stack.id, dir: t.rel, steps: (t.stack.steps || []).map((s) => s.name) }));
-    if (a.json) console.log(JSON.stringify({ explicit, plan }));
+    if (a.json) console.log(JSON.stringify({ explicit, mode: a.mode, plan }));
     else {
-      console.log(`design of VERIFY (${explicit ? "config" : "auto-detect"}):`);
+      console.log(`design of VERIFY (${a.mode}, ${explicit ? "config" : "auto-detect"}):`);
       if (!plan.length) console.log("  (no stacks detected)");
       for (const p of plan) console.log(`  - ${p.stack} @ ${p.dir}: ${p.steps.join(" -> ")}`);
     }

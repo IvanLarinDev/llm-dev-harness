@@ -60,7 +60,8 @@
       "min": 4,
       "mockupExtensions": [".html", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".pdf"],
       "manifestFile": "DESIGN.json",
-      "approvalFile": "APPROVED"
+      "approvalFile": "APPROVED",
+      "cosmeticFile": "COSMETIC.json"
     }
   },
   "_debugAudit_note": "verify.js scans only changed diff files for leftover debug statements. Hard markers fail VERIFY; soft markers are notes when soft=true. exclude contains globs skipped by the audit.",
