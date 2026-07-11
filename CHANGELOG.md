@@ -1,6 +1,16 @@
 # Changelog
 
 - - -
+## [v0.7.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/bac64cfcdca273d657b942f47bbc4284a78276fd..v0.7.0) - 2026-07-11
+#### Features
+- (**harness**) add task health reports - ([562b0a7](https://github.com/IvanLarinDev/llm-dev-harness/commit/562b0a7cddd26c5ce84413b3ac18f5068e6156df)) - agidevway
+- (**harness**) streamline development loop - ([dad8d63](https://github.com/IvanLarinDev/llm-dev-harness/commit/dad8d632c7559ddb2796bcc8648d1c623d61543c)) - agidevway
+- (**release**) publish papercuts digest - ([28a3b6d](https://github.com/IvanLarinDev/llm-dev-harness/commit/28a3b6d32eddf7c6687a111936e0ed1efd1da1b1)) - agidevway
+#### Bug Fixes
+- (**harness**) enforce task pre-commit - ([c234b5d](https://github.com/IvanLarinDev/llm-dev-harness/commit/c234b5d72cd0ae64fbfc8c2a5ff6d73af5466eab)) - agidevway
+
+- - -
+
 ## [v0.6.1](https://github.com/IvanLarinDev/llm-dev-harness/compare/eb4f3b88fe30f3f1783562df6eae7b0e0417f0e8..v0.6.1) - 2026-07-10
 #### Bug Fixes
 - (**harness**) harden release and branch lifecycle gates - ([0527d43](https://github.com/IvanLarinDev/llm-dev-harness/commit/0527d43134df417284b8969a9ec691576482449c)) - agidevway
