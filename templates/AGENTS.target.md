@@ -27,7 +27,8 @@ Prefer the coordinator: `node hooks/task.js start <slug>` creates an isolated
 worktree and baseline; `status` shows branch health, local dirt, recent gates,
 and follow-up candidates; `check` is fast/advisory; `finish` runs full gates;
 `report` produces changed/verified/remaining/manual-test handoff notes. Commits
-require explicit `--commit "type(scope): subject"`. It never pushes.
+require explicit `--commit "type(scope): subject"` and are refused while
+recorded pre-task dirt remains. It never pushes.
 
 ## Design Routing
 

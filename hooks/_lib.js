@@ -282,10 +282,15 @@ function mergeFiles(root, ...lists) {
   return out;
 }
 
+function doctorEnvironmentReady(report) {
+  return Boolean(report && report.ok === true && report.blocked !== true && Number(report.envs || 0) === 0);
+}
+
 module.exports = {
   DEFAULT_UI_GLOBS, DEFAULT_UI_EXCLUDE, DEFAULT_MOCKUPS, DEFAULT_PROTECTED, DEFAULT_LINT_CONFIGS,
   globToRe, loadConfig, isUiPath, normRel, isProtectedPath,
   isProtectedShellWrite, isLintConfigShellWrite, isLintConfigPath,
   interpreterProtectedHint,
   changedFiles, workingTreeChangedFiles,
+  doctorEnvironmentReady,
 };

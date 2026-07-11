@@ -41,16 +41,24 @@ function cases(title, list, run) {
 }
 const TEST_GROUPS = ["configs", "guard", "design-gate", "verify", "doctor", "release", "topology", "task", "stop-reminder", "installer", "hygiene"];
 const onlyIndex = process.argv.indexOf("--only");
-const ONLY = onlyIndex >= 0
-  ? String(process.argv[onlyIndex + 1] || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean)
-  : null;
+let ONLY = null;
+if (onlyIndex >= 0) {
+  const rawOnly = process.argv[onlyIndex + 1];
+  const requested = String(rawOnly || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  const unknown = requested.filter((value) => !TEST_GROUPS.includes(value));
+  if (!rawOnly || rawOnly.startsWith("--") || !requested.length || unknown.length) {
+    console.error(`test: --only requires exact group names${unknown.length ? `; unknown: ${unknown.join(", ")}` : ""}`);
+    process.exit(2);
+  }
+  ONLY = new Set(requested);
+}
 if (process.argv.includes("--list")) {
   console.log("test groups:");
   for (const group of TEST_GROUPS) console.log("  " + group);
   process.exit(0);
 }
 function runGroup(name) {
-  const selected = !ONLY || ONLY.some((value) => name.includes(value) || value.includes(name));
+  const selected = !ONLY || ONLY.has(name);
   if (!selected) console.log(`\n[skip] ${name}`);
   return selected;
 }
@@ -128,6 +136,14 @@ function gout(payload, env = {}) { const r = grun(payload, env); return String(r
 // ---------- delegated tool configs ----------
 if (runGroup("configs")) {
 console.log("\nconfigs (lefthook + gitleaks + cocogitto + ruleset + ci):");
+const invalidOnly = spawnSync(process.execPath, [__filename, "--only", "definitely-not-a-group"], { cwd: REPO, encoding: "utf8" });
+const missingOnly = spawnSync(process.execPath, [__filename, "--only"], { cwd: REPO, encoding: "utf8" });
+ok(invalidOnly.status === 2 && missingOnly.status === 2 && /requires exact group names/.test(String(invalidOnly.stderr)) && /requires exact group names/.test(String(missingOnly.stderr)),
+  "test CLI rejects unknown or missing --only groups instead of passing zero tests");
+ok(sharedLib.doctorEnvironmentReady({ ok: true, blocked: false, envs: 0 }) === true &&
+   sharedLib.doctorEnvironmentReady({ ok: true, blocked: false, envs: 1 }) === false &&
+   sharedLib.doctorEnvironmentReady({ ok: true, blocked: true, envs: 0 }) === false,
+  "installer readiness requires a valid doctor contract with no ENV conditions");
 const lh = readRepo("lefthook.yml");
 ok(/commit-msg:/.test(lh) && /cog verify/.test(lh), "lefthook commit-msg -> cog verify (conventional)");
 ok(/no-coauthor:[\s\S]*node hooks\/no-coauthor\.js/.test(lh), "lefthook commit-msg -> Windows-safe no-coauthor Node script");
@@ -1959,6 +1975,9 @@ ok(taskState.unchangedFromBaseline(taskRepo), "task baseline recognizes unchange
 fs.writeFileSync(path.join(taskRepo, "README.md"), "agent changed it\n");
 fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: changed\n");
 ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline detects changes made after start");
+const preservedTaskDirt = taskCoordinator.preTaskDirtyPaths(taskRepo);
+ok(preservedTaskDirt.includes("README.md") && !preservedTaskDirt.includes(".github/workflows/ci.yml"),
+  "task automated commit blocks pre-task dirt without misclassifying later task files");
 taskState.recordEvent(taskRepo, {
   kind: "check", ok: true, base: "main", branch: "main",
   commands: ["node hooks/verify.js --mode fast --base main"],
@@ -2367,5 +2386,9 @@ ok(targetAgentsDoc.exists && /one persistent canonical project directory/.test(t
 
 }
 try { fs.rmSync(NEUTRAL, { recursive: true, force: true }); } catch {}
+if (pass === 0 && fail === 0) {
+  console.error("\nFAIL: no tests were selected");
+  process.exit(1);
+}
 console.log(`\n${fail ? "FAIL" : "PASS"}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

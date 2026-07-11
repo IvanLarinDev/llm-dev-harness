@@ -152,6 +152,18 @@ function unchangedFromBaseline(root) {
   catch { return false; }
 }
 
+function remainingBaselineDirtyPaths(root) {
+  const baseline = loadBaseline(root);
+  if (!baseline) return [];
+  const baselinePaths = new Set(dirtyPaths(baseline.status));
+  if (!baselinePaths.size) return [];
+  try {
+    return dirtyPaths(capture(root).status).filter((rel) => baselinePaths.has(rel));
+  } catch {
+    return [...baselinePaths];
+  }
+}
+
 module.exports = {
   capture,
   captureReceipt,
@@ -163,6 +175,7 @@ module.exports = {
   loadEvents,
   lastEvent,
   unchangedFromBaseline,
+  remainingBaselineDirtyPaths,
   stateFile,
   eventFile,
   dirtyPaths,

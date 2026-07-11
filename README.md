@@ -183,9 +183,11 @@ node hooks/apply-ruleset.js --check
 base branch, activates Lefthook, and records pre-existing dirt. `task check`
 runs changed stacks and focused source-harness groups; `task finish` runs the
 full pre-push contract. Commit is optional and explicit, and push/merge/release
-are never inferred. `task status` is the one-screen health panel for the current
-worktree; `task report` summarizes changed, verified, remaining, and manual-test
-handoff notes, with `--json` for automation.
+are never inferred. An automated commit is refused while recorded pre-task dirt
+remains, so `git add -A` cannot absorb unrelated user work. `task status` is the
+one-screen health panel for the current worktree; `task report` summarizes
+changed, verified, remaining, and manual-test handoff notes, with `--json` for
+automation.
 
 ## Papercuts
 

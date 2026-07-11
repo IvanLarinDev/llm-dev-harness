@@ -146,7 +146,8 @@ Installation and enforceability are separate states:
   the repository. This is expected after a fresh install.
 - `activationRequired`: the runtime was installed but Lefthook is unavailable or
   could not be wired on this machine.
-- `enforceable`: local hooks are activated and doctor has no failures.
+- `enforceable`: local hooks are activated, doctor has no repository failures,
+  and no `ENV` provisioning conditions remain.
 
 A fresh successful installation exits zero with `bootstrapRequired: true` and
 may also report `activationRequired: true` on a machine without Lefthook.

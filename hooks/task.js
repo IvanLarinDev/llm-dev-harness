@@ -266,6 +266,10 @@ function commitBranch(root) {
   return { branch, allowed: Boolean(branch) && !["main", "master"].includes(branch) };
 }
 
+function preTaskDirtyPaths(root) {
+  return taskState.remainingBaselineDirtyPaths(root);
+}
+
 function finish(root, args) {
   const commitTarget = commitBranch(root);
   const steps = [];
@@ -291,6 +295,19 @@ function finish(root, args) {
       notes: [commitTarget.branch ? `refusing to commit on protected branch ${commitTarget.branch}` : "refusing to commit from detached HEAD"],
       code: 1,
     });
+  }
+  if (args.commit) {
+    const preserved = preTaskDirtyPaths(root);
+    if (preserved.length) {
+      return recordFinish({
+        ok: false,
+        command: "finish",
+        branch: commitTarget.branch,
+        worktree: root,
+        notes: [`refusing automated commit while pre-task dirt remains: ${preserved.slice(0, 8).join(", ")}${preserved.length > 8 ? ", ..." : ""}; use a clean task worktree or commit reviewed paths manually`],
+        code: 1,
+      });
+    }
   }
   const base = args.base || defaultBase(root);
   steps.push(`node hooks/verify.js --mode full --base ${base}`);
@@ -349,4 +366,4 @@ function main(argv = process.argv.slice(2), cwd = process.cwd()) {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { parseArgs, defaultBase, startPlan, commitBranch, runInherited, worktreeStatus, report, main };
+module.exports = { parseArgs, defaultBase, startPlan, commitBranch, preTaskDirtyPaths, runInherited, worktreeStatus, report, main };

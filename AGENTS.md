@@ -36,7 +36,8 @@ node hooks/task.js finish --commit "feat(scope): subject"
 not trigger false Stop reminders. `status` shows branch health, local dirt,
 recent gates, and Papercuts follow-up candidates. `report` produces the changed /
 verified / remaining / manual-test handoff. `finish` never pushes, merges, or
-releases.
+releases, and `finish --commit` refuses to stage while recorded pre-task dirt
+remains.
 
 ## Boundaries
 
