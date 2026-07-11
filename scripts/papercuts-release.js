@@ -10,7 +10,7 @@ function warning(list, count, label) {
 }
 
 function validTimestamp(value) {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 function foldLog(text) {
@@ -33,13 +33,14 @@ function foldLog(text) {
     if (value && value.kind === "cut") {
       const valid = typeof value.id === "string" && /^pc_[0-9a-f]{12}$/.test(value.id) &&
         validTimestamp(value.ts) && typeof value.agent === "string" && typeof value.text === "string" &&
-        Object.hasOwn(SEVERITY_RANK, value.severity) && Array.isArray(value.tags);
+        Object.hasOwn(SEVERITY_RANK, value.severity) && Array.isArray(value.tags) && value.tags.every((tag) => typeof tag === "string") &&
+        typeof value.cwd === "string" && (value.repo === null || typeof value.repo === "string");
       if (!valid) { counts.malformed++; continue; }
       if (cuts.has(value.id)) counts.duplicateCuts++;
       else cuts.set(value.id, { ...value, tags: [...value.tags].sort() });
     } else if (value && value.kind === "resolve") {
       const valid = typeof value.id === "string" && /^pc_[0-9a-f]{12}$/.test(value.id) &&
-        validTimestamp(value.ts) && typeof value.agent === "string";
+        validTimestamp(value.ts) && typeof value.agent === "string" && (value.note === null || value.note === undefined || typeof value.note === "string");
       if (!valid) { counts.malformed++; continue; }
       if (resolves.has(value.id)) counts.duplicateResolves++;
       else resolves.set(value.id, value);
@@ -72,14 +73,17 @@ function foldLog(text) {
 function markdown(value) {
   return String(value ?? "")
     .replace(/\r?\n/g, " ")
-    .replace(/\\/g, "\\\\")
-    .replace(/\|/g, "\\|")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/([\\`*_{}\[\]()#+.!|\-])/g, "\\$1");
 }
 
 function code(value) {
   return `\`${String(value ?? "").replace(/`/g, "'")}\``;
+}
+
+function heading(value) {
+  return String(value ?? "").replace(/\r?\n/g, " ").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function renderItems(items) {
@@ -104,7 +108,7 @@ function renderDigest(folded, options = {}) {
   const open = folded.items.filter((item) => item.status === "open");
   const resolved = folded.items.filter((item) => item.status === "resolved");
   const lines = [
-    `# Papercuts snapshot for ${markdown(tag)}`,
+    `# Papercuts snapshot for ${heading(tag)}`,
     "",
     `Append-only friction snapshot for ${markdown(repository)} at release ${code(tag)}.`,
     "",

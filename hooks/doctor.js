@@ -3,7 +3,11 @@
 // hit in development: hooks not wired, CRLF, NUL bytes, bad config, missing git identity.
 // Checks the migrated stack (lefthook + gitleaks + cocogitto). Run: node hooks/doctor.js
 //
-// [--root <dir>] [--server] [--json]. Exit 0 = no FAIL (WARN allowed), 1 = FAIL.
+// [--root <dir>] [--server] [--json] [--strict-env].
+// Result levels: FAIL = repository contract defect; ENV = unavailable runtime,
+// mount, network, or external tool; WARN = advisory; PASS = ready.
+// Exit 0 = repository contract valid, 1 = FAIL (or ENV under --strict-env).
+// JSON keeps environmentCode=3 for callers that want to classify ENV separately.
 
 const fs = require("fs");
 const path = require("path");
@@ -15,6 +19,7 @@ const ROOT = arg("--root", process.cwd());
 const results = [];
 function ok(msg) { results.push({ level: "PASS", msg }); }
 function warn(msg) { results.push({ level: "WARN", msg }); }
+function env(msg, code) { results.push({ level: "ENV", msg, ...(code ? { code } : {}) }); }
 function fail(msg, code) { results.push({ level: "FAIL", msg, ...(code ? { code } : {}) }); }
 function git(args) { return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL" }).trim(); }
 function gitSafe(args) { try { return git(args); } catch { return null; } }
@@ -150,9 +155,12 @@ function checkRulesetPrReview(rel, profile) {
     else if (!codeowners.hasOwner) fail("ruleset: code-owner review is enabled but .github/CODEOWNERS has no owner entries");
     else ok("ruleset: CODEOWNERS has owner entries and is tracked");
   } else {
-    if (codeowners.exists && codeowners.hasOwner)
-      warn("ruleset: CODEOWNERS has owner entries but required code-owner review is disabled");
-    else
+    if (codeowners.exists && codeowners.hasOwner) {
+      if (profile === "solo")
+        ok("ruleset: solo profile keeps CODEOWNERS advisory (code-owner review intentionally disabled)");
+      else
+        warn("ruleset: CODEOWNERS has owner entries but required code-owner review is disabled");
+    } else
       ok("ruleset: code-owner review disabled and CODEOWNERS has no required owner configured");
   }
 }
@@ -261,10 +269,10 @@ if (!inRepo) {
       fs.unlinkSync(probe);
       ok(".git supports atomic lock operations (write + unlink)");
     } catch {
-    fail(".git cannot delete files; git cannot clean up lock files and commit/checkout/rebase will fail. Check mount or permissions.");
+      env(".git cannot delete files; git cannot clean up lock files and commit/checkout/rebase will fail. Check mount or permissions.", "git-lock-unavailable");
     }
   } catch {
-    fail(".git is not writable; git add/commit/checkout will not work. Check permissions or mount.");
+    env(".git is not writable; git add/commit/checkout will not work. Check permissions or mount.", "git-not-writable");
   }
   try {
     if (fs.existsSync(path.join(gitDirAbs, "index.lock")))
@@ -293,7 +301,7 @@ const tools = [
 ];
 if (releaseProvider === "cocogitto") tools.push(["cog", "cocogitto: conventional commits + release"]);
 for (const t of tools) {
-  inPath(t[0]) ? ok(t[0] + " found") : warn(t[0] + " not in PATH - " + t[1]);
+  inPath(t[0]) ? ok(t[0] + " found") : env(t[0] + " not in PATH - " + t[1], "tool-missing");
 }
 
 const requiredHarnessFiles = [
@@ -310,6 +318,8 @@ const requiredHarnessFiles = [
   "hooks/post-merge-cleanup.js",
   "hooks/release-cleanup.js",
   "hooks/repo-state-audit.js",
+  "hooks/task-state.js",
+  "hooks/task.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/apply-ruleset.js",
@@ -492,6 +502,11 @@ if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath))) 
     checkWorkflowSupplyChain(branchCleanupWorkflowPath);
   }
 }
+if (serverProvider === "none") {
+  ok("L0 (server ruleset) disabled by config; protection relies on local hooks and the agent guard");
+} else if (serverProvider === "github" && fs.existsSync(path.join(ROOT, rulesetPath)) && !process.argv.includes("--server")) {
+  ok("L0 (server ruleset) configured; live status unverified - run 'doctor --server' when live evidence is needed");
+}
 if (process.argv.includes("--server")) {
   if (serverProvider === "none") {
     ok("server-policy capability is disabled; no live drift check requested by configuration");
@@ -501,12 +516,19 @@ if (process.argv.includes("--server")) {
         cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, killSignal: "SIGKILL",
       });
       const live = JSON.parse(output);
-      live.ok ? ok(`live GitHub ruleset matches project policy (${live.repo || "repository"})`) :
-        fail(`live GitHub ruleset drift: ${(live.mismatches || []).join("; ") || live.error || "unknown mismatch"}`);
+      if (live.ok) {
+        ok(`L0 (server ruleset) active: live GitHub ruleset matches project policy (${live.repo || "repository"})`);
+      } else if ((live.mismatches || []).length) {
+        fail(`L0 (server ruleset) drift: ${(live.mismatches || []).join("; ")}`);
+      } else {
+        env(`L0 (server ruleset) unavailable: ${live.error || "unknown"}`, "l0-unavailable");
+      }
     } catch (e) {
       let live = null;
       try { live = JSON.parse(String(e.stdout || "")); } catch {}
-      fail(`live GitHub ruleset check failed: ${live ? (live.mismatches || []).join("; ") || live.error : String(e.stderr || e.message || "").trim()}`);
+      const mismatches = live && Array.isArray(live.mismatches) ? live.mismatches : [];
+      if (mismatches.length) fail(`L0 (server ruleset) drift: ${mismatches.join("; ")}`);
+      else env(`L0 (server ruleset) unavailable: ${(live && live.error) || String(e.stderr || e.message || "").trim() || "unavailable"}`, "l0-unavailable");
     }
   }
 }
@@ -543,13 +565,20 @@ if (auditReleaseWorkflow && fs.existsSync(path.join(ROOT, releaseWorkflowPath)))
 }
 
 // report
+const strictEnv = process.argv.includes("--strict-env");
 const fails = results.filter((r) => r.level === "FAIL").length;
+const envs = results.filter((r) => r.level === "ENV").length;
+const blocked = fails > 0 || (strictEnv && envs > 0);
+const exitCode = blocked ? 1 : 0;
+const environmentCode = !fails && envs ? 3 : 0;
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ ok: fails === 0, results }));
+  console.log(JSON.stringify({ ok: fails === 0, blocked, fails, envs, strictEnv, exitCode, environmentCode, results }));
 } else {
   console.log("harness doctor:");
-  const icon = { PASS: "OK", WARN: "WARN", FAIL: "FAIL" };
+  const icon = { PASS: "OK", WARN: "WARN", ENV: "ENV", FAIL: "FAIL" };
   for (const r of results) console.log("  " + icon[r.level] + " " + r.msg);
-  console.log(fails ? "\ndoctor: " + fails + " FAIL - fix before work." : "\ndoctor: environment is ready.");
+  if (fails) console.log(`\ndoctor: ${fails} FAIL - fix the repository contract before work.`);
+  else if (envs) console.log(`\ndoctor: repository contract is valid; ${envs} ENV condition(s) need provisioning${strictEnv ? " and block strict mode" : ""}.`);
+  else console.log("\ndoctor: environment is ready.");
 }
-process.exit(fails ? 1 : 0);
+process.exit(exitCode);

@@ -6,7 +6,7 @@
 // mode-appropriate DESIGN evidence. Legacy sets remain valid for compatibility.
 //
 // Usage:
-//   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json] [--strict]
+//   node hooks/design-gate.js [--base <ref>] [--root <dir>] [--files a,b,c] [--json] [--strict] [--advisory]
 //     --base   git ref to diff against (default: origin/main if available) [CI/local]
 //     --files  explicit comma-separated changed files          [tests/CI]
 //     --root   repo root to resolve config + mockups (default: cwd)
@@ -21,13 +21,14 @@ const { execFileSync } = require("child_process");
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const a = { base: null, root: process.cwd(), files: null, json: false, strict: false };
+  const a = { base: null, root: process.cwd(), files: null, json: false, strict: false, advisory: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--base") a.base = argv[++i];
     else if (argv[i] === "--root") a.root = argv[++i];
     else if (argv[i] === "--files") a.files = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
     else if (argv[i] === "--json") a.json = true;
     else if (argv[i] === "--strict") a.strict = true;
+    else if (argv[i] === "--advisory") a.advisory = true;
   }
   return a;
 }
@@ -216,12 +217,30 @@ function validateWaiverSet(root, dir, files, m, uiChanged) {
   return scoped.ok ? { ok: true, count: 0, kind: "waiver", waiver: true, scopePatterns: scoped.patterns } : scoped;
 }
 
+function validateCosmeticSet(root, dir, files, m, uiChanged) {
+  const cosmeticFile = m.cosmeticFile || "COSMETIC.json";
+  if (!files.includes(cosmeticFile)) return null;
+  let cosmetic;
+  try { cosmetic = JSON.parse(fs.readFileSync(path.join(dir, cosmeticFile), "utf8")); }
+  catch { return { ok: false, reason: `${cosmeticFile} is not valid JSON` }; }
+  if (cosmetic.schemaVersion !== 1) return { ok: false, reason: `${cosmeticFile} schemaVersion must be 1` };
+  if (!Array.isArray(cosmetic.uiPaths) || !cosmetic.uiPaths.length) return { ok: false, reason: `${cosmeticFile} requires uiPaths` };
+  if (typeof cosmetic.reason !== "string" || !cosmetic.reason.trim()) return { ok: false, reason: `${cosmeticFile} requires a low-risk reason` };
+  if (typeof cosmetic.verification !== "string" || !cosmetic.verification.trim()) return { ok: false, reason: `${cosmeticFile} requires screenshot, regression, or manual verification evidence` };
+  if (typeof (cosmetic.approvedBy || cosmetic.approvalSource) !== "string" || !(cosmetic.approvedBy || cosmetic.approvalSource).trim())
+    return { ok: false, reason: `${cosmeticFile} requires approvedBy or approvalSource` };
+  if (typeof cosmetic.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(cosmetic.date)) return { ok: false, reason: `${cosmeticFile} requires an ISO date` };
+  const scoped = scopeCoversUi(root, uiChanged, cosmetic.uiPaths);
+  return scoped.ok ? { ok: true, count: 1, kind: "cosmetic", cosmetic: true, scopePatterns: scoped.patterns } : scoped;
+}
+
 // An approved set counts only if that same set is touched in this branch diff.
 // Otherwise one old approval would unlock future UI work forever.
 function hasApprovedMockups(root, m, changed, uiChanged) {
   const base = path.join(root, m.dir);
   const mockRoot = m.dir.replace(/\\/g, "/").replace(/\/$/, "");
   const waiverFile = m.waiverFile || "WAIVER.json";
+  const cosmeticFile = m.cosmeticFile || "COSMETIC.json";
   let dirs;
   try { dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory()); }
   catch { return { ok: false, reason: `missing directory ${m.dir}/` }; }
@@ -235,6 +254,12 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
     const approved = files.includes(m.approvalFile);
     const touched = changed.some((c) => c.startsWith(`${mockRoot}/${d.name}/`));
     const waiverTouched = changed.includes(`${mockRoot}/${d.name}/${waiverFile}`);
+    const cosmeticTouched = changed.includes(`${mockRoot}/${d.name}/${cosmeticFile}`);
+    if (cosmeticTouched) {
+      const cosmetic = validateCosmeticSet(root, dir, files, m, uiChanged);
+      if (cosmetic && cosmetic.ok) return { ok: true, feature: d.name, ...cosmetic };
+      if (cosmetic) invalid.push(`${d.name}: ${cosmetic.reason}`);
+    }
     if (waiverTouched) {
       const waiver = validateWaiverSet(root, dir, files, m, uiChanged);
       if (waiver && waiver.ok) return { ok: true, feature: d.name, ...waiver };
@@ -260,7 +285,7 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
       ? `invalid DESIGN evidence (${invalid.join("; ")})`
       : stale.length
       ? `approved set(s) (${stale.join(", ")}) are valid but not scoped/touched for this branch diff`
-      : `no valid scoped DESIGN approval or WAIVER.json touched in this branch`,
+      : `no valid scoped DESIGN approval, COSMETIC.json, or WAIVER.json touched in this branch`,
   };
 }
 
@@ -301,6 +326,13 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
       const mode = mk.kind ? `, ${mk.kind}${mk.fidelity ? `/${mk.fidelity}` : ""}` : "";
       console.log(`OK design-gate: UI changes have scoped DESIGN approval touched in this branch (${mk.feature}, ${mk.count}${mode}).`);
     }
+    process.exit(0);
+  }
+
+  if (a.advisory) {
+    const warn = `WARN design-gate: UI changes still need approval before finish/push (${mk.reason}).`;
+    if (a.json) console.log(JSON.stringify({ ...res, ok: true, advisory: true, wouldBlock: true, warn }));
+    else console.error(warn);
     process.exit(0);
   }
 

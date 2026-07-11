@@ -79,10 +79,18 @@ jobs:
         shell: bash
         run: ./x86_64-pc-windows-msvc/cog.exe check "${{ github.event.pull_request.base.sha }}..HEAD" --ignore-merge-commits
 
+      - name: Workflow syntax (actionlint)
+        shell: bash
+        env:
+          ACTIONLINT_VERSION: "v1.7.12"
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION
+          actionlint -color
+
       # Executable VERIFY: auto-detects stacks and runs lint/build/test fail-fast.
       # For this repo that runs the harness self-test suite (node hooks/test.js).
       - name: VERIFY (verify.js)
-        run: node hooks/verify.js
+        run: node hooks/verify.js --mode full
 
       # AgentShield is an offline security scan of agent configuration: secrets,
       # broad tool/MCP permissions, hook injections, and unsafe CLAUDE.md/AGENTS.md

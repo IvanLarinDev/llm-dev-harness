@@ -10,7 +10,8 @@ this repository; harness updates may replace only files listed as `managed` in
 2. PLAN non-trivial behavior changes and obtain user approval.
 3. For user-visible UI work, prepare DESIGN evidence and obtain approval.
 4. IMPLEMENT code and tests together.
-5. VERIFY with `node hooks/verify.js`, inspect its output, and self-review the diff.
+5. CHECK with `node hooks/task.js check`; FINISH with `node hooks/task.js finish`,
+   inspect output, and self-review the diff.
 6. COMMIT on a feature branch and merge through a verified PR, never directly to
    `main` or `master`.
 7. MERGE+CLEANUP only after the PR is server-confirmed MERGED and its resulting
@@ -22,9 +23,15 @@ this repository; harness updates may replace only files listed as `managed` in
 A trivial typo may skip a written plan. It does not skip VERIFY or the branch/PR
 contract.
 
+Prefer the coordinator: `node hooks/task.js start <slug>` creates an isolated
+worktree and baseline; `check` is fast/advisory; `finish` runs full gates and
+commits only with explicit `--commit "type(scope): subject"`. It never pushes.
+
 ## Design Routing
 
 - Backend-only work with no UI impact skips mockups.
+- Cosmetic copy/spacing/accessibility/regression fixes use one scoped approval
+  plus screenshot, regression, or manual verification evidence.
 - Animation may use four written variants for a low-cost decision or four
   executable HTML/JavaScript prototypes for high-fidelity comparison.
 - Changes to an existing UI keep its visual language and compare layouts,

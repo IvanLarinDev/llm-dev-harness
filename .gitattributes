@@ -22,7 +22,7 @@ install.js    text eol=lf
 
 # Papercuts is an append-only event log. Union merging preserves concurrent
 # reports; the fold is first-wins and safely ignores duplicate event lines.
-.papercuts.jsonl text eol=lf merge=union
+.papercuts.jsonl text eol=lf merge=union export-ignore
 
 # Default: normalize text, let git decide line endings on checkout for the rest.
 * text=auto
