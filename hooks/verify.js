@@ -37,6 +37,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { performance } = require("perf_hooks");
 const { loadDebugAudit, debugAudit, loadStacks, planVerifyTargets } = require(path.join(__dirname, "verify-core.js"));
 const DEFAULT_STEP_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -111,6 +112,10 @@ function stepCwd(step, cwd) {
   if (!step.cwdRel) return cwd;
   return path.resolve(cwd, step.cwdRel);
 }
+function formatDuration(ms) {
+  const safe = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  return safe < 1000 ? `${safe.toFixed(1)}ms` : `${(safe / 1000).toFixed(2)}s`;
+}
 function runStep(step, cwd) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-verify-step-"));
   const stdoutPath = path.join(dir, "stdout.log");
@@ -118,14 +123,16 @@ function runStep(step, cwd) {
   const outFd = fs.openSync(stdoutPath, "w");
   const errFd = fs.openSync(stderrPath, "w");
   let r;
+  const startedAt = performance.now();
   try {
     r = spawnSync(step.run, { cwd: stepCwd(step, cwd), shell: true, stdio: ["ignore", outFd, errFd], timeout: stepTimeoutMs(step), killSignal: "SIGKILL" });
   } finally {
     try { fs.closeSync(outFd); } catch {}
     try { fs.closeSync(errFd); } catch {}
   }
-  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT", timedOut: r.error.code === "ETIMEDOUT", stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
-  return { ok: r.status === 0, code: r.status, stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
+  const durationMs = performance.now() - startedAt;
+  if (r.error) return { ok: false, code: -1, notFound: r.error.code === "ENOENT", timedOut: r.error.code === "ETIMEDOUT", durationMs, stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
+  return { ok: r.status === 0, code: r.status, durationMs, stdoutPath, stderrPath, cleanup: () => cleanupStepOutput(dir) };
 }
 function emitStepOutput(res) {
   for (const [file, stream] of [[res.stdoutPath, process.stdout], [res.stderrPath, process.stderr]]) {
@@ -189,6 +196,7 @@ function cleanupStepOutput(dir) {
 
 // ---------- main ----------
 (function main() {
+  const verifyStartedAt = performance.now();
   const a = parseArgs(process.argv.slice(2));
   if (a.errors.length) {
     console.error("verify: " + a.errors.join("; "));
@@ -233,6 +241,7 @@ function cleanupStepOutput(dir) {
     console.log(a.changed
       ? "verify --changed: changed files do not touch any detected stack; nothing to check."
       : "verify: no stacks detected; nothing to check.");
+    console.log(`VERIFY timing: total ${formatDuration(performance.now() - verifyStartedAt)}`);
     process.exit(0);
   }
 
@@ -245,10 +254,11 @@ function cleanupStepOutput(dir) {
       const label = `${t.stack.id}/${step.name} @ ${t.rel}`;
       console.log(`\n> ${label}: ${step.run}`);
       const res = runStep(step, t.dir);
+      const timing = ` [${formatDuration(res.durationMs)}]`;
       try {
-        if (res.ok) { emitStepOutput(res); summary.push(`OK ${label}`); continue; }
+        if (res.ok) { emitStepOutput(res); summary.push(`OK ${label}${timing}`); continue; }
         if (res.timedOut) {
-          summary.push(`FAIL ${label} (timeout after ${stepTimeoutMs(step)}ms)`);
+          summary.push(`FAIL ${label} (timeout after ${stepTimeoutMs(step)}ms)${timing}`);
           emitStepOutput(res);
           failed = `${label}: timeout after ${stepTimeoutMs(step)}ms`;
           if (failFast) break outer; else continue;
@@ -256,10 +266,10 @@ function cleanupStepOutput(dir) {
         if (commandNotFound(res)) {
           if (step.optional) {
             warnings.push(`${label}: optional tool not found - step skipped`);
-            summary.push(`${label} (optional tool not found; skipped)`);
+            summary.push(`${label} (optional tool not found; skipped)${timing}`);
             continue;
           }
-          summary.push(`${label} (tool not found)`);
+          summary.push(`${label} (tool not found)${timing}`);
           emitStepOutput(res);
           failed = `${label}: command not found; install the tool or override the step in harness.config.json`;
           if (failFast) break outer; else continue;
@@ -267,10 +277,10 @@ function cleanupStepOutput(dir) {
         if (step.okCodes && step.okCodes[res.code] !== undefined) {
           const detail = diagnosticExcerpt(res);
           warnings.push(`${label}: exit ${res.code}: ${step.okCodes[res.code] || "allowed code"}${detail ? "\n" + detail : ""}`);
-          summary.push(`${label} (exit ${res.code}: ${step.okCodes[res.code] || "allowed code"})`);
+          summary.push(`${label} (exit ${res.code}: ${step.okCodes[res.code] || "allowed code"})${timing}`);
           continue;
         }
-        summary.push(`FAIL ${label} (exit ${res.code})`);
+        summary.push(`FAIL ${label} (exit ${res.code})${timing}`);
         emitStepOutput(res);
         failed = step.optional
           ? `${label}: optional step ran but failed with exit ${res.code}`
@@ -290,6 +300,7 @@ function cleanupStepOutput(dir) {
     console.log("\n-- verify summary --");
     for (const s of summary) console.log("  " + s);
   }
+  console.log(`\nVERIFY timing: total ${formatDuration(performance.now() - verifyStartedAt)}`);
   if (failed || auditFailed) {
     console.error(`\nVERIFY failed: ${[failed, auditFailed].filter(Boolean).join(" | ")}`);
     process.exit(1);

@@ -40,7 +40,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const SRC = __dirname;
-const { DEFAULT_UI_GLOBS, DEFAULT_UI_EXCLUDE, DEFAULT_MOCKUPS } = require(path.join(SRC, "hooks", "_lib.js"));
+const { DEFAULT_UI_GLOBS, DEFAULT_UI_EXCLUDE, DEFAULT_MOCKUPS, doctorEnvironmentReady } = require(path.join(SRC, "hooks", "_lib.js"));
 const { loadBranchPolicy } = require(path.join(SRC, "hooks", "release-cleanup.js"));
 
 const INSTALL_MANIFEST = ".harness/installation.json";
@@ -534,6 +534,7 @@ const a = parseArgs(process.argv.slice(2));
     out.lefthook = runLefthook();
     if (!out.lefthook.ok) out.notes.push("lefthook: " + (out.lefthook.reason || `exit ${out.lefthook.code}`) + " - install lefthook and run `lefthook install`.");
     out.doctor = runDoctor();
+    out.doctor.environmentReady = doctorEnvironmentReady(out.doctor);
     if (a.withRuleset) out.ruleset = runRuleset();
   }
 
@@ -546,7 +547,7 @@ const a = parseArgs(process.argv.slice(2));
   out.installed = conflicts.length === 0 && out.settings.status !== "error";
   out.bootstrapRequired = bootstrapFails.length > 0;
   out.activationRequired = !a.dryRun && !!(out.lefthook && !out.lefthook.ok);
-  out.enforceable = out.installed && isGit && !!(out.lefthook && out.lefthook.ok) && !!(out.doctor && out.doctor.ok);
+  out.enforceable = out.installed && isGit && !!(out.lefthook && out.lefthook.ok) && !!(out.doctor && out.doctor.environmentReady);
   if (out.settings.status === "error") hardFailures.push("settings");
   if (out.config && out.config.action === "error") hardFailures.push("harness-config");
   if (conflicts.length) hardFailures.push("managed-file-conflict");
@@ -583,7 +584,7 @@ function finish(out, ok, reason) {
   if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent hook(s) merged` : out.settings.status === "already" ? "agent hooks already present" : "error - " + out.settings.reason}`);
   if (out.gitignore) console.log(`  .gitignore: ${out.gitignore.action === "already" ? "already covers .claude/settings.local.json" : (out.gitignore.action === "created" ? "created" : "appended") + " -> .claude/settings.local.json"}`);
   if (out.lefthook) console.log(`  lefthook install: ${out.lefthook.ok ? "ok" : "skipped (" + (out.lefthook.reason || out.lefthook.code) + ")"}`);
-  if (out.doctor) console.log(`  doctor: ${out.doctor.ok ? "environment ready" : out.bootstrapRequired ? "bootstrap pending" : "FAIL present - run `node hooks/doctor.js`"}`);
+  if (out.doctor) console.log(`  doctor: ${out.doctor.environmentReady ? "environment ready" : out.bootstrapRequired ? "bootstrap pending" : out.doctor.envs ? `${out.doctor.envs} ENV condition(s) need provisioning` : "FAIL present - run `node hooks/doctor.js`"}`);
   if (out.ruleset) console.log(`  ruleset: ${out.ruleset.ok ? "applied" : "not applied (requires gh admin plus Pro/public repository)"}`);
   if (out.notes.length) { console.log("\n  next:"); for (const n of out.notes) console.log("   - " + n); }
   if (!out.dryRun && out.ok) {

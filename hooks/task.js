@@ -5,7 +5,13 @@ const os = require("os");
 const path = require("path");
 const { spawnSync, execFileSync } = require("child_process");
 const taskState = require("./task-state.js");
-const papercutsRelease = require("../scripts/papercuts-release.js");
+
+function loadPapercutsAnalyzer() {
+  const analyzer = path.join(__dirname, "..", "scripts", "papercuts-release.js");
+  if (!fs.existsSync(analyzer)) return null;
+  try { return require(analyzer); }
+  catch { return null; }
+}
 
 function git(root, args) {
   return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000, killSignal: "SIGKILL" }).trim();
@@ -115,6 +121,10 @@ function branchChanges(root, base) {
 function papercutsHealth(root) {
   const file = path.join(root, ".papercuts.jsonl");
   if (!fs.existsSync(file)) return { open: 0, resolved: 0, candidates: [], warnings: [] };
+  const papercutsRelease = loadPapercutsAnalyzer();
+  if (!papercutsRelease) {
+    return { open: 0, resolved: 0, candidates: [], warnings: ["Papercuts analyzer is unavailable in this installed runtime"] };
+  }
   const folded = papercutsRelease.foldLog(fs.readFileSync(file, "utf8"));
   const open = folded.items.filter((item) => item.status === "open");
   const candidates = typeof papercutsRelease.automationCandidates === "function"
@@ -131,8 +141,26 @@ function worktreeStatus(root, args) {
   const branchDiff = branchChanges(root, base);
   const baseline = taskState.loadBaseline(root);
   const preTaskDirtUnchanged = Boolean(baseline) && taskState.unchangedFromBaseline(root);
-  const lastCheck = taskState.lastEvent(root, "check");
-  const lastFinish = taskState.lastEvent(root, "finish");
+  const savedCheck = taskState.lastEvent(root, "check");
+  const savedFinish = taskState.lastEvent(root, "finish");
+  const savedLatestVerification = taskState.loadEvents(root)
+    .filter((event) => event.kind === "check" || event.kind === "finish")
+    .at(-1) || null;
+  const receiptsByBase = new Map();
+  const withFreshness = (event) => {
+    if (!event) return null;
+    const receiptBase = event.receipt && event.receipt.baseRef || event.base || base;
+    let current = receiptsByBase.get(receiptBase);
+    if (!current) {
+      try { current = taskState.captureReceipt(root, receiptBase); }
+      catch { current = null; }
+      receiptsByBase.set(receiptBase, current);
+    }
+    return { ...event, ...taskState.receiptFreshness(root, event, current) };
+  };
+  const lastCheck = withFreshness(savedCheck);
+  const lastFinish = withFreshness(savedFinish);
+  const lastVerification = withFreshness(savedLatestVerification);
   const papercuts = papercutsHealth(root);
   const items = [];
 
@@ -144,8 +172,12 @@ function worktreeStatus(root, args) {
   else items.push("working tree is clean");
   if (branchDiff.length) items.push(`${branchDiff.length} branch file change(s) versus ${base}`);
   if (preTaskDirtUnchanged) items.push("pre-task dirt is unchanged from the saved baseline");
-  if (lastCheck) items.push(`last check ${lastCheck.ok ? "passed" : "failed"} at ${lastCheck.ts}`);
-  if (lastFinish) items.push(`last finish ${lastFinish.ok ? "passed" : "failed"} at ${lastFinish.ts}`);
+  if (lastCheck) items.push(lastCheck.stale
+    ? `last check is stale (was ${lastCheck.ok ? "passed" : "failed"} at ${lastCheck.ts}): ${lastCheck.reasons.join(", ")}`
+    : `last check ${lastCheck.ok ? "passed" : "failed"} at ${lastCheck.ts}`);
+  if (lastFinish) items.push(lastFinish.stale
+    ? `last finish is stale (was ${lastFinish.ok ? "passed" : "failed"} at ${lastFinish.ts}): ${lastFinish.reasons.join(", ")}`
+    : `last finish ${lastFinish.ok ? "passed" : "failed"} at ${lastFinish.ts}`);
   if (papercuts.open) items.push(`${papercuts.open} open Papercuts record(s), ${papercuts.candidates.length} automation candidate group(s)`);
   if (papercuts.warnings.length) items.push(`Papercuts data warnings: ${papercuts.warnings.join("; ")}`);
 
@@ -163,7 +195,7 @@ function worktreeStatus(root, args) {
     base,
     worktree: root,
     health: { summary, items },
-    status: { dirty, branchDiff, preTaskDirtUnchanged, baselineCapturedAt: baseline && baseline.capturedAt, lastCheck, lastFinish, papercuts },
+    status: { dirty, branchDiff, preTaskDirtUnchanged, baselineCapturedAt: baseline && baseline.capturedAt, lastCheck, lastFinish, lastVerification, papercuts },
     next,
   };
 }
@@ -172,18 +204,21 @@ function report(root, args) {
   const state = worktreeStatus(root, { ...args, command: "report" });
   const dirty = state.status.dirty.map((entry) => `${entry.code.trim() || "modified"} ${entry.path}`);
   const branchDiff = state.status.branchDiff;
-  const lastFinish = state.status.lastFinish;
-  const lastCheck = state.status.lastCheck;
+  const lastVerification = state.status.lastVerification;
   const candidates = state.status.papercuts.candidates || [];
   const changed = [
     branchDiff.length ? `${branchDiff.length} branch file change(s) versus ${state.base}` : "no committed branch diff versus base",
     dirty.length ? `${dirty.length} working-tree change(s): ${dirty.slice(0, 8).join(", ")}${dirty.length > 8 ? ", ..." : ""}` : "working tree clean",
   ];
   const verified = [];
-  if (lastFinish) verified.push(`finish ${lastFinish.ok ? "passed" : "failed"} at ${lastFinish.ts}: ${(lastFinish.commands || []).join(" -> ")}`);
-  else if (lastCheck) verified.push(`check ${lastCheck.ok ? "passed" : "failed"} at ${lastCheck.ts}: ${(lastCheck.commands || []).join(" -> ")}`);
+  if (lastVerification) verified.push(lastVerification.stale
+    ? `${lastVerification.kind} stale (was ${lastVerification.ok ? "passed" : "failed"} at ${lastVerification.ts}): ${(lastVerification.commands || []).join(" -> ")}`
+    : `${lastVerification.kind} ${lastVerification.ok ? "passed" : "failed"} at ${lastVerification.ts}: ${(lastVerification.commands || []).join(" -> ")}`);
   else verified.push("no task check/finish event recorded in this worktree");
   const remaining = [];
+  if (lastVerification && lastVerification.stale) {
+    remaining.push("rerun task check or finish because the latest verification receipt is stale");
+  }
   if (state.status.dirty.length) remaining.push("review or commit the working-tree changes");
   if (state.branch === "main" || state.branch === "master") remaining.push("start a feature/release worktree before implementation");
   if (candidates.length) {
@@ -221,6 +256,7 @@ function check(root, args) {
     base,
     branch: result.branch,
     commands: [`node hooks/verify.js --mode fast --base ${base}`, `node hooks/design-gate.js --base ${base} --advisory`],
+    receipt: taskState.captureReceipt(root, base),
   });
   return result;
 }
@@ -230,17 +266,23 @@ function commitBranch(root) {
   return { branch, allowed: Boolean(branch) && !["main", "master"].includes(branch) };
 }
 
+function preTaskDirtyPaths(root) {
+  return taskState.remainingBaselineDirtyPaths(root);
+}
+
 function finish(root, args) {
   const commitTarget = commitBranch(root);
   const steps = [];
   const recordFinish = (result, extra = {}) => {
+    const base = extra.base || args.base || defaultBase(root);
     taskState.recordEvent(root, {
       kind: "finish",
       ok: result.ok,
-      base: extra.base || args.base || defaultBase(root),
+      base,
       branch: result.branch || commitTarget.branch,
       commands: steps,
       notes: result.notes || [],
+      receipt: taskState.captureReceipt(root, base),
     });
     return result;
   };
@@ -253,6 +295,19 @@ function finish(root, args) {
       notes: [commitTarget.branch ? `refusing to commit on protected branch ${commitTarget.branch}` : "refusing to commit from detached HEAD"],
       code: 1,
     });
+  }
+  if (args.commit) {
+    const preserved = preTaskDirtyPaths(root);
+    if (preserved.length) {
+      return recordFinish({
+        ok: false,
+        command: "finish",
+        branch: commitTarget.branch,
+        worktree: root,
+        notes: [`refusing automated commit while pre-task dirt remains: ${preserved.slice(0, 8).join(", ")}${preserved.length > 8 ? ", ..." : ""}; use a clean task worktree or commit reviewed paths manually`],
+        code: 1,
+      });
+    }
   }
   const base = args.base || defaultBase(root);
   steps.push(`node hooks/verify.js --mode full --base ${base}`);
@@ -311,4 +366,4 @@ function main(argv = process.argv.slice(2), cwd = process.cwd()) {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { parseArgs, defaultBase, startPlan, commitBranch, runInherited, worktreeStatus, report, main };
+module.exports = { parseArgs, defaultBase, startPlan, commitBranch, preTaskDirtyPaths, runInherited, worktreeStatus, report, main };

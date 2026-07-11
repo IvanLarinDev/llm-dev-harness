@@ -119,6 +119,28 @@ function workflowRunCommands(body) {
   }
   return commands;
 }
+function workflowNeeds(body) {
+  const lines = String(body || "").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const inline = lines[i].match(/^\s*needs:\s*(.*?)\s*$/);
+    if (!inline) continue;
+    const value = inline[1];
+    if (value.startsWith("[") && value.endsWith("]")) {
+      return value.slice(1, -1).split(",").map((item) => item.trim().replace(/^['"]|['"]$/g, "")).filter(Boolean);
+    }
+    if (value) return [value.replace(/^['"]|['"]$/g, "")];
+    const out = [];
+    const indent = (lines[i].match(/^\s*/) || [""])[0].length;
+    for (let j = i + 1; j < lines.length; j++) {
+      const childIndent = (lines[j].match(/^\s*/) || [""])[0].length;
+      if (lines[j].trim() && childIndent <= indent) break;
+      const item = lines[j].match(/^\s*-\s*['"]?([A-Za-z0-9_-]+)['"]?\s*$/);
+      if (item) out.push(item[1]);
+    }
+    return out;
+  }
+  return [];
+}
 function rulesetRequiredChecks(rel) {
   let ruleset = {};
   try { ruleset = JSON.parse(readText(rel)); } catch { return []; }
@@ -168,16 +190,46 @@ function checkVerifyJobContract(workflowPath, required) {
   if (!required.includes("verify")) return;
   const body = workflowJobBody(workflowPath, "verify");
   if (!body) { fail("CI job verify is required by ruleset but its workflow body was not found"); return; }
-  const commands = workflowRunCommands(body).join("\n");
   const checks = [
     { name: "doctor", re: /node\s+hooks\/doctor\.js\b/ },
     { name: "verify", re: /node\s+hooks\/verify\.js\b/ },
     { name: "design-gate strict", re: /node\s+hooks\/design-gate\.js\b[^\n]*--strict\b/ },
     { name: "secret scan", re: /gitleaks/i },
   ];
-  const missing = checks.filter((c) => !c.re.test(commands)).map((c) => c.name);
-  if (missing.length) fail(`CI job verify does not run required harness step(s): ${missing.join(", ")}`);
-  else ok("CI job verify runs doctor, verify.js, design-gate --strict and secret scan");
+  const missingChecks = (jobBody) => {
+    const commands = workflowRunCommands(jobBody).join("\n");
+    return checks.filter((c) => !c.re.test(commands)).map((c) => c.name);
+  };
+  const directMissing = missingChecks(body);
+  if (!directMissing.length) {
+    ok("CI job verify runs doctor, verify.js, design-gate --strict and secret scan");
+    return;
+  }
+
+  const needs = workflowNeeds(body);
+  const aggregatorCommands = workflowRunCommands(body).join("\n");
+  const problems = [];
+  if (!/^\s{4}if:\s*\$\{\{\s*always\(\)\s*\}\}\s*$/m.test(body)) problems.push("missing job-level if: always()");
+  if (/^\s{4}continue-on-error:\s*true\s*$/mi.test(body)) problems.push("required aggregator uses job-level continue-on-error");
+  if (!needs.length) problems.push("missing dependency jobs");
+  if (!/\bexit\s+1\b/.test(aggregatorCommands)) problems.push("missing explicit failing exit");
+  for (const dependency of needs) {
+    const depRef = new RegExp(`^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*\\$\\{\\{\\s*needs\\.${escapeRe(dependency)}\\.result\\s*\\}\\}\\s*$`, "m").exec(body);
+    if (!depRef) { problems.push(`does not bind ${dependency}.result`); continue; }
+    const variable = escapeRe(depRef[1]);
+    const rejectsNonSuccess = new RegExp(`["']?\\$\\{?${variable}\\}?["']?\\s*!=\\s*["']success["']`).test(aggregatorCommands);
+    if (!rejectsNonSuccess) problems.push(`does not reject non-success ${dependency}.result`);
+  }
+  const dependencyBodies = needs.map((id) => ({ id, body: workflowJobBody(workflowPath, id) }));
+  const missingBodies = dependencyBodies.filter((entry) => !entry.body).map((entry) => entry.id);
+  if (missingBodies.length) problems.push(`dependency job body missing: ${missingBodies.join(", ")}`);
+  const advisoryDependencies = dependencyBodies.filter((entry) => /^\s{4}continue-on-error:\s*true\s*$/mi.test(entry.body)).map((entry) => entry.id);
+  if (advisoryDependencies.length) problems.push(`dependency job uses job-level continue-on-error: ${advisoryDependencies.join(", ")}`);
+  const fullDependency = dependencyBodies.find((entry) => entry.body && missingChecks(entry.body).length === 0);
+  if (!fullDependency) problems.push(`no dependency runs all required harness steps: ${directMissing.join(", ")}`);
+
+  if (problems.length) fail(`CI job verify does not run required harness steps directly and is not a fail-closed aggregator: ${problems.join("; ")}`);
+  else ok(`CI job verify is a fail-closed aggregator over full harness gate ${fullDependency.id}`);
 }
 function checkWorkflowSupplyChain(workflowPath) {
   const text = readText(workflowPath);

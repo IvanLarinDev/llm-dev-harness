@@ -11,13 +11,21 @@ function run(root, args) {
   });
 }
 
+function stateRootKey(root) {
+  let resolved = path.resolve(root);
+  try { resolved = fs.realpathSync.native(resolved); } catch {}
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function stateFile(root) {
-  const id = crypto.createHash("sha256").update(path.resolve(root).toLowerCase()).digest("hex").slice(0, 16);
+  const key = stateRootKey(root);
+  const id = crypto.createHash("sha256").update(key).digest("hex").slice(0, 16);
   return path.join(os.tmpdir(), `harness-task-baseline-${id}.json`);
 }
 
 function eventFile(root) {
-  const id = crypto.createHash("sha256").update(path.resolve(root).toLowerCase()).digest("hex").slice(0, 16);
+  const key = stateRootKey(root);
+  const id = crypto.createHash("sha256").update(key).digest("hex").slice(0, 16);
   return path.join(os.tmpdir(), `harness-task-events-${id}.jsonl`);
 }
 
@@ -56,6 +64,42 @@ function capture(root) {
   return { root: path.resolve(root), status, fingerprint, capturedAt: new Date().toISOString() };
 }
 
+function gitOid(root, ref) {
+  try { return run(root, ["rev-parse", "--verify", `${ref}^{commit}`]).trim(); }
+  catch { return ""; }
+}
+
+function captureReceipt(root, base) {
+  const worktree = capture(root);
+  return {
+    schemaVersion: 2,
+    headOid: gitOid(root, "HEAD"),
+    baseRef: String(base || "HEAD"),
+    baseOid: gitOid(root, base || "HEAD"),
+    fingerprint: worktree.fingerprint,
+    capturedAt: worktree.capturedAt,
+  };
+}
+
+function receiptFreshness(root, event, current) {
+  const receipt = event && event.receipt;
+  if (!receipt || receipt.schemaVersion !== 2) {
+    const staleReasons = ["verification receipt is missing or unsupported"];
+    return { freshness: "stale", stale: true, staleReasons, reasons: staleReasons };
+  }
+  let now = current;
+  try { now = now || captureReceipt(root, receipt.baseRef); }
+  catch {
+    const staleReasons = ["current repository state could not be captured"];
+    return { freshness: "stale", stale: true, staleReasons, reasons: staleReasons };
+  }
+  const staleReasons = [];
+  if (receipt.headOid !== now.headOid) staleReasons.push("HEAD changed");
+  if (receipt.baseRef !== now.baseRef || receipt.baseOid !== now.baseOid) staleReasons.push(`${receipt.baseRef || "base"} changed`);
+  if (receipt.fingerprint !== now.fingerprint) staleReasons.push("working tree changed");
+  return { freshness: staleReasons.length ? "stale" : "fresh", stale: staleReasons.length > 0, staleReasons, reasons: staleReasons };
+}
+
 function saveBaseline(root) {
   const value = capture(root);
   const file = stateFile(root);
@@ -85,7 +129,12 @@ function loadEvents(root) {
     return fs.readFileSync(eventFile(root), "utf8")
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((line) => JSON.parse(line));
+      .flatMap((line) => {
+        try {
+          const event = JSON.parse(line);
+          return event && typeof event === "object" ? [event] : [];
+        } catch { return []; }
+      });
   } catch {
     return [];
   }
@@ -103,8 +152,22 @@ function unchangedFromBaseline(root) {
   catch { return false; }
 }
 
+function remainingBaselineDirtyPaths(root) {
+  const baseline = loadBaseline(root);
+  if (!baseline) return [];
+  const baselinePaths = new Set(dirtyPaths(baseline.status));
+  if (!baselinePaths.size) return [];
+  try {
+    return dirtyPaths(capture(root).status).filter((rel) => baselinePaths.has(rel));
+  } catch {
+    return [...baselinePaths];
+  }
+}
+
 module.exports = {
   capture,
+  captureReceipt,
+  receiptFreshness,
   saveBaseline,
   loadBaseline,
   clearBaseline,
@@ -112,6 +175,7 @@ module.exports = {
   loadEvents,
   lastEvent,
   unchangedFromBaseline,
+  remainingBaselineDirtyPaths,
   stateFile,
   eventFile,
   dirtyPaths,
