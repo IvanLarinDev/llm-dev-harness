@@ -82,6 +82,7 @@ const releaseStart = require(RELEASE_START);
 const repoStateAudit = require(REPO_STATE_AUDIT);
 const githubBranchCleanup = require(GITHUB_BRANCH_CLEANUP);
 const releaseCleanup = require(RELEASE_CLEANUP);
+const papercutsRelease = require(path.join(REPO, "scripts", "papercuts-release.js"));
 function readRepo(f) { try { return fs.readFileSync(path.join(REPO, f), "utf8"); } catch { return ""; } }
 // guard blocks harness-file edits relative to projectDir; tests run from a neutral
 // directory so relative-path behavior is what gets exercised.
@@ -237,6 +238,27 @@ ok(/git archive/.test(releaseWorkflow) && /Get-FileHash[^\n]*SHA256/.test(releas
    /Expand-Archive/.test(releaseWorkflow) && /release-evidence\.json/.test(releaseWorkflow) &&
    /smokePassed/.test(releaseWorkflow) && /gh release (?:create|upload)/.test(releaseWorkflow),
 "release workflow builds, checksums, smoke-tests, records evidence, and publishes a source ZIP");
+ok(/\.papercuts\.jsonl\s+text eol=lf merge=union/.test(readRepo(".gitattributes")) &&
+   /papercuts add/.test(readRepo("AGENTS.md")),
+"papercuts integration tracks append-only reports with agent guidance and union merges");
+ok(/scripts\/papercuts-release\.js/.test(releaseWorkflow) && /PAPERCUTS_PATH/.test(releaseWorkflow) &&
+   /papercuts-release-digest/.test(releaseWorkflow) && /gh release edit/.test(releaseWorkflow),
+"release workflow publishes and links the Papercuts snapshot");
+const papercutId = "pc_0123456789ab";
+const resolvedPapercutId = "pc_abcdef012345";
+const papercutsFolded = papercutsRelease.foldLog([
+  JSON.stringify({ kind: "resolve", id: resolvedPapercutId, ts: "2026-07-11T02:00:00.000Z", agent: "codex", note: "fixed" }),
+  JSON.stringify({ kind: "cut", id: papercutId, ts: "2026-07-11T01:00:00.000Z", agent: "codex", text: "pipe | and <markup>", tags: ["verify"], severity: "major" }),
+  JSON.stringify({ kind: "cut", id: resolvedPapercutId, ts: "2026-07-10T01:00:00.000Z", agent: "codex", text: "resolved friction", tags: [], severity: "minor" }),
+  JSON.stringify({ kind: "future" }),
+  "",
+].join("\n"));
+const papercutsDigest = papercutsRelease.renderDigest(papercutsFolded, { tag: "v1.2.3", repository: "owner/repo" });
+ok(papercutsFolded.items.length === 2 && papercutsFolded.items[0].status === "open" &&
+   papercutsFolded.items[1].status === "resolved" && papercutsFolded.warnings.length === 1 &&
+   /Papercuts snapshot for v1\.2\.3/.test(papercutsDigest) && /pipe \\| and &lt;markup&gt;/.test(papercutsDigest) &&
+   /Resolved \| 1/.test(papercutsDigest),
+"Papercuts release digest folds first-wins JSONL, escapes Markdown, and reports status counts");
 
 // ---------- no-coauthor policy ----------
 console.log("\nno-coauthor policy:");

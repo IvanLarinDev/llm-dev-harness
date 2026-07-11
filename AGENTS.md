@@ -325,6 +325,26 @@ Human runner knobs:
 | `HARNESS_ROOT` | Root for `new-mockups.js` when scaffolding mockups. | repo root |
 | `LEFTHOOK=0` | Skip lefthook for humans only; guard blocks agent use. | unset |
 
+## Papercuts
+
+Use `papercuts` to record concrete friction in this harness while it is fresh:
+
+```text
+papercuts add "<what failed and what would have prevented it>" --tag <area>
+```
+
+File only actionable tool, documentation, workflow, or policy friction; do not
+log general status, speculative ideas, credentials, tokens, private data, or
+verbatim secret-bearing output. Use `minor` for annoyance, `major` for material
+time loss, and `blocker` only when work cannot continue. Keep working after the
+append unless the underlying issue is itself blocking.
+
+The tracked `.papercuts.jsonl` is append-only: never edit or deduplicate it by
+hand. Add and resolve entries through the CLI. Work on a feature branch before
+appending so the canonical `main` checkout remains clean. Gitleaks scans the log
+like every other committed file. Releases publish a Markdown snapshot of open
+and resolved papercuts as `papercuts-vX.Y.Z.md`.
+
 ## Dropwheel Canary Inbox
 
 Dropwheel at `C:\Users\poweruser\projects\csharp\dropwheel` is the canary

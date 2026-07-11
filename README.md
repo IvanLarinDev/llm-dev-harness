@@ -167,6 +167,28 @@ node hooks/apply-ruleset.js --dry-run
 node hooks/apply-ruleset.js --check
 ```
 
+## Papercuts
+
+This source repository tracks agent-facing friction in the append-only
+`.papercuts.jsonl` log. Install the CLI with `cargo install papercuts`, then file
+an actionable report from a feature branch without interrupting the current
+task:
+
+```bash
+papercuts add "verify output hid the failing subcommand" --tag verify --severity major
+papercuts list --format md
+papercuts resolve pc_1234 --note "fixed by reporting the failed step"
+```
+
+Do not put credentials, tokens, private data, or raw secret-bearing output in a
+papercut. Gitleaks scans the log before commit, and `.gitattributes` uses Git's
+union merge driver so concurrent appends survive branch merges.
+
+Every tagged source release renders the log into a deterministic
+`papercuts-vX.Y.Z.md` snapshot, uploads it as a GitHub Release asset, and links
+it from the release notes. The release workflow reads JSONL directly, so GitHub
+Actions does not need Rust or the Papercuts binary.
+
 ## Branch lifecycle
 
 Development branches and releases have separate lifecycles. Merge short-lived
