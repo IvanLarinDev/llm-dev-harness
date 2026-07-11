@@ -150,8 +150,11 @@ hard gate.
 
 ```bash
 node hooks/task.js start <slug>
+node hooks/task.js status
 node hooks/task.js check
 node hooks/task.js finish
+node hooks/task.js report
+node hooks/task.js report --json
 node hooks/task.js finish --commit "feat(scope): subject"
 node hooks/test.js
 node hooks/test.js --only verify,doctor
@@ -180,7 +183,9 @@ node hooks/apply-ruleset.js --check
 base branch, activates Lefthook, and records pre-existing dirt. `task check`
 runs changed stacks and focused source-harness groups; `task finish` runs the
 full pre-push contract. Commit is optional and explicit, and push/merge/release
-are never inferred.
+are never inferred. `task status` is the one-screen health panel for the current
+worktree; `task report` summarizes changed, verified, remaining, and manual-test
+handoff notes, with `--json` for automation.
 
 ## Papercuts
 
@@ -203,7 +208,9 @@ Every tagged source release renders the log into a deterministic, Markdown-safe
 snapshot directly in the GitHub Release notes. The release workflow reads JSONL
 directly, so GitHub Actions does not need Rust or the Papercuts binary. Contract
 v1 stores absolute `cwd`/`repo` in tracked mode; use `PAPERCUTS_FILE` outside the
-repository when publishing those paths is not acceptable.
+repository when publishing those paths is not acceptable. The release snapshot
+also groups open records into automation candidates so repeated friction becomes
+visible follow-up work instead of background noise.
 
 ## Branch lifecycle
 

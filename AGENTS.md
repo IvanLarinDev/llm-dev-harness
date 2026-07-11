@@ -24,14 +24,19 @@ Use the coordinator when possible:
 
 ```text
 node hooks/task.js start <slug>
+node hooks/task.js status
 node hooks/task.js check
 node hooks/task.js finish
+node hooks/task.js report
 node hooks/task.js finish --commit "feat(scope): subject"
 ```
 
 `start` creates a temporary worktree from the accepted base when invoked on
 `main`, activates Lefthook, and records pre-existing dirt so read-only work does
-not trigger false Stop reminders. `finish` never pushes, merges, or releases.
+not trigger false Stop reminders. `status` shows branch health, local dirt,
+recent gates, and Papercuts follow-up candidates. `report` produces the changed /
+verified / remaining / manual-test handoff. `finish` never pushes, merges, or
+releases.
 
 ## Boundaries
 
@@ -156,8 +161,9 @@ papercuts add "<what failed and what would have prevented it>" --tag <area>
 Do not log secrets, private output, general status, or speculation. Contract v1
 stores absolute `cwd`/`repo` in tracked JSONL; use `PAPERCUTS_FILE` outside the
 repository when those paths are not acceptable. Tracked mode is append-only and
-Gitleaks-scanned. Releases render sanitized record text directly into release
-notes; the raw paths are never copied into that section.
+Gitleaks-scanned. Releases render sanitized record text and automation candidate
+groups directly into release notes; the raw paths are never copied into that
+section.
 
 ## Special routing
 

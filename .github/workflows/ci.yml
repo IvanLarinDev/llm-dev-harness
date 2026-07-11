@@ -39,7 +39,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # actions/setup-go@v6
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
           cache: false
 
       # Doctor catches bootstrap drift before the required check can go green by name only.

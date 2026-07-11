@@ -8,12 +8,17 @@ function run(root, args) {
   return execFileSync("git", args, {
     cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     timeout: 10000, killSignal: "SIGKILL",
-  }).trim();
+  });
 }
 
 function stateFile(root) {
   const id = crypto.createHash("sha256").update(path.resolve(root).toLowerCase()).digest("hex").slice(0, 16);
   return path.join(os.tmpdir(), `harness-task-baseline-${id}.json`);
+}
+
+function eventFile(root) {
+  const id = crypto.createHash("sha256").update(path.resolve(root).toLowerCase()).digest("hex").slice(0, 16);
+  return path.join(os.tmpdir(), `harness-task-events-${id}.jsonl`);
 }
 
 function dirtyPaths(status) {
@@ -69,6 +74,28 @@ function clearBaseline(root) {
   try { fs.rmSync(stateFile(root), { force: true }); } catch {}
 }
 
+function recordEvent(root, event) {
+  const value = { ts: new Date().toISOString(), root: path.resolve(root), ...event };
+  fs.appendFileSync(eventFile(root), JSON.stringify(value) + "\n", "utf8");
+  return value;
+}
+
+function loadEvents(root) {
+  try {
+    return fs.readFileSync(eventFile(root), "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function lastEvent(root, kind) {
+  const events = loadEvents(root).filter((event) => !kind || event.kind === kind);
+  return events.length ? events[events.length - 1] : null;
+}
+
 function unchangedFromBaseline(root) {
   const baseline = loadBaseline(root);
   if (!baseline) return false;
@@ -76,4 +103,16 @@ function unchangedFromBaseline(root) {
   catch { return false; }
 }
 
-module.exports = { capture, saveBaseline, loadBaseline, clearBaseline, unchangedFromBaseline, stateFile, dirtyPaths };
+module.exports = {
+  capture,
+  saveBaseline,
+  loadBaseline,
+  clearBaseline,
+  recordEvent,
+  loadEvents,
+  lastEvent,
+  unchangedFromBaseline,
+  stateFile,
+  eventFile,
+  dirtyPaths,
+};

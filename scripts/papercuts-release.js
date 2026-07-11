@@ -102,11 +102,47 @@ function renderItems(items) {
   return lines.join("\n") + "\n";
 }
 
+function automationCandidates(folded, options = {}) {
+  const limit = options.limit || 5;
+  const groups = new Map();
+  for (const item of folded.items || []) {
+    if (item.status !== "open") continue;
+    const cut = item.cut;
+    const key = cut.tags && cut.tags.length ? cut.tags[0] : "untagged";
+    const group = groups.get(key) || { label: key, count: 0, ids: [], severity: "minor", examples: [] };
+    group.count++;
+    group.ids.push(cut.id);
+    if (SEVERITY_RANK[cut.severity] > SEVERITY_RANK[group.severity]) group.severity = cut.severity;
+    if (group.examples.length < 2) group.examples.push(cut.text);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .sort((left, right) =>
+      SEVERITY_RANK[right.severity] - SEVERITY_RANK[left.severity] ||
+      right.count - left.count ||
+      left.label.localeCompare(right.label))
+    .slice(0, limit)
+    .map((group) => ({
+      ...group,
+      recommendation: group.count > 1
+        ? "Recurring friction: automate, document, or turn into a tracked follow-up."
+        : "Single open friction point: decide whether to automate or document before it repeats.",
+    }));
+}
+
+function renderCandidates(candidates) {
+  if (!candidates.length) return "_None._\n";
+  return candidates.map((item) =>
+    `- **${item.severity}** ${code(item.label)} (${item.count}) - ${markdown(item.recommendation)} IDs: ${item.ids.map(code).join(", ")}`)
+    .join("\n") + "\n";
+}
+
 function renderDigest(folded, options = {}) {
   const tag = options.tag || "unversioned";
   const repository = options.repository || "repository";
   const open = folded.items.filter((item) => item.status === "open");
   const resolved = folded.items.filter((item) => item.status === "resolved");
+  const candidates = automationCandidates(folded);
   const lines = [
     `# Papercuts snapshot for ${heading(tag)}`,
     "",
@@ -117,6 +153,10 @@ function renderDigest(folded, options = {}) {
     `| Open | ${open.length} |`,
     `| Resolved | ${resolved.length} |`,
     `| Total | ${folded.items.length} |`,
+    "",
+    "## Automation candidates",
+    "",
+    renderCandidates(candidates).trimEnd(),
     "",
     "## Open",
     "",
@@ -165,4 +205,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { foldLog, renderDigest, parseArgs, run };
+module.exports = { foldLog, automationCandidates, renderDigest, parseArgs, run };

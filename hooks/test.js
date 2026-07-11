@@ -195,8 +195,8 @@ ok(/uses:\s*actions\/checkout@[0-9a-f]{40}\s*# actions\/checkout@v\d/.test(ci) &
    /uses:\s*actions\/setup-node@[0-9a-f]{40}\s*# actions\/setup-node@v\d/.test(ci) &&
    /uses:\s*actions\/setup-go@[0-9a-f]{40}\s*# actions\/setup-go@v\d/.test(ci),
   "CI: GitHub Actions pinned to full SHAs with Dependabot-readable comments");
-ok(/actions\/setup-go@[\s\S]*go-version:\s*"1\.24\.x"[\s\S]*cache:\s*false/.test(ci),
-  "CI: setup-go disables module caching when Go is only a tool bootstrap");
+ok(/actions\/setup-go@[\s\S]*go-version:\s*"1\.25\.x"[\s\S]*cache:\s*false/.test(ci),
+  "CI: setup-go uses the actionlint-compatible Go toolchain and disables module caching");
 ok(/ACTIONLINT_VERSION:\s*"v1\.7\.12"/.test(ci) && /go install github\.com\/rhysd\/actionlint\/cmd\/actionlint@\$ACTIONLINT_VERSION/.test(ci),
   "CI pins actionlint and validates workflow syntax without a local dependency");
 ok(/GITLEAKS_VERSION:\s*"v8\.24\.3"/.test(ci) && /go install github\.com\/zricethezav\/gitleaks\/v8@\$GITLEAKS_VERSION/.test(ci) && /gitleaks detect/.test(ci),
@@ -274,10 +274,12 @@ const papercutsFolded = papercutsRelease.foldLog([
   "",
 ].join("\n"));
 const papercutsDigest = papercutsRelease.renderDigest(papercutsFolded, { tag: "v1.2.3", repository: "owner/repo" });
+const papercutsCandidates = papercutsRelease.automationCandidates(papercutsFolded);
 ok(papercutsFolded.items.length === 2 && papercutsFolded.items[0].status === "open" &&
    papercutsFolded.items[1].status === "resolved" && papercutsFolded.warnings.length === 1 &&
    /Papercuts snapshot for v1\.2\.3/.test(papercutsDigest) && /pipe \\| and &lt;markup&gt;/.test(papercutsDigest) &&
-   /Resolved \| 1/.test(papercutsDigest),
+   /Resolved \| 1/.test(papercutsDigest) && /Automation candidates/.test(papercutsDigest) &&
+   papercutsCandidates.length === 1 && papercutsCandidates[0].label === "verify",
 "Papercuts release digest folds first-wins JSONL, escapes Markdown, and reports status counts");
 const malformedPapercut = papercutsRelease.foldLog(JSON.stringify({ kind: "cut", id: papercutId, ts: "2026-07-11", agent: "codex", text: "bad timestamp", tags: [], severity: "minor", cwd: "C:\\repo", repo: null }) + "\n");
 ok(malformedPapercut.items.length === 0 && /malformed/.test(malformedPapercut.warnings[0] || ""),
@@ -1851,11 +1853,15 @@ ok(parsedTask.errors.length === 0 && parsedTask.slug === "fix-login" && parsedTa
   "task start parses an explicit safe slug and dry-run");
 ok(taskCoordinator.parseArgs(["start", "Bad Slug"]).errors.length > 0,
   "task start rejects unsafe branch slugs");
+ok(taskCoordinator.parseArgs(["report", "--json"]).errors.length === 0,
+  "task report is available as a machine-readable handoff");
 const taskRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-task-"));
 execFileSync("git", ["init", "-q", "-b", "main"], { cwd: taskRepo });
 execFileSync("git", ["config", "user.email", "task@example.test"], { cwd: taskRepo });
 execFileSync("git", ["config", "user.name", "Task Test"], { cwd: taskRepo });
 fs.writeFileSync(path.join(taskRepo, "README.md"), "base\n");
+fs.mkdirSync(path.join(taskRepo, ".github", "workflows"), { recursive: true });
+fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: ci\n");
 execFileSync("git", ["add", "."], { cwd: taskRepo });
 execFileSync("git", ["commit", "-q", "-m", "chore: init"], { cwd: taskRepo });
 const taskPlan = taskCoordinator.startPlan(taskRepo, { slug: "assist", base: "main", branch: "", dir: "" });
@@ -1865,16 +1871,35 @@ ok(!taskCoordinator.commitBranch(taskRepo).allowed,
   "task finish refuses an automated commit on protected main");
 ok(readRepo("hooks/task.js").includes('["run", "pre-commit", "--force"]'),
   "task finish runs pre-commit directly even when hook activation is unavailable");
+if (process.platform === "win32") {
+  const cmdHook = path.join(taskRepo, "ok.cmd");
+  fs.writeFileSync(cmdHook, "@echo off\r\nexit /b 0\r\n");
+  ok(taskCoordinator.runInherited(cmdHook, [], taskRepo).ok,
+    "task runner executes Windows .cmd hooks without spawn EINVAL");
+}
 fs.writeFileSync(path.join(taskRepo, "README.md"), "pre-existing\n");
 taskState.saveBaseline(taskRepo);
 ok(taskState.unchangedFromBaseline(taskRepo), "task baseline recognizes unchanged pre-existing dirt");
 fs.writeFileSync(path.join(taskRepo, "README.md"), "agent changed it\n");
+fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: changed\n");
 ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline detects changes made after start");
+taskState.recordEvent(taskRepo, { kind: "check", ok: true, base: "main", branch: "main", commands: ["node hooks/verify.js --mode fast --base main"] });
+const taskStatus = taskCoordinator.worktreeStatus(taskRepo, { command: "status", base: "main" });
+ok(taskStatus.ok === false && /protected main has local dirt/.test(taskStatus.health.items.join("\n")),
+  "task status highlights dirty protected main before more work");
+ok(taskStatus.status.dirty.some((entry) => entry.path === ".github/workflows/ci.yml"),
+  "task status preserves leading-dot paths in porcelain output");
+const taskReport = taskCoordinator.report(taskRepo, { command: "report", base: "main" });
+ok(taskReport.report.changed.some((line) => /working-tree change/.test(line)) &&
+   taskReport.report.verified.some((line) => /check passed/.test(line)) &&
+   taskReport.report.remaining.some((line) => /feature\/release worktree/.test(line)),
+  "task report summarizes changed, verified, and remaining work");
 fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "first\n");
 taskState.saveBaseline(taskRepo);
 fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "second\n");
 ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline hashes non-ASCII untracked paths without Git quoting loss");
 taskState.clearBaseline(taskRepo);
+try { fs.rmSync(taskState.eventFile(taskRepo), { force: true }); } catch {}
 try { fs.rmSync(taskRepo, { recursive: true, force: true }); } catch {}
 }
 // ---------- stop-reminder ----------

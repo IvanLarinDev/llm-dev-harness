@@ -24,8 +24,10 @@ A trivial typo may skip a written plan. It does not skip VERIFY or the branch/PR
 contract.
 
 Prefer the coordinator: `node hooks/task.js start <slug>` creates an isolated
-worktree and baseline; `check` is fast/advisory; `finish` runs full gates and
-commits only with explicit `--commit "type(scope): subject"`. It never pushes.
+worktree and baseline; `status` shows branch health, local dirt, recent gates,
+and follow-up candidates; `check` is fast/advisory; `finish` runs full gates;
+`report` produces changed/verified/remaining/manual-test handoff notes. Commits
+require explicit `--commit "type(scope): subject"`. It never pushes.
 
 ## Design Routing
 
