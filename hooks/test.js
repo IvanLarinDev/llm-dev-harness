@@ -9,7 +9,7 @@
 // Run: node hooks/test.js, or node hooks/test.js --repeat 3 for flake hunting.
 // Exit 0 = green, 1 = failures.
 
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -186,7 +186,12 @@ ok(applyRuleset.driftReport(ruleset, [{ name: ruleset.name, id: 7 }], liveLikeRu
 ok(applyRuleset.driftReport(strictExpectedRuleset, [{ name: ruleset.name, id: 7 }], liveLikeRuleset, "example/repo").ok === false,
   "apply-ruleset read-only drift check rejects review-policy drift");
 const ci = readRepo(".github/workflows/ci.yml");
-ok(/runs-on:\s*windows-latest/.test(ci), "CI: verify job runs on Windows for WPF/net*-windows targets");
+ok(/^  windows_full:\s*$[\s\S]*?^    runs-on:\s*windows-latest\s*$/m.test(ci),
+  "CI: complete verification lane runs on Windows for WPF/net*-windows targets");
+ok(/^  platform_contract:\s*$[\s\S]*?os:\s*\[windows-latest, ubuntu-latest\][\s\S]*?node hooks\/verify\.js --check-harness-syntax[\s\S]*?node hooks\/task\.js status --json/m.test(ci),
+  "CI: managed task and VERIFY runtime smoke runs on Windows and Ubuntu");
+ok(/if:\s*\$\{\{\s*hashFiles\('hooks\/test\.js'\) != ''\s*\}\}[\s\S]*?node hooks\/test\.js --only task,installer,verify,hygiene/.test(ci),
+  "CI: source-only harness self-test is guarded by an explicit file-existence condition");
 ok(/uses:\s*actions\/setup-dotnet@[0-9a-f]{40}\s*# actions\/setup-dotnet@v\d/.test(ci) && /dotnet-version:\s*"10\.0\.x"/.test(ci),
   "CI: setup-dotnet is pinned and installs .NET 10");
 ok(/push:\s*\n\s*branches:\s*\[main\]/.test(ci), "CI: push trigger only runs on main");
@@ -211,10 +216,12 @@ ok(/COG_VERSION:\s*"7\.0\.0"/.test(ci) &&
   "CI: cocogitto installs the pinned Windows binary with checksum verification");
 ok(/Conventional commit range[\s\S]*shell:\s*bash[\s\S]*\.\/x86_64-pc-windows-msvc\/cog\.exe check "\$\{\{ github\.event\.pull_request\.base\.sha \}\}\.\.HEAD" --ignore-merge-commits/.test(ci),
   "CI: conventional commit check uses explicit PR range, not latest tag (works before first release tag)");
-const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*\n\s+runs-on:/gm)].map((m) => m[1]);
+const jobIds = [...ci.matchAll(/^  ([A-Za-z0-9_-]+):\s*$/gm)].map((m) => m[1]);
 const requiredContexts = (((rsc || {}).parameters || {}).required_status_checks || []).map((c) => c.context);
 ok(requiredContexts.length > 0 && requiredContexts.every((ctx) => jobIds.includes(ctx)),
   "CI/ruleset contract: required status check contexts match workflow job ids");
+ok(/^  verify:\s*$[\s\S]*?name:\s*verify\s*$[\s\S]*?if:\s*\$\{\{ always\(\) \}\}\s*$[\s\S]*?needs:\s*\[platform_contract, windows_full\][\s\S]*?PLATFORM_RESULT:\s*\$\{\{ needs\.platform_contract\.result \}\}[\s\S]*?WINDOWS_RESULT:\s*\$\{\{ needs\.windows_full\.result \}\}[\s\S]*?exit 1/m.test(ci),
+  "CI: stable verify context fails closed after both platform and full Windows lanes");
 ok(/design-gate\.js --strict --base/.test(ci), "configs lefthook gitleaks cocogitto ruleset ci assertion 9");
 ok(/AGENTSHIELD_VERSION:\s*"1\.4\.0"/.test(ci) && /continue-on-error:\s*true/.test(ci),
   "configs lefthook gitleaks cocogitto ruleset ci assertion 10");
@@ -873,6 +880,13 @@ fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify
 const optOut = verifyOutput(etmp);
 ok(/error WHITESPACE: fix me[\s\S]*VERIFY failed: t\/opt @ \.: optional step ran but failed with exit 2/.test(optOut),
   "optional step failure is enforced once the command runs");
+ok(/FAIL t\/opt @ \. \(exit 2\) \[[0-9.]+(?:ms|s)\][\s\S]*VERIFY timing: total [0-9.]+(?:ms|s)/.test(optOut),
+  "VERIFY reports monotonic step and total timings on failure");
+fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "timed", run: "node stepA.js" }] }] } }));
+const timingOut = verifyOutput(etmp);
+ok(/OK t\/timed @ \. \[[0-9.]+(?:ms|s)\][\s\S]*VERIFY timing: total [0-9.]+(?:ms|s)[\s\S]*VERIFY passed/.test(timingOut) &&
+   /require\("perf_hooks"\)/.test(readRepo("hooks/verify.js")) && /performance\.now\(\)/.test(readRepo("hooks/verify.js")),
+  "VERIFY uses a monotonic clock and reports step plus total timings on success");
 fs.writeFileSync(path.join(etmp, "big.js"), "process.stdout.write('x'.repeat(2 * 1024 * 1024));");
 fs.writeFileSync(path.join(etmp, "harness.config.json"), JSON.stringify({ verify: { stacks: [{ id: "t", markers: ["m.txt"], steps: [{ name: "big", run: "node big.js" }] }] } }));
 ok(verifyExit(etmp) === 0, "verify runner assertion 6");
@@ -1100,6 +1114,36 @@ fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"),
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /CI job verify runs doctor, verify\.js, design-gate --strict and secret scan/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 7");
+const aggregatedCi = [
+  "name: verify", "jobs:",
+  "  windows_full:", "    runs-on: windows-latest", "    steps:",
+  "      - run: node hooks/doctor.js", "      - run: gitleaks detect", "      - run: node hooks/verify.js --mode full",
+  "      - run: node hooks/design-gate.js --strict --base origin/main",
+  "  verify:", "    if: ${{ always() }}", "    needs: [windows_full]", "    runs-on: ubuntu-latest", "    steps:",
+  "      - env:", "          WINDOWS_RESULT: ${{ needs.windows_full.result }}", "        run: |",
+  "          if [[ \"$WINDOWS_RESULT\" != \"success\" ]]; then", "            exit 1", "          fi", "",
+].join("\n");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi);
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /CI job verify is a fail-closed aggregator over full harness gate windows_full/.test(r.msg) && r.level === "PASS"),
+  "doctor accepts a required verify aggregator only when a dependency carries the full gate");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi.replace("            exit 1\n", "            echo ignored\n"));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /not a fail-closed aggregator:.*missing explicit failing exit/.test(r.msg) && r.level === "FAIL"),
+  "doctor rejects a verify aggregator that cannot fail on a dependency result");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi.replace("${{ needs.windows_full.result }}", "success"));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /not a fail-closed aggregator:.*does not bind windows_full\.result/.test(r.msg) && r.level === "FAIL"),
+  "doctor rejects an aggregator that does not bind every dependency result");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi.replace("  windows_full:\n", "  windows_full:\n    continue-on-error: true\n"));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /not a fail-closed aggregator:.*dependency job uses job-level continue-on-error: windows_full/.test(r.msg) && r.level === "FAIL"),
+  "doctor rejects an advisory full-gate dependency behind the required context");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi.replace("      - run: gitleaks detect\n", "      - run: echo secret scan omitted\n"));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /not a fail-closed aggregator:.*no dependency runs all required harness steps:.*secret scan/.test(r.msg) && r.level === "FAIL"),
+  "doctor rejects an aggregator whose dependencies omit a required gate");
+fs.writeFileSync(path.join(bootRepo, ".github", "workflows", "ci.yml"), aggregatedCi);
 const targetReleaseWorkflow = path.join(bootRepo, ".github", "workflows", "release.yml");
 fs.writeFileSync(targetReleaseWorkflow,
   "name: release\non:\n  push:\n    tags: ['v*']\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0\n      - run: echo target package\n");
@@ -1855,6 +1899,38 @@ ok(taskCoordinator.parseArgs(["start", "Bad Slug"]).errors.length > 0,
   "task start rejects unsafe branch slugs");
 ok(taskCoordinator.parseArgs(["report", "--json"]).errors.length === 0,
   "task report is available as a machine-readable handoff");
+const caseStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness-state-case-"));
+const mixedCaseRoot = path.join(caseStateRoot, "HarnessCase");
+const lowerCaseRoot = path.join(caseStateRoot, "harnesscase");
+fs.mkdirSync(mixedCaseRoot);
+const caseVariantStateFiles = [taskState.stateFile(mixedCaseRoot), taskState.stateFile(lowerCaseRoot)];
+ok(fs.existsSync(lowerCaseRoot) ? caseVariantStateFiles[0] === caseVariantStateFiles[1] : caseVariantStateFiles[0] !== caseVariantStateFiles[1],
+  "task state keys follow the host filesystem case-sensitivity contract");
+try { fs.rmSync(caseStateRoot, { recursive: true, force: true }); } catch {}
+const receiptRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-receipt-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: receiptRepo });
+execFileSync("git", ["config", "user.email", "receipt@example.test"], { cwd: receiptRepo });
+execFileSync("git", ["config", "user.name", "Receipt Test"], { cwd: receiptRepo });
+fs.writeFileSync(path.join(receiptRepo, "base.txt"), "base\n");
+execFileSync("git", ["add", "."], { cwd: receiptRepo });
+execFileSync("git", ["commit", "-q", "-m", "chore: base"], { cwd: receiptRepo });
+execFileSync("git", ["checkout", "-q", "-b", "feat/receipt"], { cwd: receiptRepo });
+const freshReceiptEvent = { receipt: taskState.captureReceipt(receiptRepo, "main") };
+ok(taskState.receiptFreshness(receiptRepo, freshReceiptEvent).freshness === "fresh",
+  "task receipt is fresh while HEAD, base, and working tree are unchanged");
+fs.writeFileSync(path.join(receiptRepo, "feature.txt"), "feature\n");
+execFileSync("git", ["add", "."], { cwd: receiptRepo });
+execFileSync("git", ["commit", "-q", "-m", "feat: move head"], { cwd: receiptRepo });
+ok(taskState.receiptFreshness(receiptRepo, freshReceiptEvent).staleReasons.includes("HEAD changed"),
+  "task receipt becomes stale after HEAD changes");
+const baseMoveEvent = { receipt: taskState.captureReceipt(receiptRepo, "main") };
+const mainOid = execFileSync("git", ["rev-parse", "main"], { cwd: receiptRepo, encoding: "utf8" }).trim();
+const movedMainOid = execFileSync("git", ["commit-tree", `${mainOid}^{tree}`, "-p", mainOid, "-m", "chore: move base"],
+  { cwd: receiptRepo, encoding: "utf8" }).trim();
+execFileSync("git", ["update-ref", "refs/heads/main", movedMainOid, mainOid], { cwd: receiptRepo });
+ok(taskState.receiptFreshness(receiptRepo, baseMoveEvent).staleReasons.includes("main changed"),
+  "task receipt becomes stale when the resolved base ref moves");
+try { fs.rmSync(receiptRepo, { recursive: true, force: true }); } catch {}
 const taskRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-task-"));
 execFileSync("git", ["init", "-q", "-b", "main"], { cwd: taskRepo });
 execFileSync("git", ["config", "user.email", "task@example.test"], { cwd: taskRepo });
@@ -1883,7 +1959,11 @@ ok(taskState.unchangedFromBaseline(taskRepo), "task baseline recognizes unchange
 fs.writeFileSync(path.join(taskRepo, "README.md"), "agent changed it\n");
 fs.writeFileSync(path.join(taskRepo, ".github", "workflows", "ci.yml"), "name: changed\n");
 ok(!taskState.unchangedFromBaseline(taskRepo), "task baseline detects changes made after start");
-taskState.recordEvent(taskRepo, { kind: "check", ok: true, base: "main", branch: "main", commands: ["node hooks/verify.js --mode fast --base main"] });
+taskState.recordEvent(taskRepo, {
+  kind: "check", ok: true, base: "main", branch: "main",
+  commands: ["node hooks/verify.js --mode fast --base main"],
+  receipt: taskState.captureReceipt(taskRepo, "main"),
+});
 const taskStatus = taskCoordinator.worktreeStatus(taskRepo, { command: "status", base: "main" });
 ok(taskStatus.ok === false && /protected main has local dirt/.test(taskStatus.health.items.join("\n")),
   "task status highlights dirty protected main before more work");
@@ -1894,6 +1974,33 @@ ok(taskReport.report.changed.some((line) => /working-tree change/.test(line)) &&
    taskReport.report.verified.some((line) => /check passed/.test(line)) &&
    taskReport.report.remaining.some((line) => /feature\/release worktree/.test(line)),
   "task report summarizes changed, verified, and remaining work");
+fs.writeFileSync(path.join(taskRepo, "after-check.txt"), "verification is now stale\n");
+const staleTaskStatus = taskCoordinator.worktreeStatus(taskRepo, { command: "status", base: "main" });
+const staleTaskReport = taskCoordinator.report(taskRepo, { command: "report", base: "main" });
+ok(staleTaskStatus.status.lastCheck.stale === true &&
+   staleTaskStatus.health.items.some((line) => /last check is stale/.test(line)) &&
+   staleTaskReport.report.verified.some((line) => /check stale \(was passed/.test(line)) &&
+   !staleTaskReport.report.verified.some((line) => /^check passed/.test(line)) &&
+   staleTaskReport.report.remaining.some((line) => /verification receipt is stale/.test(line)),
+  "task status and report mark a passed receipt stale after the repository changes");
+const legacyFreshness = taskState.receiptFreshness(taskRepo, { kind: "check", ok: true });
+ok(legacyFreshness.freshness === "stale" && /missing or unsupported/.test(legacyFreshness.staleReasons.join(" ")),
+  "task treats legacy verification events without a receipt as stale");
+taskState.recordEvent(taskRepo, {
+  kind: "finish", ok: true, base: "main", branch: "main", commands: ["full verify"],
+  receipt: taskState.captureReceipt(taskRepo, "main"),
+});
+taskState.recordEvent(taskRepo, {
+  kind: "check", ok: false, base: "main", branch: "main", commands: ["fast verify"],
+  receipt: taskState.captureReceipt(taskRepo, "main"),
+});
+const latestFailedTaskReport = taskCoordinator.report(taskRepo, { command: "report", base: "main" });
+ok(latestFailedTaskReport.report.verified.some((line) => /^check failed/.test(line)) &&
+   !latestFailedTaskReport.report.verified.some((line) => /^finish passed/.test(line)),
+  "task report uses the latest verification event instead of preferring an older finish");
+fs.appendFileSync(taskState.eventFile(taskRepo), '{"kind":"check"', "utf8");
+ok(taskState.lastEvent(taskRepo, "check").ok === false,
+  "task event history preserves valid records when the final JSONL line is truncated");
 fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "first\n");
 taskState.saveBaseline(taskRepo);
 fs.writeFileSync(path.join(taskRepo, "путь с пробелом.txt"), "second\n");
@@ -1996,6 +2103,31 @@ ok(firstInstall.ok === true && firstInstall.installed === true && firstInstall.b
   "install: fresh repository reports bootstrapRequired without failing file installation");
 ok(!firstInstall.migrationRequired.includes("branch-lifecycle-policy-review"),
   "install: fresh target receives branch lifecycle policy without a migration flag");
+const installedTaskSmoke = spawnSync(process.execPath, [path.join(itmp, "hooks", "task.js"), "status", "--json"],
+  { cwd: itmp, encoding: "utf8" });
+let installedTaskStatus = null;
+try { installedTaskStatus = JSON.parse(String(installedTaskSmoke.stdout || "")); } catch {}
+ok(!fs.existsSync(path.join(itmp, "scripts")) && installedTaskStatus && installedTaskStatus.command === "status" &&
+   installedTaskSmoke.status === 1 && installedTaskStatus.health && installedTaskStatus.status &&
+   Array.isArray(installedTaskStatus.health.items) && !/MODULE_NOT_FOUND|papercuts-release/.test(String(installedTaskSmoke.stderr || "")),
+  "install: copied task coordinator runs in a fresh target without source-only scripts");
+const installedCi = fs.readFileSync(path.join(itmp, ".github", "workflows", "ci.yml"), "utf8");
+const installedWorkflowSteps = installedCi.split(/\r?\n(?=\s{6}- name:)/);
+const unsafeNodeScripts = [];
+for (const step of installedWorkflowSteps) {
+  const activeStep = step.split(/\r?\n/).filter((line) => !line.trimStart().startsWith("#")).join("\n");
+  for (const match of activeStep.matchAll(/\bnode\s+([A-Za-z0-9_./-]+\.js)\b/g)) {
+    const rel = match[1].replace(/\\/g, "/");
+    const exists = fs.existsSync(path.join(itmp, ...rel.split("/")));
+    const guarded = activeStep.includes(`if: \${{ hashFiles('${rel}') != '' }}`) ||
+      activeStep.includes(`if: \${{ hashFiles("${rel}") != '' }}`);
+    if (!exists && !guarded) unsafeNodeScripts.push(rel);
+  }
+}
+ok(unsafeNodeScripts.length === 0 && /node hooks\/verify\.js --check-harness-syntax/.test(installedCi) &&
+   /node hooks\/task\.js status --json/.test(installedCi),
+  "install: copied CI guards source-only Node scripts and always smokes managed runtime" +
+    (unsafeNodeScripts.length ? ` (unsafe: ${unsafeNodeScripts.join(", ")})` : ""));
 const enforceableGate = installJson(itmp, ["--require-enforceable"]);
 ok(enforceableGate.ok === false && enforceableGate.installed === true && enforceableGate.bootstrapRequired === true &&
    /not-enforceable/.test(enforceableGate.reason || ""),

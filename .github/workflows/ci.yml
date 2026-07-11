@@ -22,7 +22,37 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  platform_contract:
+    name: platform-contract (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      # Managed runtime exists in both this source repository and installed
+      # targets, so these smoke checks are the universal portability contract.
+      - name: Platform-neutral managed runtime smoke
+        run: |
+          node hooks/verify.js --check-harness-syntax
+          node hooks/task.js status --json
+
+      # The source self-test is intentionally not installed into targets. Run it
+      # only when this workflow belongs to the source harness repository.
+      - name: Source harness portability contract
+        if: ${{ hashFiles('hooks/test.js') != '' }}
+        run: node hooks/test.js --only task,installer,verify,hygiene
+
+  windows_full:
+    name: windows-full
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -114,3 +144,24 @@ jobs:
       - name: DESIGN-gate
         if: github.event_name == 'pull_request'
         run: node hooks/design-gate.js --strict --base ${{ github.event.pull_request.base.sha }}
+
+  # Keep this job id and name stable: the branch ruleset requires the exact
+  # GitHub Actions check context `verify`. The explicit result check prevents a
+  # skipped/neutral dependency from accidentally satisfying the required gate.
+  verify:
+    name: verify
+    if: ${{ always() }}
+    needs: [platform_contract, windows_full]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every verification lane to pass
+        shell: bash
+        env:
+          PLATFORM_RESULT: ${{ needs.platform_contract.result }}
+          WINDOWS_RESULT: ${{ needs.windows_full.result }}
+        run: |
+          if [[ "$PLATFORM_RESULT" != "success" || "$WINDOWS_RESULT" != "success" ]]; then
+            echo "verification dependency failed: platform_contract=$PLATFORM_RESULT windows_full=$WINDOWS_RESULT" >&2
+            exit 1
+          fi
+          echo "all verification lanes passed"
