@@ -13,13 +13,25 @@
 //   node hooks/apply-ruleset.js --check    # read-only live drift check
 //   node hooks/apply-ruleset.js --check --json
 //
+// Trunk mode (harness.config.json branchLifecycle.mode="trunk"): the applied and
+// expected ruleset drops the pull_request and required_status_checks rules, so
+// direct pushes to main are allowed while delete/force-push stay blocked.
+// main.json itself always keeps the full PR-flow template for target installs.
+//
 // Exit 0 = applied (or dry-run), 1 = failed.
 
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { isTrunk } = require(path.join(__dirname, "workflow-mode.js"));
 
 const rulesetPath = path.join(__dirname, "..", ".github", "rulesets", "main.json");
+const TRUNK_DROPPED_RULES = ["pull_request", "required_status_checks"];
+
+function expectedRuleset(raw, trunk) {
+  if (!trunk) return raw;
+  return { ...raw, rules: (raw.rules || []).filter((r) => !TRUNK_DROPPED_RULES.includes(r.type)) };
+}
 
 function gh(args, opts = {}) {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], ...opts }).trim();
@@ -121,8 +133,9 @@ function main(argv = process.argv.slice(2)) {
     process.exit(1);
   }
   try {
-    const raw = JSON.parse(fs.readFileSync(rulesetPath, "utf8"));
-    delete raw._comment; // strip the doc comment before sending
+    const parsed = JSON.parse(fs.readFileSync(rulesetPath, "utf8"));
+    delete parsed._comment; // strip the doc comment before sending
+    const raw = expectedRuleset(parsed, isTrunk(path.join(__dirname, "..")));
     const body = JSON.stringify(raw);
 
     if (args.dryRun) {
@@ -173,5 +186,5 @@ function main(argv = process.argv.slice(2)) {
   }
 }
 
-module.exports = { parseArgs, parseRulesetList, compareRuleset, driftReport };
+module.exports = { parseArgs, parseRulesetList, compareRuleset, driftReport, expectedRuleset };
 if (require.main === module) main();

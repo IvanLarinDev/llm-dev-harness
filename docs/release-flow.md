@@ -6,6 +6,26 @@ computed SemVer tag, GitHub Release publication, and exact cleanup. It never
 authorizes bypasses, force-pushes, deletion of unmerged work, rollback, or loss
 of a dirty worktree.
 
+## Trunk mode
+
+When `harness.config.json` sets `branchLifecycle.mode: "trunk"`, the R0-R8
+sequence below does not apply. The whole release is:
+
+```text
+node hooks/release-trunk.js --dry-run
+node hooks/release-trunk.js
+```
+
+The script requires a clean `main` exactly at `origin/main`, bumps manifests
+and the version with Cocogitto, and pushes the version commit and the
+annotated tag in one atomic `git push` - either both reach origin or neither
+does. Any failure rolls `main` back to the pre-release commit and deletes the
+local tag. The tag-triggered workflow then validates the tag against
+`origin/main` (in trunk mode the tag must be the branch tip, not a release
+merge) and publishes the GitHub Release. R6 verification
+(`release-artifacts.js --phase all`) still applies. The rest of this document
+describes pr mode.
+
 ## Preconditions
 
 - All intended feature/fix work is merged through PRs.

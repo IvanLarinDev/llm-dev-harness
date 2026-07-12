@@ -50,8 +50,8 @@ const INSTALL_MANIFEST = ".harness/installation.json";
 // else is project policy: installer-created templates are seeds, never update
 // payloads. test.js and release.yml remain source-repository-only.
 const MANAGED_FILES = [
-  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/branch-state.js", "hooks/github-branch-cleanup.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
-  "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js", "hooks/task-state.js", "hooks/task.js",
+  "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-trunk.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/branch-state.js", "hooks/github-branch-cleanup.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
+  "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js", "hooks/task-state.js", "hooks/task.js", "hooks/workflow-mode.js",
   "hooks/uninstall.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "settings.example.json",
