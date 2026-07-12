@@ -163,6 +163,10 @@ The cross-project contract is `docs/universal-contract.md`.
 - `harness.config.json` selects UI, release, and server-policy capabilities.
 - A fresh install is not enforceable until bootstrap files are tracked through
   a separate PR and Lefthook is active.
+- Thin install (`node install.js --thin --target <dir>`): nothing from `hooks/`
+  is copied; the target tracks only `harness.config.json` with a pinned engine
+  version, while lefthook.yml, agent settings, and `.harness/` stay
+  machine-local and gitignored. Doctor validates the engine path and pin.
 
 Local hooks protect against mistakes; the server ruleset is the strongest gate.
 Standard guard mode blocks bypass/corruption hazards and reports protected-file,

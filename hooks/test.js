@@ -2531,6 +2531,50 @@ ok(lhOut.ok === true && lhOut.lefthook && lhOut.lefthook.status === "removed" &&
   "uninstall: missing lefthook binary still removes managed git hooks directly");
 try { fs.rmSync(lhtmp, { recursive: true, force: true }); fs.rmSync(emptyPathDir, { recursive: true, force: true }); } catch {}
 
+// ---------- thin install: the engine stays outside the target repository ----------
+const ttmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-thin-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: ttmp });
+execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: ttmp });
+execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: ttmp });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/thin-target.git"], { cwd: ttmp });
+const repoPosix = REPO.replace(/\\/g, "/");
+const thinInstall = installJson(ttmp, ["--thin"]);
+ok(thinInstall.ok === true && thinInstall.mode === "thin-install" && !fs.existsSync(path.join(ttmp, "hooks")),
+  "install --thin: engine files are not copied into the target");
+const thinLh = fs.readFileSync(path.join(ttmp, "lefthook.yml"), "utf8");
+ok(thinLh.includes(`${repoPosix}/hooks/verify.js`) && thinLh.includes(`${repoPosix}/hooks/branch-guard.js`),
+  "install --thin: lefthook wiring calls the engine by absolute path");
+const thinIgnore = fs.readFileSync(path.join(ttmp, ".gitignore"), "utf8");
+ok(["lefthook.yml", ".harness/", ".claude/settings.json"].every((line) => thinIgnore.includes(line)),
+  "install --thin: machine-local wiring is gitignored");
+const thinSettingsText = JSON.stringify(JSON.parse(fs.readFileSync(path.join(ttmp, ".claude", "settings.json"), "utf8")));
+ok(thinSettingsText.includes(`${repoPosix}/hooks/agent/guard.js`) && thinSettingsText.includes(`${repoPosix}/hooks/agent/stop-reminder.js`),
+  "install --thin: agent hooks reference the engine by absolute path");
+const thinCfg = JSON.parse(fs.readFileSync(path.join(ttmp, "harness.config.json"), "utf8"));
+const thinManifest = JSON.parse(fs.readFileSync(path.join(ttmp, ".harness", "installation.json"), "utf8"));
+ok(thinCfg.engine && typeof thinCfg.engine.version === "string" &&
+   thinManifest.mode === "thin" && thinManifest.engine.path === repoPosix &&
+   Object.keys(thinManifest.managed).join(",") === "lefthook.yml",
+  "install --thin: engine version is pinned in config and the manifest records the engine path");
+execFileSync("git", ["add", "harness.config.json", ".gitignore"], { cwd: ttmp });
+execFileSync("git", ["commit", "-q", "-m", "chore: thin harness config"], { cwd: ttmp });
+const thinDoctorRun = (() => {
+  try { return JSON.parse(execFileSync("node", [path.join(REPO, "hooks", "doctor.js"), "--root", ttmp, "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })); }
+  catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return { results: [] }; } }
+})();
+ok(!(thinDoctorRun.results || []).some((r) => r.code === "bootstrap-required") &&
+   (thinDoctorRun.results || []).some((r) => /thin mode: engine available/.test(r.msg) && r.level === "PASS"),
+  "doctor: thin target validates the engine instead of demanding vendored hooks");
+const thinUninstallRun = spawnSync(process.execPath, [path.join(REPO, "hooks", "uninstall.js"), "--target", ttmp, "--json"], { cwd: ttmp, encoding: "utf8" });
+const thinUninstall = (() => { try { return JSON.parse(String(thinUninstallRun.stdout || "{}")); } catch { return {}; } })();
+const thinSettingsAfter = fs.readFileSync(path.join(ttmp, ".claude", "settings.json"), "utf8");
+const thinIgnoreAfter = fs.readFileSync(path.join(ttmp, ".gitignore"), "utf8");
+ok(thinUninstall.ok === true && !fs.existsSync(path.join(ttmp, "lefthook.yml")) &&
+   !fs.existsSync(path.join(ttmp, ".harness", "installation.json")) &&
+   !/hooks\/agent\/guard\.js/i.test(thinSettingsAfter) && !/harness thin mode/.test(thinIgnoreAfter),
+  "uninstall: thin wiring is removed cleanly (lefthook, settings, manifest, gitignore)");
+try { fs.rmSync(ttmp, { recursive: true, force: true }); } catch {}
+
 const unsafeUninstall = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-unsafe-"));
 fs.mkdirSync(path.join(unsafeUninstall, ".harness"), { recursive: true });
 fs.writeFileSync(path.join(unsafeUninstall, "AGENTS.md"), "project policy\n");

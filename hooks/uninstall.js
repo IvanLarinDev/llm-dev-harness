@@ -70,6 +70,14 @@ function normalizedCommand(command) {
   return String(command || "").replace(/\\/g, "/").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+// Thin installs wire the agent hooks with absolute engine paths, so exact
+// matching is complemented by a suffix match on the well-known agent scripts.
+function isHarnessAgentCommand(command) {
+  const norm = normalizedCommand(command);
+  if (HARNESS_COMMANDS.has(norm)) return true;
+  return /^node ["']?(?:[a-z]:)?[^ ]*\/hooks\/agent\/(?:guard|stop-reminder)\.js["']?$/.test(norm);
+}
+
 function cleanSettings(target, dryRun) {
   const file = path.join(target, ".claude", "settings.json");
   let value;
@@ -86,7 +94,7 @@ function cleanSettings(target, dryRun) {
     for (const entry of value.hooks[event]) {
       if (!entry || !Array.isArray(entry.hooks)) { entries.push(entry); continue; }
       const hooks = entry.hooks.filter((hook) => {
-        const match = HARNESS_COMMANDS.has(normalizedCommand(hook && hook.command));
+        const match = isHarnessAgentCommand(hook && hook.command);
         if (match) removed++;
         return !match;
       });
@@ -105,6 +113,8 @@ function cleanGitignore(target, dryRun) {
   let text;
   try { text = fs.readFileSync(file, "utf8"); }
   catch (e) { return { status: e.code === "ENOENT" ? "missing" : "error", removed: 0, ...(e.code === "ENOENT" ? {} : { reason: e.message }) }; }
+  const THIN_COMMENT = "# harness thin mode (machine-local wiring; do not commit)";
+  const THIN_LINES = new Set([".claude/settings.local.json", ".claude/settings.json", "lefthook.yml", ".harness/"]);
   const lines = text.split(/\r?\n/);
   let removed = 0;
   const out = [];
@@ -112,6 +122,12 @@ function cleanGitignore(target, dryRun) {
     if (lines[i] === "# agent runtime (local runner settings; do not commit)" && lines[i + 1] === ".claude/settings.local.json") {
       removed += 2;
       i++;
+      if (out.length && out[out.length - 1] === "") out.pop();
+      continue;
+    }
+    if (lines[i] === THIN_COMMENT) {
+      removed++;
+      while (i + 1 < lines.length && THIN_LINES.has(lines[i + 1].trim())) { i++; removed++; }
       if (out.length && out[out.length - 1] === "") out.pop();
       continue;
     }

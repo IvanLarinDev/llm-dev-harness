@@ -346,6 +346,11 @@ const releaseProvider = sourceHarness ? "cocogitto" : String(capabilities.releas
 const serverProvider = sourceHarness ? "github" : String(capabilities.serverPolicy || (harnessConfig.serverPolicy && harnessConfig.serverPolicy.provider) || "github");
 const serverProfile = sourceHarness ? "solo" : String((harnessConfig.serverPolicy && harnessConfig.serverPolicy.profile) || "team");
 
+// Thin target: the engine lives outside this repository; only harness.config.json
+// (with an engine pin) is tracked, wiring files are machine-local.
+const engineConfig = harnessConfig.engine;
+const thinTarget = !sourceHarness && !!engineConfig && typeof engineConfig === "object" && !Array.isArray(engineConfig);
+
 // runner + delegated tools in PATH (WARN, not FAIL; CI provides them)
 const tools = [
   ["lefthook", "git hook runner (lefthook install)"],
@@ -356,7 +361,7 @@ for (const t of tools) {
   inPath(t[0]) ? ok(t[0] + " found") : env(t[0] + " not in PATH - " + t[1], "tool-missing");
 }
 
-const requiredHarnessFiles = [
+const requiredHarnessFiles = thinTarget ? ["harness.config.json"] : [
   "hooks/verify.js",
   "hooks/verify-core.js",
   "hooks/design-gate.js",
@@ -388,12 +393,12 @@ const requiredHarnessFiles = [
   "AGENTS.md",
   "settings.example.json",
 ];
-if (releaseProvider === "cocogitto") requiredHarnessFiles.push("cog.toml", "CHANGELOG.md");
-if (serverProvider === "github") requiredHarnessFiles.push(
+if (!thinTarget && releaseProvider === "cocogitto") requiredHarnessFiles.push("cog.toml", "CHANGELOG.md");
+if (!thinTarget && serverProvider === "github") requiredHarnessFiles.push(
   ".github/rulesets/main.json", ".github/workflows/ci.yml", ".github/workflows/branch-cleanup.yml", ".github/CODEOWNERS"
 );
 if (sourceHarness) requiredHarnessFiles.push("hooks/test.js", "templates/AGENTS.target.md", "templates/cog.target.toml");
-else requiredHarnessFiles.push(".harness/installation.json");
+else if (!thinTarget) requiredHarnessFiles.push(".harness/installation.json");
 const missingHarness = [];
 const untrackedHarness = [];
 for (const f of requiredHarnessFiles) {
@@ -408,6 +413,33 @@ if (missingHarness.length || untrackedHarness.length) {
     ". Create a bootstrap PR and commit these files before the dev/release loop.", "bootstrap-required");
 } else {
   ok("harness bootstrap files present and tracked");
+}
+
+if (thinTarget) {
+  let engineManifest = null;
+  try { engineManifest = JSON.parse(fs.readFileSync(path.join(ROOT, ".harness", "installation.json"), "utf8")); } catch {}
+  const enginePath = engineManifest && engineManifest.engine ? String(engineManifest.engine.path || "") : "";
+  if (!enginePath) {
+    fail("thin mode: .harness/installation.json with engine.path is missing; rerun node <engine>/install.js --thin --target .", "thin-engine-manifest");
+  } else if (!fs.existsSync(path.join(enginePath, "hooks", "verify.js"))) {
+    env(`thin mode: engine not found at ${enginePath}; restore the engine checkout or rerun install --thin`, "thin-engine-missing");
+  } else {
+    ok(`thin mode: engine available at ${enginePath}`);
+    const pin = String(engineConfig.version || "");
+    let live = "";
+    try {
+      live = execFileSync("git", ["describe", "--tags", "--always"], {
+        cwd: enginePath, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000, killSignal: "SIGKILL",
+      }).trim();
+    } catch {}
+    if (pin && live && live !== pin.replace(/\+dirty$/, ""))
+      warn(`thin mode: engine version ${live} differs from pinned ${pin}; refresh the pin with install --thin or check out the pinned engine`);
+    else if (pin)
+      ok(`thin mode: engine version pin ${pin}`);
+  }
+  fs.existsSync(path.join(ROOT, "lefthook.yml"))
+    ? ok("thin mode: machine-local lefthook.yml present")
+    : warn("thin mode: lefthook.yml is missing; rerun install --thin to restore machine-local wiring");
 }
 
 // Critical harness files must be portable across Windows/macOS/Linux checkouts.

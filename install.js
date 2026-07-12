@@ -43,6 +43,7 @@ const { spawnSync } = require("child_process");
 const SRC = __dirname;
 const { DEFAULT_UI_GLOBS, DEFAULT_UI_EXCLUDE, DEFAULT_MOCKUPS, doctorEnvironmentReady } = require(path.join(SRC, "hooks", "_lib.js"));
 const { loadBranchPolicy } = require(path.join(SRC, "hooks", "release-cleanup.js"));
+const { workflowMode } = require(path.join(SRC, "hooks", "workflow-mode.js"));
 
 const INSTALL_MANIFEST = ".harness/installation.json";
 
@@ -75,7 +76,7 @@ const CI_FILES = [{ rel: ".github/dependabot.yml" }];
 function parseArgs(argv) {
   const a = {
     target: process.cwd(), force: false, update: false, replaceManaged: false,
-    allowDirtySource: false,
+    allowDirtySource: false, thin: false,
     requireEnforceable: false, dryRun: false, withCi: false,
     withRuleset: false, codeOwner: "", serverProvider: "auto",
     rulesetProfile: "auto", releaseProvider: "auto", json: false, errors: [],
@@ -93,6 +94,7 @@ function parseArgs(argv) {
     else if (arg === "--update") a.update = true;
     else if (arg === "--replace-managed") { a.update = true; a.replaceManaged = true; }
     else if (arg === "--allow-dirty-source") a.allowDirtySource = true;
+    else if (arg === "--thin") a.thin = true;
     else if (arg === "--require-enforceable") a.requireEnforceable = true;
     else if (arg === "--dry-run") a.dryRun = true;
     else if (arg === "--with-ci") a.withCi = true;
@@ -125,6 +127,8 @@ function parseArgs(argv) {
   if (!["auto", "solo", "team"].includes(a.rulesetProfile)) a.errors.push(`unsupported --ruleset-profile: ${a.rulesetProfile}`);
   if (!["auto", "cocogitto", "none"].includes(a.releaseProvider)) a.errors.push(`unsupported --release-provider: ${a.releaseProvider}`);
   if (a.rulesetProfile === "solo" && a.codeOwner) a.errors.push("--ruleset-profile solo cannot require --code-owner review");
+  if (a.thin && (a.withCi || a.withRuleset || a.codeOwner || a.rulesetProfile !== "auto"))
+    a.errors.push("--thin writes no server templates; drop --with-ci/--with-ruleset/--code-owner/--ruleset-profile");
   a.target = path.resolve(explicitTarget || positionalTarget || a.target);
   return a;
 }
@@ -133,7 +137,7 @@ function parseArgs(argv) {
 // Reuse UI glob/mockup defaults from _lib. Do not pin verify: target projects need
 // stack auto-detection, not this source repo's self-test.
 function defaultConfig(adapters) {
-  const branchLifecycle = loadBranchPolicy(SRC);
+  const branchLifecycle = { mode: workflowMode(SRC), ...loadBranchPolicy(SRC) };
   return JSON.stringify({
     schemaVersion: 2,
     capabilities: { ui: "auto", release: adapters.release, serverPolicy: adapters.server },
@@ -198,6 +202,85 @@ function writeInstallManifest(managed, dryRun, source) {
       managed: MANAGED_FILES,
       projectOwned: ["harness.config.json", "AGENTS.md", "cog.toml", ".gitleaks.toml", ".gitattributes", ".github/**", "CHANGELOG.md"],
     },
+  };
+  if (!dryRun) {
+    const dst = path.join(a.target, INSTALL_MANIFEST);
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, JSON.stringify(body, null, 2) + "\n");
+  }
+  return { rel: INSTALL_MANIFEST, action: dryRun ? "plan" : "write", source };
+}
+
+// ---------- thin mode: machine-local wiring, the engine stays outside the repo ----------
+// Nothing from hooks/ is copied. The target keeps only harness.config.json (with a
+// pinned engine version) in git; lefthook.yml, .claude/settings.json wiring, and
+// .harness/ are machine-local and gitignored, recreated by rerunning install --thin.
+const THIN_GITIGNORE_COMMENT = "# harness thin mode (machine-local wiring; do not commit)";
+const THIN_GITIGNORE_LINES = [".claude/settings.local.json", ".claude/settings.json", "lefthook.yml", ".harness/"];
+
+function thinLefthookYml() {
+  const src = SRC.replace(/\\/g, "/");
+  return [
+    "# lefthook.yml - machine-local wiring written by llm-dev-harness install --thin.",
+    `# The engine lives at ${src}; this file is intentionally not committed.`,
+    "# New machine: node <engine>/install.js --thin --target .",
+    "",
+    "commit-msg:",
+    "  commands:",
+    "    conventional:",
+    "      run: cog verify --file '{1}'",
+    "    no-coauthor:",
+    `      run: node "${src}/hooks/no-coauthor.js" '{1}'`,
+    "",
+    "pre-commit:",
+    "  parallel: true",
+    "  commands:",
+    "    secrets:",
+    "      run: gitleaks git --staged --redact --no-banner",
+    "    branch-guard:",
+    `      run: node "${src}/hooks/branch-guard.js"`,
+    "",
+    "pre-push:",
+    "  commands:",
+    "    verify:",
+    `      run: node "${src}/hooks/verify.js" --mode full`,
+    "    design-gate:",
+    `      run: node "${src}/hooks/design-gate.js" --base origin/main`,
+    "",
+  ].join("\n");
+}
+
+function writeThinLefthook(dryRun) {
+  const dst = path.join(a.target, "lefthook.yml");
+  const body = thinLefthookYml();
+  let same = false;
+  try { same = fs.readFileSync(dst, "utf8") === body; } catch {}
+  const exists = same || fs.existsSync(dst);
+  if (!dryRun && !same) fs.writeFileSync(dst, body);
+  const action = same ? "already" : dryRun ? "plan" : exists ? "overwrite" : "write";
+  return { rel: "lefthook.yml", action, ownership: "local", hash: crypto.createHash("sha256").update(body).digest("hex") };
+}
+
+function ensureEnginePin(dryRun, source) {
+  const dst = path.join(a.target, "harness.config.json");
+  let config;
+  try { config = JSON.parse(fs.readFileSync(dst, "utf8")); }
+  catch (e) { return { action: "error", reason: `cannot pin engine version in invalid harness.config.json: ${e.message}` }; }
+  const version = String(source.version || "");
+  if (config.engine && config.engine.version === version) return { action: "already", version };
+  config.engine = { ...(config.engine || {}), version };
+  if (!dryRun) fs.writeFileSync(dst, JSON.stringify(config, null, 2) + "\n");
+  return { action: "pinned", version };
+}
+
+function writeThinManifest(managed, dryRun, source) {
+  const body = {
+    schemaVersion: 1,
+    mode: "thin",
+    source,
+    engine: { path: SRC.replace(/\\/g, "/"), version: String(source.version || "") },
+    managed,
+    ownership: { managed: Object.keys(managed), projectOwned: ["harness.config.json"] },
   };
   if (!dryRun) {
     const dst = path.join(a.target, INSTALL_MANIFEST);
@@ -409,18 +492,19 @@ function ensureChangelog(dryRun) {
 // clone. Only ignore .claude/settings.local.json, which holds per-user runner
 // permissions. Guard state lives in the system temp directory, not the repository.
 const GITIGNORE_LINES = [".claude/settings.local.json"];
-function ensureGitignore(dryRun) {
+function ensureGitignore(dryRun, thin) {
   const dst = path.join(a.target, ".gitignore");
   let cur = "";
   try { cur = fs.readFileSync(dst, "utf8"); } catch {}
   const have = new Set(cur.split(/\r?\n/).map((s) => s.trim()));
-  const covered = have.has(".claude/") || have.has(".claude") || have.has("/.claude/");
-  const missing = covered ? [] : GITIGNORE_LINES.filter((l) => !have.has(l));
+  const covered = !thin && (have.has(".claude/") || have.has(".claude") || have.has("/.claude/"));
+  const wantedLines = thin ? THIN_GITIGNORE_LINES : GITIGNORE_LINES;
+  const missing = covered ? [] : wantedLines.filter((l) => !have.has(l));
   if (!missing.length) return { action: "already" };
+  const comment = thin ? THIN_GITIGNORE_COMMENT : "# agent runtime (local runner settings; do not commit)";
   if (!dryRun) {
     const pad = cur && !cur.endsWith("\n") ? "\n" : "";
-    fs.writeFileSync(dst, cur + pad + (cur ? "\n" : "") +
-      "# agent runtime (local runner settings; do not commit)\n" + missing.join("\n") + "\n");
+    fs.writeFileSync(dst, cur + pad + (cur ? "\n" : "") + comment + "\n" + missing.join("\n") + "\n");
   }
   return { action: cur ? "appended" : "created", added: missing };
 }
@@ -428,10 +512,17 @@ function ensureGitignore(dryRun) {
 // ---------- merge agent hooks into .claude/settings.json ----------
 // Keep foreign keys and hooks intact, but dedupe only exact harness commands.
 // A random command ending in guard.js must not mask a missing harness guard.
-function mergeSettings(dryRun) {
+function mergeSettings(dryRun, thin) {
   let wanted;
   try { wanted = JSON.parse(fs.readFileSync(path.join(SRC, "settings.example.json"), "utf8")).hooks; }
   catch { return { status: "error", reason: "source settings.example.json is unreadable" }; }
+  if (thin) {
+    const src = SRC.replace(/\\/g, "/");
+    for (const ev of Object.keys(wanted)) for (const entry of wanted[ev]) for (const hook of entry.hooks || []) {
+      if (typeof hook.command === "string" && /^node hooks\/\S+\.js$/.test(hook.command))
+        hook.command = `node "${hook.command.replace(/^node hooks\//, `${src}/hooks/`)}"`;
+    }
+  }
   const dst = path.join(a.target, ".claude", "settings.json");
   let cur = {};
   try { cur = JSON.parse(fs.readFileSync(dst, "utf8")); }
@@ -461,7 +552,8 @@ function runLefthook() {
   return { ok: r.status === 0, code: r.status };
 }
 function runDoctor() {
-  const r = spawnSync("node", [path.join(a.target, "hooks", "doctor.js"), "--root", a.target, "--json"],
+  const script = a.thin ? path.join(SRC, "hooks", "doctor.js") : path.join(a.target, "hooks", "doctor.js");
+  const r = spawnSync("node", [script, "--root", a.target, "--json"],
     { encoding: "utf8" });
   try { return JSON.parse(r.stdout); } catch { return { ok: false, results: [] }; }
 }
@@ -477,7 +569,7 @@ const a = parseArgs(process.argv.slice(2));
   const out = {
     ok: true, installed: false, bootstrapRequired: false, activationRequired: false, enforceable: false,
     target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null,
-    adapters: null, installManifest: null, changelog: null, cog: null, codeowners: null,
+    adapters: null, installManifest: null, changelog: null, cog: null, codeowners: null, enginePin: null,
     settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, source: null,
     migrationRequired: [], notes: [], argumentErrors: a.errors,
   };
@@ -495,7 +587,8 @@ const a = parseArgs(process.argv.slice(2));
   if (!isGit) out.notes.push("target directory is not a git repository: lefthook install and branch gates require `git init`.");
 
   const selfInstall = path.resolve(a.target) === path.resolve(SRC);
-  out.mode = selfInstall ? "bootstrap" : "install";
+  if (a.thin && selfInstall) return finish(out, false, "--thin cannot target the source repository");
+  out.mode = selfInstall ? "bootstrap" : a.thin ? "thin-install" : "install";
   out.source = sourceIdentity();
   const dirtySourceAllowed = a.allowDirtySource || targetIsDetached(a.target);
   if (!selfInstall && out.source.dirty && !dirtySourceAllowed) {
@@ -511,7 +604,15 @@ const a = parseArgs(process.argv.slice(2));
   }
 
   // 1. Files.
-  if (!selfInstall) {
+  if (!selfInstall && a.thin) {
+    const lefthookFile = writeThinLefthook(a.dryRun);
+    out.files.push(lefthookFile);
+    out.config = writeConfig(out.adapters, a.dryRun);
+    out.migrationRequired = (out.config && out.config.migrations) || [];
+    out.enginePin = ensureEnginePin(a.dryRun, out.source);
+    out.installManifest = writeThinManifest({ "lefthook.yml": lefthookFile.hash }, a.dryRun, out.source);
+    out.notes.push(`thin mode: the engine stays at ${SRC}; lefthook.yml, agent settings, and ${INSTALL_MANIFEST} are machine-local and gitignored.`);
+  } else if (!selfInstall) {
     const previous = readInstallManifest();
     const managedHashes = {};
     for (const rel of MANAGED_FILES) {
@@ -563,11 +664,12 @@ const a = parseArgs(process.argv.slice(2));
   }
 
   // 2. Agent hooks in settings.json.
-  out.settings = mergeSettings(a.dryRun);
+  out.settings = mergeSettings(a.dryRun, a.thin && !selfInstall);
   if (out.settings.status === "error") out.notes.push("settings: " + out.settings.reason);
 
   // 2b. .gitignore: only personal settings.local.json; harness files are committed.
-  out.gitignore = ensureGitignore(a.dryRun);
+  // Thin mode additionally ignores all machine-local wiring.
+  out.gitignore = ensureGitignore(a.dryRun, a.thin && !selfInstall);
 
   // 3. Activation, except in dry-run mode.
   if (!a.dryRun) {
@@ -590,6 +692,7 @@ const a = parseArgs(process.argv.slice(2));
   out.enforceable = out.installed && isGit && !!(out.lefthook && out.lefthook.ok) && !!(out.doctor && out.doctor.environmentReady);
   if (out.settings.status === "error") hardFailures.push("settings");
   if (out.config && out.config.action === "error") hardFailures.push("harness-config");
+  if (out.enginePin && out.enginePin.action === "error") hardFailures.push("engine-pin");
   if (conflicts.length) hardFailures.push("managed-file-conflict");
   if (!a.dryRun && nonBootstrapDoctorFails.length) hardFailures.push("doctor");
   if (!a.dryRun && a.withRuleset && out.ruleset && !out.ruleset.ok) hardFailures.push("ruleset");
@@ -619,6 +722,7 @@ function finish(out, ok, reason) {
   }
   if (out.config) console.log(`  harness.config.json: ${out.config.action === "write" ? "generated" : out.config.action === "update-explicit" ? "updated by explicit adapter/profile selection" : out.config.action === "error" ? "error - " + out.config.reason : "project-owned; preserved"}`);
   if (out.installManifest) console.log(`  ${INSTALL_MANIFEST}: managed-file baseline recorded`);
+  if (out.enginePin) console.log(`  engine pin: ${out.enginePin.action === "error" ? "error - " + out.enginePin.reason : `${out.enginePin.version || "unversioned"} (${out.enginePin.action})`}`);
   if (out.changelog) console.log(`  CHANGELOG.md: ${out.changelog.action === "write" ? "generated" : "preserved"}`);
   if (out.codeowners) console.log(`  CODEOWNERS/ruleset: ${out.codeowners.owner ? "owner " + out.codeowners.owner + " configured" : "template only, code-owner review disabled"}`);
   if (out.settings) console.log(`  .claude/settings.json: ${out.settings.status === "merged" ? `+${out.settings.added} agent hook(s) merged` : out.settings.status === "already" ? "agent hooks already present" : "error - " + out.settings.reason}`);
