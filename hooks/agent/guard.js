@@ -33,7 +33,7 @@ const { loadConfig, isUiPath, normRel, isProtectedPath, isProtectedShellWrite,
 
 const TTL_MS = 2 * 60 * 60 * 1000;
 const SEEN_MAX = 200;
-const BYPASS_HINT = "Bypass requires explicit user approval; ask the user first. The escape hatch is documented in AGENTS.md.";
+const BYPASS_HINT = "Runner-level bypass requires explicit user approval and HARNESS_ACK_BYPASS=1 in the hook process environment before the agent starts; chat approval alone cannot change that environment.";
 
 // ---------- profiles ----------
 const ALL_CHECKS = ["bypass", "protected", "lintconfig", "corruption", "entropy", "loops", "main-note", "design-note", "fact-force"];
@@ -52,7 +52,7 @@ function checkEnabled(id, env) {
   return PROFILES[getProfile(env)].has(id);
 }
 function advisoryInStandard(id, env) {
-  return getProfile(env) === "standard" && new Set(["lintconfig", "entropy", "loops"]).has(id);
+  return getProfile(env) === "standard" && new Set(["protected", "lintconfig", "entropy", "loops"]).has(id);
 }
 function envAllow(env, name) {
   return ["1", "true", "yes", "on"].includes(String(env[name] || "").trim().toLowerCase());
@@ -225,16 +225,19 @@ function run(ctx, env = process.env) {
       const scrubbed = scrubQuotes(command);
       const pathScan = unquoteShellPaths(scrubGitMessageArgs(command));
 
-      // 1) hard safety boundaries stay blocking; standard-mode lint policy is advisory.
-      const hardHit =
-        (checkEnabled("bypass", env) &&
-          (BYPASS.find((b) => b.re.test(scrubbed)) ||
-            (isGitHooksWrite(pathScan) ? { why: "direct write/delete under .git/hooks" } : null))) ||
-        (checkEnabled("protected", env) && isProtectedShellWrite(pathScan, cfg.protected)
-          ? { why: "shell write to harness files (hooks/, configs, workflows)" } : null);
+      // 1) bypasses stay blocking. Protected-file edits are audited in standard
+      // mode because chat approval cannot be transported into a pre-start hook
+      // environment; strict/minimal keep the hard protection contract.
+      const bypassHit = checkEnabled("bypass", env) &&
+        (BYPASS.find((b) => b.re.test(scrubbed)) ||
+          (isGitHooksWrite(pathScan) ? { why: "direct write/delete under .git/hooks" } : null));
+      const protectedHit = checkEnabled("protected", env) && isProtectedShellWrite(pathScan, cfg.protected)
+        ? { why: "shell write to harness files (hooks/, configs, workflows)" } : null;
       const lintHit = checkEnabled("lintconfig", env) && isLintConfigShellWrite(pathScan, cfg.lintConfigs)
         ? { why: "shell write to lint/format config; review why project policy must change" } : null;
-      const hit = hardHit || (lintHit && !advisoryInStandard("lintconfig", env) ? lintHit : null);
+      const hit = bypassHit ||
+        (protectedHit && !advisoryInStandard("protected", env) ? protectedHit : null) ||
+        (lintHit && !advisoryInStandard("lintconfig", env) ? lintHit : null);
       if (hit) {
         if (envAllow(env, "HARNESS_ACK_BYPASS")) {
           notes.push(`guard: harness bypass was explicitly approved by the user: ${hit.why}. Explain this in the report.`);
@@ -242,6 +245,8 @@ function run(ctx, env = process.env) {
           return blockRes(`guard: command bypasses the harness; blocked.\n   Reason: ${hit.why}.\n   ${BYPASS_HINT}`);
         }
       }
+      if (protectedHit && advisoryInStandard("protected", env))
+        notes.push(`guard advisory: ${protectedHit.why}; verify the user-approved scope and explain it in the report.`);
       if (lintHit && advisoryInStandard("lintconfig", env)) notes.push(`guard advisory: ${lintHit.why}.`);
 
       // 1c) writes to harness files through inline interpreter eval.
@@ -250,6 +255,8 @@ function run(ctx, env = process.env) {
         if (ip) {
           if (envAllow(env, "HARNESS_ACK_BYPASS")) {
             notes.push(`guard: inline-eval write to harness file (${ip}) was explicitly approved by the user. Explain this in the report.`);
+          } else if (advisoryInStandard("protected", env)) {
+            notes.push(`guard advisory: inline-eval may write a harness file (${ip}); verify the user-approved scope and explain it in the report.`);
           } else {
             return blockRes(`guard: command looks like an inline-eval write to a harness file (${ip}).\n` +
               `   Reason: node -e / python -c / bash -c hides the write from normal shell detection.\n   ${BYPASS_HINT}`);
@@ -308,6 +315,8 @@ function run(ctx, env = process.env) {
       if (isFile && checkEnabled("protected", env) && isProtectedPath(rel, cfg.protected)) {
         if (envAllow(env, "HARNESS_ACK_BYPASS")) {
           notes.push(`guard: harness file edit (${rel}) was explicitly approved by the user.`);
+        } else if (advisoryInStandard("protected", env)) {
+          notes.push(`guard advisory: editing harness file ${rel}; verify the user-approved scope and explain it in the report.`);
         } else {
           return blockRes(`guard: harness file edit blocked: ${rel}\n` +
             `   Agents must not change harness hooks/configs without approval.\n   ${BYPASS_HINT}`);

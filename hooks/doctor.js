@@ -372,6 +372,7 @@ const requiredHarnessFiles = [
   "hooks/repo-state-audit.js",
   "hooks/task-state.js",
   "hooks/task.js",
+  "hooks/uninstall.js",
   "hooks/new-mockups.js",
   "hooks/doctor.js",
   "hooks/apply-ruleset.js",

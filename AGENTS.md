@@ -147,9 +147,11 @@ The cross-project contract is `docs/universal-contract.md`.
   a separate PR and Lefthook is active.
 
 Local hooks protect against mistakes; the server ruleset is the strongest gate.
-Standard guard mode blocks bypass/protected-file/corruption hazards and reports
-loops or lint-policy edits as advice. `HARNESS_PROFILE=strict` restores hard
-loop/lint blocking; `minimal` keeps only anti-bypass and protected files.
+Standard guard mode blocks bypass/corruption hazards and reports protected-file,
+loop, or lint-policy edits as advice. `HARNESS_PROFILE=strict` restores hard
+protected-file/loop/lint blocking; `minimal` keeps hard anti-bypass and protected
+file checks. Runner-level `HARNESS_ACK_BYPASS=1` must be present before the agent
+starts; chat approval alone cannot alter a running hook process environment.
 
 ## Papercuts
 

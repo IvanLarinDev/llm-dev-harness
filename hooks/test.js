@@ -401,8 +401,9 @@ ok(bp("ls .git/hooks") === 0, "guard bypass detection assertion 11");
 ok(bp('git commit -m "docs: add -n / --no-verify support notes"') === 0, "guard bypass detection assertion 12");
 ok(bp('git commit -m "feat(core): real change"') === 0, "guard bypass detection assertion 13");
 ok(bp("git commit --no-verify -m x", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard bypass detection assertion 14");
-ok(!/HARNESS_ACK_BYPASS/.test(gout({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("hint"))),
-  "guard bypass detection assertion 15");
+ok(/HARNESS_ACK_BYPASS=1/.test(gout({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("hint"))) &&
+   /before the agent starts/.test(gout({ tool_name: "Bash", tool_input: { command: "git commit --no-verify -m x" } }, sess("hint2"))),
+  "guard bypass hint explains the runner-level approval boundary truthfully");
 
 // ---------- branch-guard CLI ----------
 console.log("\nbranch-guard:");
@@ -422,19 +423,23 @@ try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
 
 // ---------- guard: shell writes to protected paths ----------
 console.log("\nguard: protected paths via shell:");
-ok(bp("sed -i 's/x/y/' hooks/agent/guard.js") === 2, "guard protected paths via shell assertion 1");
-ok(bp("echo bad >> lefthook.yml") === 2, "guard protected paths via shell assertion 2");
-ok(bp("rm -rf hooks") === 2, "guard protected paths via shell assertion 3");
-ok(bp("mv lefthook.yml lefthook.yml.bak") === 2, "guard protected paths via shell assertion 4");
-ok(bp("tee .github/workflows/ci.yml") === 2, "guard protected paths via shell assertion 5");
-ok(bp("del hooks\\agent\\guard.js") === 2, "guard protected paths via shell assertion 6");
-ok(bp("move lefthook.yml lefthook.bak") === 2, "guard protected paths via shell assertion 7");
-ok(bp("rd /s hooks") === 2, "guard protected paths via shell assertion 8");
-ok(bp("Remove-Item lefthook.yml") === 2, "guard protected paths via shell assertion 9");
-ok(bp("Set-Content .github\\workflows\\ci.yml -Value x") === 2, "guard protected paths via shell assertion 10");
-ok(bp("Copy-Item x lefthook.yml") === 2, "block: Copy-Item into lefthook.yml (PowerShell, destination is second arg)");
-ok(bp('rm "hooks/agent/guard.js"') === 2, "block: quoted protected path in POSIX shell command");
-ok(bp('Remove-Item "lefthook.yml"') === 2, "block: quoted protected path in PowerShell command");
+const strictBp = (cmd, env = {}) => bp(cmd, { HARNESS_PROFILE: "strict", ...env });
+ok(strictBp("sed -i 's/x/y/' hooks/agent/guard.js") === 2, "guard protected paths via shell assertion 1");
+ok(strictBp("echo bad >> lefthook.yml") === 2, "guard protected paths via shell assertion 2");
+ok(strictBp("rm -rf hooks") === 2, "guard protected paths via shell assertion 3");
+ok(strictBp("mv lefthook.yml lefthook.yml.bak") === 2, "guard protected paths via shell assertion 4");
+ok(strictBp("tee .github/workflows/ci.yml") === 2, "guard protected paths via shell assertion 5");
+ok(strictBp("del hooks\\agent\\guard.js") === 2, "guard protected paths via shell assertion 6");
+ok(strictBp("move lefthook.yml lefthook.bak") === 2, "guard protected paths via shell assertion 7");
+ok(strictBp("rd /s hooks") === 2, "guard protected paths via shell assertion 8");
+ok(strictBp("Remove-Item lefthook.yml") === 2, "guard protected paths via shell assertion 9");
+ok(strictBp("Set-Content .github\\workflows\\ci.yml -Value x") === 2, "guard protected paths via shell assertion 10");
+ok(strictBp("Copy-Item x lefthook.yml") === 2, "block: Copy-Item into lefthook.yml (PowerShell, destination is second arg)");
+ok(strictBp('rm "hooks/agent/guard.js"') === 2, "block: quoted protected path in POSIX shell command");
+ok(strictBp('Remove-Item "lefthook.yml"') === 2, "block: quoted protected path in PowerShell command");
+ok(bp("Set-Content .github\\workflows\\ci.yml -Value x") === 0 &&
+   /guard advisory: shell write to harness files/.test(gout({ tool_name: "Bash", tool_input: { command: "Set-Content .github\\workflows\\ci.yml -Value x" } }, sess("prot-standard"))),
+  "standard guard allows an audited protected-file edit when chat approval cannot reach hook env");
 ok(bp('git commit -m "rm hooks/"') === 0, "does not treat quoted commit message text as a protected write");
 ok(bp("del notes.txt") === 0, "guard protected paths via shell assertion 11");
 ok(bp("Remove-Item build\\temp.log") === 0, "guard protected paths via shell assertion 12");
@@ -442,29 +447,30 @@ ok(bp("node hooks/verify.js") === 0, "guard protected paths via shell assertion 
 ok(bp("node hooks/test.js") === 0, "guard protected paths via shell assertion 14");
 ok(bp("cat hooks/agent/guard.js") === 0, "guard protected paths via shell assertion 15");
 ok(bp("git add hooks/ lefthook.yml") === 0, "guard protected paths via shell assertion 16");
-ok(bp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected paths via shell assertion 17");
+ok(strictBp("sed -i 's/x/y/' hooks/agent/guard.js", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected paths via shell assertion 17");
 
 // ---------- guard: protected-write bypass through inline interpreter eval ----------
 console.log("\nguard: interpreter-eval protected write:");
+const strictSess = (id) => ({ ...sess(id), HARNESS_PROFILE: "strict" });
 ok(/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1"))),
   "node -e writeFileSync in hooks/ -> inline-eval interpreter message");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, sess("ie1b")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, strictSess("ie1b")) === 2,
   "guard interpreter eval protected write assertion 1");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook.yml','w').write('x')\"" } }, sess("ie2")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"open('lefthook.yml','w').write('x')\"" } }, strictSess("ie2")) === 2,
   "guard interpreter eval protected write assertion 2");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"from pathlib import Path; Path('hooks/agent/guard.js').write_text('x')\"" } }, sess("ie2b")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"from pathlib import Path; Path('hooks/agent/guard.js').write_text('x')\"" } }, strictSess("ie2b")) === 2,
   "guard interpreter eval protected write assertion 3");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import shutil; shutil.rmtree('hooks')\"" } }, sess("ie2c")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import shutil; shutil.rmtree('hooks')\"" } }, strictSess("ie2c")) === 2,
   "guard interpreter eval protected write assertion 4");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import os; os.remove('lefthook.yml')\"" } }, sess("ie2d")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "python -c \"import os; os.remove('lefthook.yml')\"" } }, strictSess("ie2d")) === 2,
   "guard interpreter eval protected write assertion 5");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, sess("ie3")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "bash -c 'rm -rf hooks/'" } }, strictSess("ie3")) === 2,
   "guard interpreter eval protected write assertion 6");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "pwsh -EncodedCommand SQBFAFgAIAAoACcAaABvAG8AawBzAC8AYQBnAGUAbgB0AC8AZwB1AGEAcgBkAC4AagBzACcAKQA=" } }, sess("ie9")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "pwsh -EncodedCommand SQBFAFgAIAAoACcAaABvAG8AawBzAC8AYQBnAGUAbgB0AC8AZwB1AGEAcgBkAC4AagBzACcAKQA=" } }, strictSess("ie9")) === 2,
   "pwsh -EncodedCommand -> opaque eval is blocked");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "powershell -EncodedCommand SQBFAFgAIAAoACcAbABlAGYAdABoAG8AbwBrAC4AeQBtAGwAJwApAA==" } }, sess("ie10")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "powershell -EncodedCommand SQBFAFgAIAAoACcAbABlAGYAdABoAG8AbwBrAC4AeQBtAGwAJwApAA==" } }, strictSess("ie10")) === 2,
   "powershell -EncodedCommand -> opaque eval is blocked");
-ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs')['write'+'FileSync']('hooks/agent/guard.js','x')\"" } }, sess("ie11")) === 2,
+ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs')['write'+'FileSync']('hooks/agent/guard.js','x')\"" } }, strictSess("ie11")) === 2,
   "node -e dynamic writeFileSync in hooks/ -> hard block");
 ok(gexit({ tool_name: "Bash", tool_input: { command: "node -e \"require('fs').writeFileSync('hooks/agent/guard.js','x')\"" } }, { ...sess("ie8"), HARNESS_ACK_BYPASS: "1" }) === 0,
   "guard interpreter eval protected write assertion 7");
@@ -476,6 +482,8 @@ ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "ssh -c
   "ssh -c ... -> no note (not an interpreter; `sh` in `ssh` does not match the word boundary)");
 ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node hooks/verify.js" } }, sess("ie7"))),
   "node hooks/verify.js (without -e) -> no note");
+ok(!/inline-eval/i.test(gout({ tool_name: "Bash", tool_input: { command: "node -e \"const out='hooks/design-gate.js --json'; process.stdout.write(JSON.parse('true') ? out : '')\"" } }, sess("ie-readonly"))),
+  "read-only node -e may print parsed design-gate JSON without being classified as a protected write");
 
 // ---------- guard: stream corruption ----------
 console.log("\nguard: stream corruption:");
@@ -525,18 +533,23 @@ ok(gexit({ tool_name: "Read", tool_input: {} }, sess("ft3")) === 0, "guard file 
 // ---------- guard: protected harness files ----------
 console.log("\nguard: protected harness files:");
 const ed = (fp, env = {}) => gexit({ tool_name: "Edit", tool_input: { file_path: fp } }, { ...sess("prot"), ...env });
-ok(ed("lefthook.yml") === 2, "guard protected harness files assertion 1");
-ok(ed("hooks/agent/guard.js") === 2, "guard protected harness files assertion 2");
-ok(gexit({ tool_name: "Write", tool_input: { filename: "hooks/agent/guard.js" } }, sess("prot-alias")) === 2,
+const edStrict = (fp, env = {}) => ed(fp, { HARNESS_PROFILE: "strict", ...env });
+const edStandard = (fp) => gexit({ tool_name: "Edit", tool_input: { file_path: fp } }, sess("prot-standard-file"));
+ok(edStrict("lefthook.yml") === 2, "guard protected harness files assertion 1");
+ok(edStrict("hooks/agent/guard.js") === 2, "guard protected harness files assertion 2");
+ok(gexit({ tool_name: "Write", tool_input: { filename: "hooks/agent/guard.js" } }, strictSess("prot-alias")) === 2,
   "block: protected file write through filename path alias");
-ok(ed(".claude/settings.json") === 2, "guard protected harness files assertion 3");
-ok(ed(".github/workflows/ci.yml") === 2, "guard protected harness files assertion 4");
+ok(edStrict(".claude/settings.json") === 2, "guard protected harness files assertion 3");
+ok(edStrict(".github/workflows/ci.yml") === 2, "guard protected harness files assertion 4");
 ok(ed("src/app.py") === 0, "guard protected harness files assertion 5");
-ok(ed("lefthook.yml", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected harness files assertion 6");
-ok(ed("./lefthook.yml") === 2, "guard protected harness files assertion 7");
-ok(ed("design/../hooks/agent/guard.js") === 2, "guard protected harness files assertion 8");
-ok(ed("Lefthook.yml") === 2, "guard protected harness files assertion 9");
+ok(edStrict("lefthook.yml", { HARNESS_ACK_BYPASS: "1" }) === 0, "guard protected harness files assertion 6");
+ok(edStrict("./lefthook.yml") === 2, "guard protected harness files assertion 7");
+ok(edStrict("design/../hooks/agent/guard.js") === 2, "guard protected harness files assertion 8");
+ok(edStrict("Lefthook.yml") === 2, "guard protected harness files assertion 9");
 ok(ed("hooks2/readme.md") === 0, "guard protected harness files assertion 10");
+ok(edStandard(".github/workflows/ci.yml") === 0 &&
+   /guard advisory: editing harness file/.test(gout({ tool_name: "Edit", tool_input: { file_path: ".github/workflows/ci.yml" } }, sess("prot-standard-file-note"))),
+  "standard file-tool harness edits are audited instead of blocked");
 
 // ---------- guard: lint-config protection (ECC config-protection pattern) ----------
 console.log("\nguard: lint-config protection:");
@@ -564,7 +577,7 @@ cases("guard: red-team adversarial fixtures", [
   { name: "block ruby -e File.write against protected file", cmd: "ruby -e \"File.write('lefthook.yml','x')\"", exit: 2 },
   { name: "block installation baseline tampering", cmd: "echo x > .harness/installation.json", exit: 2 },
   { name: "allow interpreter write to ordinary src/hooks project file", cmd: "python -c \"open('src/hooks/useAuth.ts','w').write('x')\"", exit: 0 },
-], (c) => bp(c.cmd, c.env || {}) === c.exit);
+], (c) => strictBp(c.cmd, c.env || {}) === c.exit);
 
 cases("guard: red-team file path aliases", [
   { name: "block targetFile alias with normalized protected traversal", tool: "Create", input: { targetFile: "design/../hooks/agent/guard.js" }, exit: 2 },
@@ -572,7 +585,7 @@ cases("guard: red-team file path aliases", [
   { name: "block filename alias for .git/hooks write", tool: "Write", input: { filename: ".git/hooks/pre-commit" }, exit: 2 },
   { name: "block file-tool installation baseline tampering", tool: "Write", input: { file_path: ".harness/installation.json" }, exit: 2 },
   { name: "allow mixed-purpose pyproject.toml", tool: "Edit", input: { file_path: "pyproject.toml" }, exit: 0 },
-], (c) => gexit({ tool_name: c.tool, tool_input: c.input }, sess("rt-file")) === c.exit);
+], (c) => gexit({ tool_name: c.tool, tool_input: c.input }, strictSess("rt-file")) === c.exit);
 
 // ---------- guard: fact-force (EXPLORE before IMPLEMENT, ECC GateGuard pattern) ----------
 console.log("\nguard: fact-force:");
@@ -828,6 +841,24 @@ ok(gate(dtmp, ["src/ui/main_window.ui", "design/mockups/legacy-set/APPROVED"]) =
 ok(gate(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/legacy-set/APPROVED"]) === 1,
   "design gate rejects a touched approval scoped to an unrelated UI path");
 
+const legacyLayoutDir = path.join(dtmp, "design", "mockups", "wheel-overflow");
+fs.mkdirSync(legacyLayoutDir, { recursive: true });
+const legacyLayoutVariants = [];
+for (let i = 1; i <= 4; i++) {
+  const file = `${i}-layout.html`;
+  legacyLayoutVariants.push({ file, focus: `legacy layout ${i}` });
+  fs.writeFileSync(path.join(legacyLayoutDir, file), "<!doctype html>\n");
+}
+fs.writeFileSync(path.join(legacyLayoutDir, "DESIGN.json"), JSON.stringify({
+  schemaVersion: 1, feature: "wheel-overflow", kind: "layout", fidelity: "js",
+  example: "Overflow moves to another ring.", variants: legacyLayoutVariants,
+}, null, 2) + "\n");
+fs.writeFileSync(path.join(legacyLayoutDir, "APPROVED"), "approved: legacy\nui: src/ui/wheel-overflow.ui\n");
+const legacyLayoutResult = gateResult(dtmp, ["src/ui/wheel-overflow.ui", "design/mockups/wheel-overflow/APPROVED"]);
+ok(legacyLayoutResult.ok === true && legacyLayoutResult.mockups.kind === "existing-ui" &&
+   legacyLayoutResult.mockups.evidence[0].legacyKind === "layout",
+  "design gate accepts pre-kind-migration layout evidence as legacy existing-ui evidence");
+
 const waiverDir = path.join(dtmp, "design", "mockups", "tile-reorder");
 fs.mkdirSync(waiverDir, { recursive: true });
 fs.writeFileSync(path.join(waiverDir, "WAIVER.json"), JSON.stringify({
@@ -842,6 +873,29 @@ ok(gateResult(dtmp, ["src/ui/tile-reorder.ui", "design/mockups/tile-reorder/WAIV
   "design gate accepts a scoped explicit waiver for a UI-path change");
 ok(gate(dtmp, ["src/ui/other.ui", "design/mockups/tile-reorder/WAIVER.json"]) === 1,
   "design gate rejects a waiver scoped to an unrelated UI path");
+const unionA = path.join(dtmp, "design", "mockups", "feature-a");
+const unionB = path.join(dtmp, "design", "mockups", "feature-b");
+for (const [dir, feature, uiPath] of [
+  [unionA, "feature-a", "src/ui/feature-a.ui"],
+  [unionB, "feature-b", "src/ui/feature-b.ui"],
+]) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "WAIVER.json"), JSON.stringify({
+    schemaVersion: 1, feature, uiPaths: [uiPath],
+    reason: "The user approved existing per-feature evidence for this accumulated branch.",
+    date: "2026-07-12", approvedBy: "user",
+  }, null, 2) + "\n");
+}
+const unionFiles = [
+  "src/ui/feature-a.ui", "src/ui/feature-b.ui",
+  "design/mockups/feature-a/WAIVER.json", "design/mockups/feature-b/WAIVER.json",
+];
+const unionResult = gateResult(dtmp, unionFiles);
+ok(unionResult.ok === true && unionResult.mockups.features.join(",") === "feature-a,feature-b" &&
+   unionResult.mockups.scopePatterns.length === 2,
+  "design gate unions multiple touched evidence sets to cover an accumulated UI branch diff");
+ok(gate(dtmp, unionFiles.slice(0, 3)) === 1,
+  "design gate still blocks when the touched evidence union leaves one UI file uncovered");
 // Missing diff base is fail-open locally, but loud (skipped:true in --json).
 const noGit = fs.mkdtempSync(path.join(os.tmpdir(), "harness-nogit-"));
 let gateJson = {};
@@ -1099,6 +1153,26 @@ ok((dres.results || []).some((r) => /atomic lock operations/.test(r.msg) && r.le
   "doctor: .git supports write+unlink lock operations -> PASS on a normal filesystem");
 ok(typeof dres.blocked === "boolean" && typeof dres.envs === "number" && typeof dres.environmentCode === "number",
   "doctor JSON separates repository blocking state from environment classification");
+const doctorPathFixture = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-path-"));
+const gitLookup = execFileSync(process.platform === "win32" ? "where" : "which", ["git"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
+let doctorLimitedPath;
+if (process.platform === "win32") {
+  doctorLimitedPath = [path.dirname(gitLookup), path.join(process.env.SystemRoot || "C:\\Windows", "System32")].join(path.delimiter);
+} else {
+  fs.symlinkSync(gitLookup, path.join(doctorPathFixture, "git"));
+  doctorLimitedPath = doctorPathFixture;
+}
+function doctorWithPath(root, extra) {
+  const limitedEnv = { ...process.env };
+  for (const key of Object.keys(limitedEnv)) if (key.toLowerCase() === "path") delete limitedEnv[key];
+  limitedEnv.PATH = doctorLimitedPath;
+  const run = spawnSync(process.execPath, [DOCTOR, "--root", root, "--json", ...extra], {
+    encoding: "utf8", env: limitedEnv,
+  });
+  let json = {};
+  try { json = JSON.parse(String(run.stdout || "{}")); } catch {}
+  return { status: run.status, json };
+}
 fs.writeFileSync(path.join(drepo, ".git", "index.lock"), "");
 dres = doctor(drepo);
 ok((dres.results || []).some((r) => /index\.lock/.test(r.msg) && r.level === "WARN"),
@@ -1127,7 +1201,7 @@ try { fs.rmSync(linkedRepo, { recursive: true, force: true }); fs.rmSync(linkedW
 const bootRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-doctor-bootstrap-"));
 execFileSync("git", ["init", "-q"], { cwd: bootRepo });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/IvanLarinDev/llm-dev-harness.git"], { cwd: bootRepo });
-try { execFileSync("node", [path.join(REPO, "install.js"), "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" }); } catch {}
+try { execFileSync("node", [path.join(REPO, "install.js"), "--allow-dirty-source", "--target", bootRepo, "--json"], { encoding: "utf8", stdio: "pipe" }); } catch {}
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness not bootstrapped/.test(r.msg) && /untracked:/.test(r.msg) && r.level === "FAIL"),
   "doctor assertion 2");
@@ -1135,6 +1209,14 @@ execFileSync("git", ["add", "."], { cwd: bootRepo });
 dres = doctor(bootRepo);
 ok((dres.results || []).some((r) => /harness bootstrap files present and tracked/.test(r.msg) && r.level === "PASS"),
   "doctor assertion 3");
+const envOnlyDoctor = doctorWithPath(bootRepo, []);
+const strictEnvDoctor = doctorWithPath(bootRepo, ["--strict-env"]);
+ok(envOnlyDoctor.status === 0 && envOnlyDoctor.json.fails === 0 && envOnlyDoctor.json.envs >= 2 &&
+   envOnlyDoctor.json.environmentCode === 3 && envOnlyDoctor.json.blocked === false,
+  "doctor: missing delegated tools are ENV-only and never fail the default CI contract");
+ok(strictEnvDoctor.status === 1 && strictEnvDoctor.json.blocked === true,
+  "doctor: --strict-env remains available when full environment provisioning is required");
+try { fs.rmSync(doctorPathFixture, { recursive: true, force: true }); } catch {}
 ok((dres.results || []).some((r) => /GitHub branch cleanup runs only after green default-branch verify/.test(r.msg) && r.level === "PASS"),
   "doctor accepts the provider-confirmed branch cleanup workflow");
 const targetBranchCleanupWorkflow = path.join(bootRepo, ".github", "workflows", "branch-cleanup.yml");
@@ -2130,9 +2212,10 @@ try { fs.rmSync(stopRepo3, { recursive: true, force: true }); fs.rmSync(transcri
 if (runGroup("installer")) {
 console.log("\ninstaller:");
 const INSTALL = path.join(REPO, "install.js");
-function installArgs(args, cwd = REPO) {
+function installArgs(args, cwd = REPO, allowDirtySource = true) {
   try {
-    const s = execFileSync("node", [INSTALL, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const effective = allowDirtySource ? ["--allow-dirty-source", ...args] : args;
+    const s = execFileSync("node", [INSTALL, ...effective], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
     return JSON.parse(s);
   } catch (e) { try { return JSON.parse(String(e.stdout || "{}")); } catch { return {}; } }
 }
@@ -2157,6 +2240,48 @@ ok(duplicateTarget.ok === false && duplicateTarget.mode === "invalid" && /either
 const missingTargetValue = installArgs(["--target", "--json"]);
 ok(missingTargetValue.ok === false && /--target requires a directory/.test(missingTargetValue.reason || ""),
 "install: missing --target value fails explicitly");
+
+const dirtySourceParent = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dirty-source-"));
+const dirtySource = path.join(dirtySourceParent, "source");
+fs.cpSync(REPO, dirtySource, {
+  recursive: true,
+  filter: (source) => {
+    const rel = path.relative(REPO, source).replace(/\\/g, "/");
+    return rel !== ".git" && !rel.startsWith(".git/") && rel !== ".codex" && !rel.startsWith(".codex/") &&
+      rel !== "node_modules" && !rel.startsWith("node_modules/");
+  },
+});
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dirtySource });
+execFileSync("git", ["config", "user.name", "Harness Test"], { cwd: dirtySource });
+execFileSync("git", ["config", "user.email", "harness@example.test"], { cwd: dirtySource });
+execFileSync("git", ["add", "."], { cwd: dirtySource });
+execFileSync("git", ["commit", "-q", "-m", "chore: clean source fixture"], { cwd: dirtySource });
+execFileSync("git", ["tag", "v9.9.9"], { cwd: dirtySource });
+fs.appendFileSync(path.join(dirtySource, "README.md"), "\npost-tag source commit\n");
+execFileSync("git", ["add", "README.md"], { cwd: dirtySource });
+execFileSync("git", ["commit", "-q", "-m", "docs: post-tag source commit"], { cwd: dirtySource });
+const dirtyTarget = fs.mkdtempSync(path.join(os.tmpdir(), "harness-dirty-target-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dirtyTarget });
+function dirtyInstall(extra) {
+  const run = spawnSync(process.execPath, [path.join(dirtySource, "install.js"), "--target", dirtyTarget, "--json", ...extra],
+    { cwd: dirtySource, encoding: "utf8" });
+  try { return JSON.parse(String(run.stdout || "{}")); } catch { return {}; }
+}
+const cleanAhead = dirtyInstall(["--dry-run"]);
+ok(cleanAhead.ok === true && cleanAhead.source.dirty === false && /^v9\.9\.9-1-g[0-9a-f]+$/.test(cleanAhead.source.version || ""),
+  "install: a clean post-tag source commit is identified by tag distance and SHA, not mislabeled as the release tag");
+fs.appendFileSync(path.join(dirtySource, "hooks", "doctor.js"), "\n// dirty provenance fixture\n");
+const refusedDirty = dirtyInstall([]);
+ok(refusedDirty.ok === false && refusedDirty.source && refusedDirty.source.dirty === true &&
+   /clean released checkout|allow-dirty-source/.test(refusedDirty.reason || "") && !fs.existsSync(path.join(dirtyTarget, "hooks")),
+  "install: dirty source payload is refused before target writes");
+const admittedDirty = dirtyInstall(["--allow-dirty-source"]);
+const dirtyManifest = JSON.parse(fs.readFileSync(path.join(dirtyTarget, ".harness", "installation.json"), "utf8"));
+ok(admittedDirty.ok === true && dirtyManifest.source.dirty === true &&
+   dirtyManifest.source.version === `${cleanAhead.source.version}+dirty` &&
+   dirtyManifest.source.dirtyFiles.includes("hooks/doctor.js"),
+  "install: explicit dirty source is provenance-marked instead of mislabeled as a release");
+try { fs.rmSync(dirtySourceParent, { recursive: true, force: true }); fs.rmSync(dirtyTarget, { recursive: true, force: true }); } catch {}
 // dry-run: plan exists and disk is untouched.
 let plan = installJson(itmp, ["--dry-run"]);
 ok(plan.ok === true && plan.mode === "install", "installer assertion 1");
@@ -2201,8 +2326,64 @@ ok(enforceableGate.ok === false && enforceableGate.installed === true && enforce
 ok(fs.existsSync(path.join(itmp, "hooks", "agent", "guard.js")) && fs.existsSync(path.join(itmp, "hooks", "verify-core.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-guard.js")) && fs.existsSync(path.join(itmp, "hooks", "no-coauthor.js")) && fs.existsSync(path.join(itmp, "hooks", "task.js")) && fs.existsSync(path.join(itmp, "hooks", "task-state.js")) && fs.existsSync(path.join(itmp, "hooks", "release-start.js")) && fs.existsSync(path.join(itmp, "hooks", "release-config.js")) && fs.existsSync(path.join(itmp, "hooks", "release-manifest-bump.js")) && fs.existsSync(path.join(itmp, "hooks", "release-preflight.js")) && fs.existsSync(path.join(itmp, "hooks", "release-artifacts.js")) && fs.existsSync(path.join(itmp, "hooks", "branch-state.js")) && fs.existsSync(path.join(itmp, "hooks", "github-branch-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "post-merge-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "release-cleanup.js")) && fs.existsSync(path.join(itmp, "hooks", "repo-state-audit.js")) && fs.existsSync(path.join(itmp, "lefthook.yml")), "installer assertion 4");
 const installManifest = JSON.parse(fs.readFileSync(path.join(itmp, ".harness", "installation.json"), "utf8"));
 ok(installManifest.schemaVersion === 1 && installManifest.managed["hooks/agent/guard.js"] &&
+   installManifest.managed["hooks/uninstall.js"] && typeof installManifest.source.dirty === "boolean" &&
+   (!installManifest.source.dirty || /\+dirty$/.test(installManifest.source.version || "")) &&
    installManifest.ownership.projectOwned.includes("harness.config.json"),
   "install: manifest records managed hashes and the project-owned boundary");
+
+const utmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-"));
+execFileSync("git", ["init", "-q", "-b", "main"], { cwd: utmp });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/ExampleOrg/uninstall-target.git"], { cwd: utmp });
+ok(installJson(utmp, []).ok === true, "uninstall fixture installs successfully");
+function uninstallJson(target, extra, script = path.join(target, "hooks", "uninstall.js")) {
+  const run = spawnSync(process.execPath, [script, "--target", target, "--json", ...extra],
+    { cwd: target, encoding: "utf8" });
+  try { return JSON.parse(String(run.stdout || "{}")); } catch { return {}; }
+}
+const uninstallPlan = uninstallJson(utmp, ["--dry-run"]);
+ok(uninstallPlan.ok === true && uninstallPlan.files.some((file) => file.rel === "hooks/uninstall.js" && file.action === "plan") &&
+   fs.existsSync(path.join(utmp, ".harness", "installation.json")),
+  "uninstall: dry-run plans removal without changing the target");
+const preservedProjectFiles = ["AGENTS.md", "harness.config.json", ".github/workflows/ci.yml"];
+const preservedProjectBytes = new Map(preservedProjectFiles.map((rel) => [rel, fs.readFileSync(path.join(utmp, rel), "utf8")]));
+const uninstallSettingsPath = path.join(utmp, ".claude", "settings.json");
+const uninstallSettings = JSON.parse(fs.readFileSync(uninstallSettingsPath, "utf8"));
+uninstallSettings.model = "foreign-model";
+uninstallSettings.hooks.PreToolUse[0].hooks.push({ type: "command", command: "node vendor/foreign-guard.js" });
+fs.writeFileSync(uninstallSettingsPath, JSON.stringify(uninstallSettings, null, 2) + "\n");
+const uninstallGuard = path.join(utmp, "hooks", "agent", "guard.js");
+fs.writeFileSync(uninstallGuard, "// locally reviewed target customization\n");
+const partialUninstall = uninstallJson(utmp, []);
+const settingsAfterPartial = JSON.parse(fs.readFileSync(uninstallSettingsPath, "utf8"));
+ok(partialUninstall.ok === false && partialUninstall.files.some((file) => file.rel === "hooks/agent/guard.js" && file.action === "conflict") &&
+   fs.existsSync(uninstallGuard) && fs.existsSync(path.join(utmp, "hooks", "uninstall.js")) &&
+   fs.existsSync(path.join(utmp, ".harness", "installation.json")),
+  "uninstall: modified managed files, resumable uninstaller, and manifest are preserved on conflict");
+ok(settingsAfterPartial.model === "foreign-model" && /vendor\/foreign-guard/.test(JSON.stringify(settingsAfterPartial)) &&
+   !/hooks\/agent\/(?:guard|stop-reminder)\.js/.test(JSON.stringify(settingsAfterPartial)) &&
+   !/agent runtime \(local runner settings/.test(fs.readFileSync(path.join(utmp, ".gitignore"), "utf8")),
+  "uninstall: exact harness runtime wiring is removed while foreign settings survive");
+ok(preservedProjectFiles.every((rel) => fs.readFileSync(path.join(utmp, rel), "utf8") === preservedProjectBytes.get(rel)),
+  "uninstall: project-owned policy and workflows remain byte-for-byte unchanged");
+const completedUninstall = uninstallJson(utmp, ["--remove-modified"]);
+ok(completedUninstall.ok === true && !fs.existsSync(uninstallGuard) &&
+   !fs.existsSync(path.join(utmp, "hooks", "uninstall.js")) &&
+   !fs.existsSync(path.join(utmp, ".harness", "installation.json")) &&
+   preservedProjectFiles.every((rel) => fs.existsSync(path.join(utmp, rel))),
+  "uninstall: explicit modified-runtime removal completes and still preserves project-owned files");
+
+const unsafeUninstall = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-unsafe-"));
+fs.mkdirSync(path.join(unsafeUninstall, ".harness"), { recursive: true });
+fs.writeFileSync(path.join(unsafeUninstall, "AGENTS.md"), "project policy\n");
+fs.writeFileSync(path.join(unsafeUninstall, ".harness", "installation.json"), JSON.stringify({
+  schemaVersion: 1,
+  managed: { "AGENTS.md": crypto.createHash("sha256").update("project policy\n").digest("hex") },
+  ownership: { managed: ["AGENTS.md"], projectOwned: ["AGENTS.md"] },
+}, null, 2) + "\n");
+const unsafeResult = uninstallJson(unsafeUninstall, [], path.join(REPO, "hooks", "uninstall.js"));
+ok(unsafeResult.ok === false && fs.readFileSync(path.join(unsafeUninstall, "AGENTS.md"), "utf8") === "project policy\n",
+  "uninstall: a tampered manifest cannot authorize deletion outside managed runtime paths");
+try { fs.rmSync(utmp, { recursive: true, force: true }); fs.rmSync(unsafeUninstall, { recursive: true, force: true }); } catch {}
 ok(/^# Changelog\s+- - -\s*$/s.test(fs.readFileSync(path.join(itmp, "CHANGELOG.md"), "utf8")),
   "install: missing target changelog is initialized for Cocogitto");
 const productChangelog = "# Changelog\n\n- - -\n\n## v9.9.9\n\n- Product history must survive harness updates.\n";

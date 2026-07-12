@@ -21,6 +21,7 @@
 //     --update        update unchanged harness-managed runtime files
 //     --replace-managed  replace locally modified managed runtime files
 //     --force         legacy alias for --update --replace-managed
+//     --allow-dirty-source  explicitly install an unreleased dirty source snapshot
 //     --require-enforceable  fail while bootstrap/activation is pending
 //     --dry-run       show the plan without writing
 //     --with-ci       also copy optional GitHub maintenance files (dependabot)
@@ -51,6 +52,7 @@ const INSTALL_MANIFEST = ".harness/installation.json";
 const MANAGED_FILES = [
   "hooks/_lib.js", "hooks/verify-core.js", "hooks/verify.js", "hooks/design-gate.js", "hooks/doctor.js", "hooks/release-start.js", "hooks/release-config.js", "hooks/release-manifest-bump.js", "hooks/release-preflight.js", "hooks/release-artifacts.js", "hooks/branch-state.js", "hooks/github-branch-cleanup.js", "hooks/post-merge-cleanup.js", "hooks/release-cleanup.js", "hooks/repo-state-audit.js",
   "hooks/new-mockups.js", "hooks/apply-ruleset.js", "hooks/branch-guard.js", "hooks/no-coauthor.js", "hooks/task-state.js", "hooks/task.js",
+  "hooks/uninstall.js",
   "hooks/agent/_input.js", "hooks/agent/guard.js", "hooks/agent/stop-reminder.js",
   "lefthook.yml", "settings.example.json",
 ];
@@ -73,6 +75,7 @@ const CI_FILES = [{ rel: ".github/dependabot.yml" }];
 function parseArgs(argv) {
   const a = {
     target: process.cwd(), force: false, update: false, replaceManaged: false,
+    allowDirtySource: false,
     requireEnforceable: false, dryRun: false, withCi: false,
     withRuleset: false, codeOwner: "", serverProvider: "auto",
     rulesetProfile: "auto", releaseProvider: "auto", json: false, errors: [],
@@ -89,6 +92,7 @@ function parseArgs(argv) {
     else if (arg === "--force") { a.force = true; a.update = true; a.replaceManaged = true; }
     else if (arg === "--update") a.update = true;
     else if (arg === "--replace-managed") { a.update = true; a.replaceManaged = true; }
+    else if (arg === "--allow-dirty-source") a.allowDirtySource = true;
     else if (arg === "--require-enforceable") a.requireEnforceable = true;
     else if (arg === "--dry-run") a.dryRun = true;
     else if (arg === "--with-ci") a.withCi = true;
@@ -161,11 +165,31 @@ function sourceIdentity() {
     const r = spawnSync("git", args, { cwd: SRC, encoding: "utf8" });
     return r.status === 0 ? String(r.stdout || "").trim() : "";
   };
-  return { version: git(["describe", "--tags", "--abbrev=0"]), commit: git(["rev-parse", "HEAD"]) };
+  const payload = [
+    "install.js",
+    ...MANAGED_FILES,
+    ...PROJECT_TEMPLATES.map((entry) => entry.source || entry.rel),
+    ...GITHUB_RELEASE_TEMPLATES.map((entry) => entry.source || entry.rel),
+    ...GENERIC_RELEASE_TEMPLATES.map((entry) => entry.source || entry.rel),
+    ...GITHUB_TEMPLATES.map((entry) => entry.source || entry.rel),
+    ...CI_FILES.map((entry) => entry.source || entry.rel),
+  ];
+  const dirtyLines = git(["status", "--porcelain=v1", "--untracked-files=all", "--", ...new Set(payload)])
+    .split(/\r?\n/).filter(Boolean);
+  const dirtyFiles = dirtyLines
+    .map((line) => line.replace(/^[ MADRCU?!]{1,2}\s+/, "").split(" -> ").pop())
+    .filter(Boolean);
+  const exactTag = git(["describe", "--tags", "--exact-match"]);
+  const revision = exactTag || git(["describe", "--tags", "--always"]);
+  return {
+    version: dirtyFiles.length && revision ? `${revision}+dirty` : revision,
+    commit: git(["rev-parse", "HEAD"]),
+    dirty: dirtyFiles.length > 0,
+    ...(dirtyFiles.length ? { dirtyFiles } : {}),
+  };
 }
 
-function writeInstallManifest(managed, dryRun) {
-  const source = sourceIdentity();
+function writeInstallManifest(managed, dryRun, source) {
   const body = {
     schemaVersion: 1,
     source,
@@ -181,6 +205,13 @@ function writeInstallManifest(managed, dryRun) {
     fs.writeFileSync(dst, JSON.stringify(body, null, 2) + "\n");
   }
   return { rel: INSTALL_MANIFEST, action: dryRun ? "plan" : "write", source };
+}
+
+function targetIsDetached(target) {
+  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: target, encoding: "utf8" });
+  if (inside.status !== 0 || String(inside.stdout || "").trim() !== "true") return false;
+  const symbolic = spawnSync("git", ["symbolic-ref", "-q", "HEAD"], { cwd: target, encoding: "utf8" });
+  return symbolic.status !== 0;
 }
 
 function copyManaged(rel, previous, dryRun) {
@@ -447,7 +478,7 @@ const a = parseArgs(process.argv.slice(2));
     ok: true, installed: false, bootstrapRequired: false, activationRequired: false, enforceable: false,
     target: a.target, mode: null, dryRun: a.dryRun, files: [], config: null,
     adapters: null, installManifest: null, changelog: null, cog: null, codeowners: null,
-    settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null,
+    settings: null, gitignore: null, lefthook: null, doctor: null, ruleset: null, source: null,
     migrationRequired: [], notes: [], argumentErrors: a.errors,
   };
 
@@ -465,6 +496,15 @@ const a = parseArgs(process.argv.slice(2));
 
   const selfInstall = path.resolve(a.target) === path.resolve(SRC);
   out.mode = selfInstall ? "bootstrap" : "install";
+  out.source = sourceIdentity();
+  const dirtySourceAllowed = a.allowDirtySource || targetIsDetached(a.target);
+  if (!selfInstall && out.source.dirty && !dirtySourceAllowed) {
+    return finish(out, false,
+      "source harness has uncommitted payload changes; use a clean released checkout or explicitly pass --allow-dirty-source");
+  }
+  if (!selfInstall && out.source.dirty) {
+    out.notes.push(`dirty source snapshot explicitly admitted; manifest version is ${out.source.version || "unversioned+dirty"} and records ${out.source.dirtyFiles.length} changed payload file(s).`);
+  }
   out.adapters = selfInstall ? { server: "github", release: "cocogitto", profile: "solo", detectedGitHub: true } : resolveAdapters();
   if (out.adapters.server !== "github" && (a.withRuleset || a.codeOwner || a.rulesetProfile !== "auto")) {
     return finish(out, false, "--with-ruleset/--code-owner/--ruleset-profile require --server-provider github or a GitHub origin");
@@ -506,7 +546,7 @@ const a = parseArgs(process.argv.slice(2));
     }
     if (out.adapters.release === "cocogitto") out.changelog = ensureChangelog(a.dryRun);
     if (out.adapters.server === "github") out.codeowners = configureCodeOwnersAndRuleset(a.dryRun, projectWrites, out.adapters.profile);
-    out.installManifest = writeInstallManifest(managedHashes, a.dryRun);
+    out.installManifest = writeInstallManifest(managedHashes, a.dryRun, out.source);
     if (a.force) out.notes.push("--force is a compatibility alias for --update --replace-managed; project-owned files were preserved.");
     if (out.adapters.server === "github" && !a.codeOwner && (projectWrites.has(".github/CODEOWNERS") || projectWrites.has(".github/rulesets/main.json"))) {
       out.notes.push("CODEOWNERS: no --code-owner was provided, so target ruleset keeps required approving review but disables required code-owner review to avoid maintainer deadlocks.");

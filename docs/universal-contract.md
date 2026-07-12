@@ -12,12 +12,22 @@ GitHub, publishes a source ZIP, or owns one independently versioned package.
 | Project | `AGENTS.md`, `harness.config.json`, `cog.toml`, `.gitleaks.toml`, `.gitattributes`, `CHANGELOG.md`, `.github/` | Seed only when missing; never replaced by install/update/force. |
 | User/runtime | `.claude/settings.json`, `.gitignore` | Structured merge or append; foreign content is preserved. |
 
-`.harness/installation.json` records the source version/commit and SHA-256 of
-managed files. `--update` replaces a file only when its current hash matches that
-baseline. A mismatch is a conflict. `--replace-managed` is the explicit escape
-hatch for reviewed local runtime changes; it still cannot replace project-owned
-files. `--force` is retained only as a compatibility alias for
-`--update --replace-managed`.
+`.harness/installation.json` records the source version/commit, dirty-source
+state, and SHA-256 of managed files. A normal install refuses uncommitted source
+payloads; clean commits after a release tag are recorded as `tag-N-gSHA`, while
+`--allow-dirty-source` explicitly admits a dirty snapshot and appends `+dirty`.
+Detached disposable canary targets admit dirty source for pre-commit
+validation but retain the same provenance marker. `--update` replaces a file
+only when its current hash matches that baseline. A mismatch is a conflict.
+`--replace-managed` is the explicit escape hatch for reviewed local runtime
+changes; it still cannot replace project-owned files. `--force` is retained only
+as a compatibility alias for `--update --replace-managed`.
+
+`node hooks/uninstall.js` is the inverse operation for managed runtime. It
+removes only hash-matching managed files and exact structured runtime additions,
+preserves all project-owned files, and keeps its manifest plus executable when
+conflicts remain. `--remove-modified` is required to delete reviewed modified
+managed files; the uninstaller never gains authority over project-owned paths.
 
 Legacy project policy is never silently upgraded. Installer JSON reports
 `migrationRequired` entries for schema, UI routing, release contracts, server
