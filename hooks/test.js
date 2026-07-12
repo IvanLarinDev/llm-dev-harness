@@ -36,6 +36,17 @@ try {
 const GIT_LOCAL_ENV = [...new Set([...FALLBACK_GIT_LOCAL_ENV, ...discoveredGitLocalEnv])];
 for (const name of GIT_LOCAL_ENV) delete process.env[name];
 
+// Session-level harness overrides (bypass flags, guard profiles, thresholds)
+// leak the caller's configuration into fixture assertions the same way local
+// Git context does: an approved HARNESS_ACK_BYPASS=1 session would turn every
+// guard "block" expectation into an allow. Tests pass these explicitly per
+// call when a scenario needs them.
+const HARNESS_SESSION_ENV = [
+  "HARNESS_ACK_BYPASS", "HARNESS_ALLOW_MAIN", "HARNESS_DISABLED_CHECKS",
+  "HARNESS_LOOP_THRESHOLD", "HARNESS_PROFILE", "HARNESS_PROJECT_DIR", "HARNESS_SESSION_ID",
+];
+for (const name of HARNESS_SESSION_ENV) delete process.env[name];
+
 if (process.argv.includes("--repeat")) {
   const i = process.argv.indexOf("--repeat");
   const raw = Number(process.argv[i + 1] || 3);
@@ -248,6 +259,12 @@ ok(applyRuleset.driftReport(ruleset, [{ name: ruleset.name, id: 7 }], liveLikeRu
   "apply-ruleset read-only drift check accepts matching live policy");
 ok(applyRuleset.driftReport(strictExpectedRuleset, [{ name: ruleset.name, id: 7 }], liveLikeRuleset, "example/repo").ok === false,
   "apply-ruleset read-only drift check rejects review-policy drift");
+const trunkRuleset = applyRuleset.expectedRuleset(ruleset, true);
+ok(!(trunkRuleset.rules || []).some((r) => ["pull_request", "required_status_checks"].includes(r.type)) &&
+   ["deletion", "non_fast_forward"].every((t) => (trunkRuleset.rules || []).some((r) => r.type === t)),
+  "trunk mode expected ruleset drops PR gates but keeps delete/force-push protection");
+ok(applyRuleset.expectedRuleset(ruleset, false) === ruleset,
+  "pr mode expected ruleset is the untouched template");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/^  windows_full:\s*$[\s\S]*?^    runs-on:\s*windows-latest\s*$/m.test(ci),
   "CI: complete verification lane runs on Windows for WPF/net*-windows targets");
@@ -416,6 +433,13 @@ const btmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-branchguard-"));
 execFileSync("git", ["init", "-q", "-b", "main"], { cwd: btmp });
 ok(runBranchGuard(btmp) === 1, "branch guard assertion 1");
 ok(runBranchGuard(btmp, { HARNESS_ALLOW_MAIN: "1" }) === 0, "branch guard assertion 2");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+ok(runBranchGuard(btmp) === 0, "branch guard: trunk mode allows commits on main");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "yolo" } }));
+ok(runBranchGuard(btmp) === 1, "branch guard: unknown workflow mode falls back to pr and blocks main");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), "{broken");
+ok(runBranchGuard(btmp) === 1, "branch guard: unreadable config falls back to pr and blocks main");
+fs.rmSync(path.join(btmp, "harness.config.json"), { force: true });
 execFileSync("git", ["checkout", "-q", "-b", "feat/test"], { cwd: btmp });
 ok(runBranchGuard(btmp) === 0, "branch guard assertion 3");
 try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
@@ -875,6 +899,9 @@ ok(stopGroups.includes("guard") && stopGroups.includes("stop-reminder") && stopG
   "fast VERIFY maps changed harness files to focused self-test groups");
 const taskGroups = verifyCore.testGroupsForFiles(["hooks/task.js"]);
 ok(taskGroups.join(",") === "task,hygiene", "fast VERIFY isolates task coordinator tests plus hygiene");
+const modeGroups = verifyCore.testGroupsForFiles(["hooks/workflow-mode.js"]);
+ok(modeGroups.includes("configs") && modeGroups.includes("guard") && modeGroups.includes("stop-reminder") && !modeGroups.includes("release"),
+  "fast VERIFY maps workflow-mode changes to its consumer groups");
 const sourceIntegrityTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-source-integrity-"));
 fs.mkdirSync(path.join(sourceIntegrityTmp, "hooks"));
 fs.writeFileSync(path.join(sourceIntegrityTmp, "install.js"), "// source marker\n");
@@ -1137,6 +1164,20 @@ ok((dres.results || []).some((r) => /harness bootstrap files present and tracked
   "doctor assertion 3");
 ok((dres.results || []).some((r) => /GitHub branch cleanup runs only after green default-branch verify/.test(r.msg) && r.level === "PASS"),
   "doctor accepts the provider-confirmed branch cleanup workflow");
+const bootCfgPath = path.join(bootRepo, "harness.config.json");
+const bootCfg = JSON.parse(fs.readFileSync(bootCfgPath, "utf8"));
+bootCfg.branchLifecycle = { ...(bootCfg.branchLifecycle || {}), mode: "yolo" };
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branchLifecycle\.mode must be "pr" or "trunk"/.test(r.msg) && r.level === "FAIL"),
+  "doctor: invalid branchLifecycle.mode -> FAIL");
+bootCfg.branchLifecycle.mode = "trunk";
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branch workflow mode: trunk/.test(r.msg) && r.level === "PASS"),
+  "doctor: trunk mode is reported as active");
+delete bootCfg.branchLifecycle.mode;
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
 const targetBranchCleanupWorkflow = path.join(bootRepo, ".github", "workflows", "branch-cleanup.yml");
 fs.writeFileSync(targetBranchCleanupWorkflow, "name: branch-cleanup\non:\n  workflow_run:\n");
 dres = doctor(bootRepo);
@@ -2100,6 +2141,14 @@ stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: st
 ok(stopOut.trim() === "", "stop reminder assertion 6");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
 taskState.clearBaseline(stopRepo);
+const stopTrunk = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-trunk-"));
+execFileSync("git", ["init", "-q"], { cwd: stopTrunk });
+fs.writeFileSync(path.join(stopTrunk, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+fs.writeFileSync(path.join(stopTrunk, "wip.txt"), "x");
+stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopTrunk });
+ok(/trunk mode: committing on main is allowed/.test(stopOut) && !/COMMIT on a feature branch/.test(stopOut),
+  "stop reminder: trunk mode drops the feature-branch commit wording");
+try { fs.rmSync(stopTrunk, { recursive: true, force: true }); } catch {}
 const stopRepo2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-explained-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo2 });
 fs.mkdirSync(path.join(stopRepo2, "hooks"), { recursive: true });

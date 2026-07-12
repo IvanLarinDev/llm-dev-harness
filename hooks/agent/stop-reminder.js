@@ -12,6 +12,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const taskState = require(path.join(__dirname, "..", "task-state.js"));
+const { isTrunk } = require(path.join(__dirname, "..", "workflow-mode.js"));
 
 function stateFile(cwd) {
   const id = crypto.createHash("sha1").update(String(cwd)).digest("hex").slice(0, 12);
@@ -114,9 +115,12 @@ function isHarnessOrLocalStatus(line) {
   const harnessNote = harnessLike.length
     ? "\nSome dirty files look like bootstrap/harness/local files. If they are intentional, the next Stop with the same git status will be allowed.\n"
     : "\nIf the dirty tree is intentional and the report explains why, the next Stop with the same git status will be allowed.\n";
+  const commitStep = isTrunk(cwd)
+    ? "5. COMMIT (trunk mode: committing on main is allowed)"
+    : "5. COMMIT on a feature branch";
   const reason =
     "stop-reminder: uncommitted changes remain; are the loop steps complete?\n" +
-    "  4. VERIFY (node hooks/verify.js + git diff review) -> 5. COMMIT on a feature branch -> 6. REPORT.\n" +
+    `  4. VERIFY (node hooks/verify.js + git diff review) -> ${commitStep} -> 6. REPORT.\n` +
     "A commit is not always required: explicitly report why changes remain uncommitted.\n" +
     harnessNote +
     "git status (first lines):\n" + shown;

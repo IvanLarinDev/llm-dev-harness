@@ -5,7 +5,9 @@
 // quoted echo inside that snippet can break command-line quoting before the shell
 // even starts. Keep this guard as a small Node program instead.
 
+const path = require("path");
 const { execFileSync } = require("child_process");
+const { isTrunk } = require(path.join(__dirname, "workflow-mode.js"));
 
 function currentBranch() {
   try {
@@ -22,6 +24,9 @@ function currentBranch() {
 
 const branch = currentBranch();
 if (!["main", "master"].includes(branch)) process.exit(0);
+
+// Trunk mode (branchLifecycle.mode="trunk"): solo flow, commits land on main.
+if (isTrunk(process.cwd())) process.exit(0);
 
 if (String(process.env.HARNESS_ALLOW_MAIN || "").trim() === "1") process.exit(0);
 
