@@ -12,7 +12,7 @@ remain strict.
 3. IMPLEMENT      code and tests together
 4. CHECK          node hooks/task.js check (fast, changed groups)
 5. FINISH         node hooks/task.js finish (full VERIFY + DESIGN)
-6. COMMIT/REPORT  feature branch only; push/PR only when authorized
+6. COMMIT/REPORT  trunk mode: on main; pr mode: feature branch; push only when authorized
 7. USER DECISION  accept, revise, or reject
 ```
 
@@ -48,9 +48,12 @@ remains.
 - Never bypass hooks, force-push, reset hard, or discard a dirty tree without
   explicit authority.
 
-Work on `codex/*`, `feat/*`, `fix/*`, `docs/*`, or another configured managed
-prefix; never commit directly on `main`/`master`. A trivial typo may skip a
-formal plan, but still needs the relevant check and a feature branch.
+`branchLifecycle.mode` in `harness.config.json` selects the branch workflow.
+This repository runs `trunk` mode: commits land directly on `main`, and
+branches are reserved for large incompatible work that needs a PR. In `pr`
+mode work on `codex/*`, `feat/*`, `fix/*`, `docs/*`, or another configured
+managed prefix; never commit directly on `main`/`master`. A trivial typo may
+skip a formal plan, but still needs the relevant check.
 
 ## Explore and edit
 
@@ -115,8 +118,10 @@ Use Conventional Commits: `<type>(<scope>): <subject>`. `feat` is MINOR, `fix`
 is PATCH, and `!`/`BREAKING CHANGE` is MAJOR. Do not add co-author or generated
 trailers.
 
-Push only when requested. After a PR is server-confirmed `MERGED` and resulting
-`main` CI is green, use the exact cleanup helper, then the terminal audit:
+Push only when requested. In trunk mode a push to `main` is the normal end of
+a task and there is nothing to clean afterwards. In pr mode, after a PR is
+server-confirmed `MERGED` and resulting `main` CI is green, use the exact
+cleanup helper, then the terminal audit:
 
 ```text
 node hooks/post-merge-cleanup.js --branch <branch> --base origin/main
@@ -130,10 +135,23 @@ worktrees must be removed after acceptance.
 
 ## Release routing
 
-Run the release flow only on an explicit full-release request. Before any
-release action, read `docs/release-flow.md` completely. A full-release request
-authorizes the normal branch/PR/tag/GitHub Release/cleanup sequence described
-there, but never bypasses, force-pushes, history repair, or data loss.
+Run the release flow only on an explicit full-release request. Trunk mode
+releases are one command on a clean, synced `main`:
+
+```text
+node hooks/release-trunk.js --dry-run
+node hooks/release-trunk.js
+```
+
+Cocogitto bumps the version on `main`, and the version commit plus annotated
+tag leave in a single atomic `git push`, so a tag can never stay local-only;
+any failure rolls `main` back to the pre-release commit. The tag-triggered
+workflow publishes the GitHub Release.
+
+PR mode keeps the branch/PR/tag sequence: before any release action, read
+`docs/release-flow.md` completely. A full-release request authorizes the
+normal branch/PR/tag/GitHub Release/cleanup sequence described there, but
+never bypasses, force-pushes, history repair, or data loss.
 
 ## Ownership and capabilities
 
