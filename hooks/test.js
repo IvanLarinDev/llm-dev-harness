@@ -15,6 +15,27 @@ const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 
+// Git executes hooks with repository-local environment such as GIT_DIR and
+// GIT_WORK_TREE. Self-tests create many disposable repositories; inheriting
+// that context makes their git commands target the caller's common .git
+// instead of the fixture cwd. Clear every local Git variable before spawning
+// any fixture command.
+const FALLBACK_GIT_LOCAL_ENV = [
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CONFIG",
+  "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_DIR", "GIT_GRAFT_FILE",
+  "GIT_IMPLICIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_INTERNAL_SUPER_PREFIX",
+  "GIT_NO_REPLACE_OBJECTS", "GIT_OBJECT_DIRECTORY", "GIT_PREFIX",
+  "GIT_REPLACE_REF_BASE", "GIT_SHALLOW_FILE", "GIT_WORK_TREE",
+];
+let discoveredGitLocalEnv = [];
+try {
+  discoveredGitLocalEnv = execFileSync("git", ["rev-parse", "--local-env-vars"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  }).split(/\r?\n/).filter(Boolean);
+} catch {}
+const GIT_LOCAL_ENV = [...new Set([...FALLBACK_GIT_LOCAL_ENV, ...discoveredGitLocalEnv])];
+for (const name of GIT_LOCAL_ENV) delete process.env[name];
+
 if (process.argv.includes("--repeat")) {
   const i = process.argv.indexOf("--repeat");
   const raw = Number(process.argv[i + 1] || 3);
@@ -140,6 +161,32 @@ const invalidOnly = spawnSync(process.execPath, [__filename, "--only", "definite
 const missingOnly = spawnSync(process.execPath, [__filename, "--only"], { cwd: REPO, encoding: "utf8" });
 ok(invalidOnly.status === 2 && missingOnly.status === 2 && /requires exact group names/.test(String(invalidOnly.stderr)) && /requires exact group names/.test(String(missingOnly.stderr)),
   "test CLI rejects unknown or missing --only groups instead of passing zero tests");
+const inheritedGitRepo = fs.mkdtempSync(path.join(os.tmpdir(), "harness-inherited-git-env-"));
+execFileSync("git", ["init", "-q", "-b", "sentinel"], { cwd: inheritedGitRepo });
+execFileSync("git", ["config", "user.name", "Git Env Sentinel"], { cwd: inheritedGitRepo });
+execFileSync("git", ["config", "user.email", "sentinel@example.test"], { cwd: inheritedGitRepo });
+fs.writeFileSync(path.join(inheritedGitRepo, "sentinel.txt"), "unchanged\n");
+execFileSync("git", ["add", "."], { cwd: inheritedGitRepo });
+execFileSync("git", ["commit", "-q", "-m", "chore: sentinel"], { cwd: inheritedGitRepo });
+const inheritedGitHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd: inheritedGitRepo, encoding: "utf8" }).trim();
+const inheritedGitRun = spawnSync(process.execPath, [__filename, "--only", "task"], {
+  cwd: REPO,
+  encoding: "utf8",
+  maxBuffer: 10 * 1024 * 1024,
+  env: {
+    ...process.env,
+    GIT_DIR: path.join(inheritedGitRepo, ".git"),
+    GIT_WORK_TREE: inheritedGitRepo,
+  },
+});
+const inheritedGitHeadAfter = execFileSync("git", ["rev-parse", "HEAD"], { cwd: inheritedGitRepo, encoding: "utf8" }).trim();
+const inheritedGitRefs = execFileSync("git", ["for-each-ref", "--format=%(refname)", "refs/heads"], {
+  cwd: inheritedGitRepo, encoding: "utf8",
+}).trim().split(/\r?\n/).filter(Boolean);
+ok(inheritedGitRun.status === 0 && inheritedGitHeadAfter === inheritedGitHead &&
+   inheritedGitRefs.length === 1 && inheritedGitRefs[0] === "refs/heads/sentinel",
+  "self-test clears inherited Git hook context before disposable repository fixtures");
+try { fs.rmSync(inheritedGitRepo, { recursive: true, force: true }); } catch {}
 ok(sharedLib.doctorEnvironmentReady({ ok: true, blocked: false, envs: 0 }) === true &&
    sharedLib.doctorEnvironmentReady({ ok: true, blocked: false, envs: 1 }) === false &&
    sharedLib.doctorEnvironmentReady({ ok: true, blocked: true, envs: 0 }) === false,
