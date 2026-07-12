@@ -53,6 +53,9 @@ Use `node hooks/new-mockups.js --help` and configure framework paths through
   matches the previous installation baseline.
 - `--replace-managed` explicitly replaces locally modified managed files. It
   never authorizes replacing project-owned files.
+- `node hooks/uninstall.js` removes only hash-matching managed runtime and exact
+  agent-hook wiring. It preserves project-owned files; modified managed files
+  require the explicit `--remove-modified` option.
 
 After first installation, commit the harness through a bootstrap PR. Until that
 PR is merged, installer output reports `bootstrapRequired: true` and the loop is

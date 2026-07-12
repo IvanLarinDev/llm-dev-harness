@@ -146,8 +146,9 @@ function validateManifestSet(root, dir, files, m) {
   catch { return { ok: false, reason: `${manifestFile} is not valid JSON` }; }
   if (manifest.schemaVersion !== 1)
     return { ok: false, reason: `${manifestFile} schemaVersion must be 1` };
-  if (!new Set(["existing-ui", "new-ui", "animation"]).has(manifest.kind))
-    return { ok: false, reason: `${manifestFile} kind must be existing-ui, new-ui, or animation` };
+  const legacyLayout = manifest.kind === "layout";
+  if (!new Set(["existing-ui", "new-ui", "animation", "layout"]).has(manifest.kind))
+    return { ok: false, reason: `${manifestFile} kind must be existing-ui, new-ui, animation, or legacy layout` };
   if (!Array.isArray(manifest.variants) || manifest.variants.length < m.min)
     return { ok: false, reason: `${manifestFile} declares fewer than ${m.min} variants` };
 
@@ -191,13 +192,14 @@ function validateManifestSet(root, dir, files, m) {
   return {
     ok: true,
     count: variantFiles.length,
-    kind: manifest.kind,
+    kind: legacyLayout ? "existing-ui" : manifest.kind,
+    ...(legacyLayout ? { legacy: true, legacyKind: "layout" } : {}),
     scopePatterns: [...manifestScopePatterns(root, manifest), ...approvalScopes],
     ...(manifest.fidelity ? { fidelity: manifest.fidelity } : {}),
   };
 }
 
-function validateWaiverSet(root, dir, files, m, uiChanged) {
+function validateWaiverSet(root, dir, files, m) {
   const waiverFile = m.waiverFile || "WAIVER.json";
   if (!files.includes(waiverFile)) return null;
   let waiver;
@@ -213,11 +215,11 @@ function validateWaiverSet(root, dir, files, m, uiChanged) {
     return { ok: false, reason: `${waiverFile} requires approvedBy or approvalSource` };
   if (typeof waiver.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(waiver.date))
     return { ok: false, reason: `${waiverFile} requires an ISO date` };
-  const scoped = scopeCoversUi(root, uiChanged, waiver.uiPaths);
+  const scoped = scopeCoversUi(root, [], waiver.uiPaths);
   return scoped.ok ? { ok: true, count: 0, kind: "waiver", waiver: true, scopePatterns: scoped.patterns } : scoped;
 }
 
-function validateCosmeticSet(root, dir, files, m, uiChanged) {
+function validateCosmeticSet(root, dir, files, m) {
   const cosmeticFile = m.cosmeticFile || "COSMETIC.json";
   if (!files.includes(cosmeticFile)) return null;
   let cosmetic;
@@ -230,7 +232,7 @@ function validateCosmeticSet(root, dir, files, m, uiChanged) {
   if (typeof (cosmetic.approvedBy || cosmetic.approvalSource) !== "string" || !(cosmetic.approvedBy || cosmetic.approvalSource).trim())
     return { ok: false, reason: `${cosmeticFile} requires approvedBy or approvalSource` };
   if (typeof cosmetic.date !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(cosmetic.date)) return { ok: false, reason: `${cosmeticFile} requires an ISO date` };
-  const scoped = scopeCoversUi(root, uiChanged, cosmetic.uiPaths);
+  const scoped = scopeCoversUi(root, [], cosmetic.uiPaths);
   return scoped.ok ? { ok: true, count: 1, kind: "cosmetic", cosmetic: true, scopePatterns: scoped.patterns } : scoped;
 }
 
@@ -247,6 +249,10 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
 
   const stale = [];
   const invalid = [];
+  const candidates = [];
+  const addCandidate = (feature, check) => {
+    if (check && check.ok) candidates.push({ feature, ...check });
+  };
   for (const d of dirs) {
     const dir = path.join(base, d.name);
     let files;
@@ -256,14 +262,14 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
     const waiverTouched = changed.includes(`${mockRoot}/${d.name}/${waiverFile}`);
     const cosmeticTouched = changed.includes(`${mockRoot}/${d.name}/${cosmeticFile}`);
     if (cosmeticTouched) {
-      const cosmetic = validateCosmeticSet(root, dir, files, m, uiChanged);
-      if (cosmetic && cosmetic.ok) return { ok: true, feature: d.name, ...cosmetic };
-      if (cosmetic) invalid.push(`${d.name}: ${cosmetic.reason}`);
+      const cosmetic = validateCosmeticSet(root, dir, files, m);
+      if (cosmetic && cosmetic.ok) addCandidate(d.name, cosmetic);
+      if (cosmetic && !cosmetic.ok) invalid.push(`${d.name}: ${cosmetic.reason}`);
     }
     if (waiverTouched) {
-      const waiver = validateWaiverSet(root, dir, files, m, uiChanged);
-      if (waiver && waiver.ok) return { ok: true, feature: d.name, ...waiver };
-      if (waiver) invalid.push(`${d.name}: ${waiver.reason}`);
+      const waiver = validateWaiverSet(root, dir, files, m);
+      if (waiver && waiver.ok) addCandidate(d.name, waiver);
+      if (waiver && !waiver.ok) invalid.push(`${d.name}: ${waiver.reason}`);
     }
     if (!approved) continue;
     const check = validateManifestSet(root, dir, files, m);
@@ -272,12 +278,26 @@ function hasApprovedMockups(root, m, changed, uiChanged) {
       continue;
     }
     if (touched) {
-      const scoped = scopeCoversUi(root, uiChanged, check.scopePatterns);
-      if (scoped.ok) return { ok: true, feature: d.name, ...check, scopePatterns: scoped.patterns };
-      invalid.push(`${d.name}: ${scoped.reason}`);
+      addCandidate(d.name, check);
       continue;
     }
     stale.push(d.name);
+  }
+  if (candidates.length) {
+    const scoped = scopeCoversUi(root, uiChanged, candidates.flatMap((entry) => entry.scopePatterns || []));
+    if (scoped.ok) {
+      const kinds = [...new Set(candidates.map((entry) => entry.kind).filter(Boolean))];
+      return {
+        ok: true,
+        feature: candidates.map((entry) => entry.feature).join(", "),
+        features: candidates.map((entry) => entry.feature),
+        count: candidates.reduce((sum, entry) => sum + Number(entry.count || 0), 0),
+        kind: kinds.length === 1 ? kinds[0] : "composite",
+        scopePatterns: scoped.patterns,
+        evidence: candidates,
+      };
+    }
+    invalid.push(`combined touched evidence: ${scoped.reason}`);
   }
   return {
     ok: false,

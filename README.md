@@ -103,6 +103,7 @@ Useful flags:
 - `--update`: update harness-managed runtime files that still match their recorded installation hashes.
 - `--replace-managed`: explicitly replace locally modified managed runtime; project-owned files remain untouched.
 - `--force`: compatibility alias for `--update --replace-managed`; it no longer overwrites project policy.
+- `--allow-dirty-source`: explicitly install an unreleased dirty payload; the manifest records `tag-N-gSHA+dirty` provenance. Clean post-tag commits retain `tag-N-gSHA`; normal installs fail closed on dirty source payloads.
 - `--require-enforceable`: return non-zero while bootstrap or hook activation is pending.
 - `--with-ci`: add optional Dependabot; CI, CODEOWNERS, and ruleset templates are installed by default.
 - `--code-owner @org/team`: write a real CODEOWNERS owner and enable required code-owner review in the target ruleset.
@@ -122,6 +123,21 @@ Legacy project config is also preserved; JSON output lists schema/UI/release/ser
 reviews under `migrationRequired` so migration can happen in a separate PR. An
 existing `AGENTS.md` without the branch lifecycle contract similarly reports
 `branch-lifecycle-policy-review` instead of being rewritten.
+
+To remove the harness runtime from an installed target:
+
+```bash
+node hooks/uninstall.js --dry-run
+node hooks/uninstall.js
+```
+
+The uninstaller removes only managed files whose SHA-256 still matches the
+installation manifest, the exact agent-hook entries merged into
+`.claude/settings.json`, and the exact `.gitignore` block added by the installer.
+Project-owned policy, workflows, and history are always preserved. Conflicting
+managed files remain with the manifest and uninstaller so the operation can be
+reviewed and resumed; `--remove-modified` explicitly removes those managed
+conflicts, while `--keep-git-hooks` preserves Lefthook wiring.
 
 Without `--code-owner`, a new install writes a CODEOWNERS template but keeps
 `require_code_owner_review=false` in the target ruleset. This preserves the

@@ -147,7 +147,7 @@ function testGroupsForFiles(files) {
   if (any(/^hooks\/(?:repo-state-audit|branch-state)\.js$/)) groups.add("topology");
   if (any(/^hooks\/task(?:-state)?\.js$/)) groups.add("task");
   if (any(/^hooks\/agent\/stop-reminder\.js$/, /^hooks\/workflow-mode\.js$/)) groups.add("stop-reminder");
-  if (any(/^install\.(?:js|cmd|sh)$/, /^templates\//, /^settings\.example\.json$/)) groups.add("installer");
+  if (any(/^install\.(?:js|cmd|sh)$/, /^hooks\/uninstall\.js$/, /^templates\//, /^settings\.example\.json$/)) groups.add("installer");
   return HARNESS_TEST_GROUPS.filter((group) => groups.has(group));
 }
 
