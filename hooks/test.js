@@ -36,6 +36,17 @@ try {
 const GIT_LOCAL_ENV = [...new Set([...FALLBACK_GIT_LOCAL_ENV, ...discoveredGitLocalEnv])];
 for (const name of GIT_LOCAL_ENV) delete process.env[name];
 
+// Session-level harness overrides (bypass flags, guard profiles, thresholds)
+// leak the caller's configuration into fixture assertions the same way local
+// Git context does: an approved HARNESS_ACK_BYPASS=1 session would turn every
+// guard "block" expectation into an allow. Tests pass these explicitly per
+// call when a scenario needs them.
+const HARNESS_SESSION_ENV = [
+  "HARNESS_ACK_BYPASS", "HARNESS_ALLOW_MAIN", "HARNESS_DISABLED_CHECKS",
+  "HARNESS_LOOP_THRESHOLD", "HARNESS_PROFILE", "HARNESS_PROJECT_DIR", "HARNESS_SESSION_ID",
+];
+for (const name of HARNESS_SESSION_ENV) delete process.env[name];
+
 if (process.argv.includes("--repeat")) {
   const i = process.argv.indexOf("--repeat");
   const raw = Number(process.argv[i + 1] || 3);
@@ -109,6 +120,7 @@ const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_START = path.join(__dirname, "release-start.js");
+const RELEASE_TRUNK = path.join(__dirname, "release-trunk.js");
 const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const RELEASE_ARTIFACTS = path.join(__dirname, "release-artifacts.js");
@@ -248,6 +260,12 @@ ok(applyRuleset.driftReport(ruleset, [{ name: ruleset.name, id: 7 }], liveLikeRu
   "apply-ruleset read-only drift check accepts matching live policy");
 ok(applyRuleset.driftReport(strictExpectedRuleset, [{ name: ruleset.name, id: 7 }], liveLikeRuleset, "example/repo").ok === false,
   "apply-ruleset read-only drift check rejects review-policy drift");
+const trunkRuleset = applyRuleset.expectedRuleset(ruleset, true);
+ok(!(trunkRuleset.rules || []).some((r) => ["pull_request", "required_status_checks"].includes(r.type)) &&
+   ["deletion", "non_fast_forward"].every((t) => (trunkRuleset.rules || []).some((r) => r.type === t)),
+  "trunk mode expected ruleset drops PR gates but keeps delete/force-push protection");
+ok(applyRuleset.expectedRuleset(ruleset, false) === ruleset,
+  "pr mode expected ruleset is the untouched template");
 const ci = readRepo(".github/workflows/ci.yml");
 ok(/^  windows_full:\s*$[\s\S]*?^    runs-on:\s*windows-latest\s*$/m.test(ci),
   "CI: complete verification lane runs on Windows for WPF/net*-windows targets");
@@ -416,6 +434,13 @@ const btmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-branchguard-"));
 execFileSync("git", ["init", "-q", "-b", "main"], { cwd: btmp });
 ok(runBranchGuard(btmp) === 1, "branch guard assertion 1");
 ok(runBranchGuard(btmp, { HARNESS_ALLOW_MAIN: "1" }) === 0, "branch guard assertion 2");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+ok(runBranchGuard(btmp) === 0, "branch guard: trunk mode allows commits on main");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "yolo" } }));
+ok(runBranchGuard(btmp) === 1, "branch guard: unknown workflow mode falls back to pr and blocks main");
+fs.writeFileSync(path.join(btmp, "harness.config.json"), "{broken");
+ok(runBranchGuard(btmp) === 1, "branch guard: unreadable config falls back to pr and blocks main");
+fs.rmSync(path.join(btmp, "harness.config.json"), { force: true });
 execFileSync("git", ["checkout", "-q", "-b", "feat/test"], { cwd: btmp });
 ok(runBranchGuard(btmp) === 0, "branch guard assertion 3");
 try { fs.rmSync(btmp, { recursive: true, force: true }); } catch {}
@@ -875,6 +900,9 @@ ok(stopGroups.includes("guard") && stopGroups.includes("stop-reminder") && stopG
   "fast VERIFY maps changed harness files to focused self-test groups");
 const taskGroups = verifyCore.testGroupsForFiles(["hooks/task.js"]);
 ok(taskGroups.join(",") === "task,hygiene", "fast VERIFY isolates task coordinator tests plus hygiene");
+const modeGroups = verifyCore.testGroupsForFiles(["hooks/workflow-mode.js"]);
+ok(modeGroups.includes("configs") && modeGroups.includes("guard") && modeGroups.includes("stop-reminder") && !modeGroups.includes("release"),
+  "fast VERIFY maps workflow-mode changes to its consumer groups");
 const sourceIntegrityTmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-source-integrity-"));
 fs.mkdirSync(path.join(sourceIntegrityTmp, "hooks"));
 fs.writeFileSync(path.join(sourceIntegrityTmp, "install.js"), "// source marker\n");
@@ -1137,6 +1165,20 @@ ok((dres.results || []).some((r) => /harness bootstrap files present and tracked
   "doctor assertion 3");
 ok((dres.results || []).some((r) => /GitHub branch cleanup runs only after green default-branch verify/.test(r.msg) && r.level === "PASS"),
   "doctor accepts the provider-confirmed branch cleanup workflow");
+const bootCfgPath = path.join(bootRepo, "harness.config.json");
+const bootCfg = JSON.parse(fs.readFileSync(bootCfgPath, "utf8"));
+bootCfg.branchLifecycle = { ...(bootCfg.branchLifecycle || {}), mode: "yolo" };
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branchLifecycle\.mode must be "pr" or "trunk"/.test(r.msg) && r.level === "FAIL"),
+  "doctor: invalid branchLifecycle.mode -> FAIL");
+bootCfg.branchLifecycle.mode = "trunk";
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
+dres = doctor(bootRepo);
+ok((dres.results || []).some((r) => /branch workflow mode: trunk/.test(r.msg) && r.level === "PASS"),
+  "doctor: trunk mode is reported as active");
+delete bootCfg.branchLifecycle.mode;
+fs.writeFileSync(bootCfgPath, JSON.stringify(bootCfg, null, 2));
 const targetBranchCleanupWorkflow = path.join(bootRepo, ".github", "workflows", "branch-cleanup.yml");
 fs.writeFileSync(targetBranchCleanupWorkflow, "name: branch-cleanup\non:\n  workflow_run:\n");
 dres = doctor(bootRepo);
@@ -1382,6 +1424,75 @@ ok(startResult.ok === false && (startResult.results || []).some((result) => /rel
   "release-start skips repositories with release:none instead of assuming Cocogitto");
 removeReleaseStartRepo(startCase);
 
+// ---------- release-trunk ----------
+console.log("\nrelease-trunk:");
+const releaseTrunkMod = require(RELEASE_TRUNK);
+function trunkReleaseRepo() {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-trunk-origin-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "harness-trunk-work-"));
+  execFileSync("git", ["init", "--bare", "-q"], { cwd: origin });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: work });
+  relGit(work, ["config", "user.name", "Harness Test"]);
+  relGit(work, ["config", "user.email", "harness@example.test"]);
+  relGit(work, ["remote", "add", "origin", origin]);
+  fs.writeFileSync(path.join(work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+  fs.writeFileSync(path.join(work, "README.md"), "trunk\n");
+  relGit(work, ["add", "."]);
+  relGit(work, ["commit", "-q", "-m", "feat: base"]);
+  relGit(work, ["push", "-q", "-u", "origin", "main"]);
+  return { origin, work };
+}
+function removeTrunkRepo(c) {
+  try { fs.rmSync(c.work, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(c.origin, { recursive: true, force: true }); } catch {}
+}
+function fakeCogBump(root, tag) {
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## [${tag}]\n`);
+  relGit(root, ["add", "."]);
+  relGit(root, ["commit", "-q", "-m", `chore(version): ${tag}`]);
+  relGit(root, ["tag", "-a", tag, "-m", tag]);
+}
+const trunkDeps = { runCogDryRun: () => "0.1.0", runCogBump: fakeCogBump };
+let trunkCase = trunkReleaseRepo();
+let trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === true && trunkRes.pushed === true &&
+   /v0\.1\.0/.test(relGit(trunkCase.work, ["ls-remote", "--tags", "origin", "refs/tags/v0.1.0"])) &&
+   relGit(trunkCase.origin, ["rev-parse", "refs/heads/main"]) === relGit(trunkCase.work, ["rev-parse", "HEAD"]),
+  "release-trunk: bump and atomic push land main and the tag on origin together");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work, dryRun: true }, trunkDeps);
+ok(trunkRes.ok === true && trunkRes.pushed === false && trunkRes.tag === "v0.1.0" &&
+   relGit(trunkCase.work, ["tag", "-l", "v0.1.0"]) === "",
+  "release-trunk: dry run reports the next version without bumping");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+const trunkPreHead = relGit(trunkCase.work, ["rev-parse", "HEAD"]);
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, {
+  ...trunkDeps,
+  pushAtomic: () => { throw new Error("simulated push outage"); },
+});
+ok(trunkRes.ok === false && trunkRes.rolledBack === true &&
+   relGit(trunkCase.work, ["rev-parse", "HEAD"]) === trunkPreHead &&
+   relGit(trunkCase.work, ["tag", "-l", "v0.1.0"]) === "" &&
+   relGit(trunkCase.work, ["ls-remote", "--tags", "origin", "refs/tags/v0.1.0"]) === "",
+  "release-trunk: failed push rolls back the version commit and the tag");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+fs.writeFileSync(path.join(trunkCase.work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "pr" } }));
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === false && (trunkRes.results || []).some((r) => /trunk release requires branchLifecycle\.mode/.test(r.msg)),
+  "release-trunk: pr mode is refused and pointed at the release PR flow");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+fs.writeFileSync(path.join(trunkCase.work, "README.md"), "ahead\n");
+relGit(trunkCase.work, ["add", "."]);
+relGit(trunkCase.work, ["commit", "-q", "-m", "feat: unpushed"]);
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === false && (trunkRes.results || []).some((r) => /must exactly match origin\/main/.test(r.msg)),
+  "release-trunk: out-of-sync main is refused before any bump");
+removeTrunkRepo(trunkCase);
+
 // ---------- release-preflight ----------
 console.log("\nrelease-preflight:");
 function relGit(root, args) {
@@ -1579,6 +1690,32 @@ rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
 ok(rpre.ok === true && rpre.mode === "release-tip" &&
    (rpre.results || []).some((r) => /exact release merge/.test(r.msg)),
 "release-preflight: exact two-parent release merge -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+function trunkPreflightRepo() {
+  const c = releaseRepo("0.10.1");
+  fs.writeFileSync(path.join(c.work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+  relGit(c.work, ["add", "harness.config.json"]);
+  relGit(c.work, ["commit", "-q", "-m", "chore: trunk mode"]);
+  relGit(c.work, ["tag", "-d", "v0.10.1"]);
+  relGit(c.work, ["tag", "-a", "v0.10.1", "-m", "v0.10.1"]);
+  relGit(c.work, ["update-ref", "refs/remotes/origin/main", relGit(c.work, ["rev-parse", "HEAD"])]);
+  return c;
+}
+relCase = trunkPreflightRepo();
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === true && (rpre.results || []).some((r) => /tagged trunk release tip/.test(r.msg)),
+  "release-preflight: trunk mode accepts the tag at the origin/main tip");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = trunkPreflightRepo();
+{
+  const tree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
+  const laterMain = relGit(relCase.work, ["commit-tree", tree, "-p", relGit(relCase.work, ["rev-parse", "HEAD"]), "-m", "Commit after trunk release"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", laterMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === false && (rpre.results || []).some((r) => /must point at the origin\/main tip/.test(r.msg)),
+  "release-preflight: trunk mode rejects a tag behind the origin/main tip");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 
 relCase = releaseRepo("0.10.1");
@@ -2100,6 +2237,14 @@ stopOut = hookOutput(STOP, { stop_hook_active: true }, { HARNESS_PROJECT_DIR: st
 ok(stopOut.trim() === "", "stop reminder assertion 6");
 try { fs.rmSync(stopRepo, { recursive: true, force: true }); } catch {}
 taskState.clearBaseline(stopRepo);
+const stopTrunk = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-trunk-"));
+execFileSync("git", ["init", "-q"], { cwd: stopTrunk });
+fs.writeFileSync(path.join(stopTrunk, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+fs.writeFileSync(path.join(stopTrunk, "wip.txt"), "x");
+stopOut = hookOutput(STOP, {}, { HARNESS_PROJECT_DIR: stopTrunk });
+ok(/trunk mode: committing on main is allowed/.test(stopOut) && !/COMMIT on a feature branch/.test(stopOut),
+  "stop reminder: trunk mode drops the feature-branch commit wording");
+try { fs.rmSync(stopTrunk, { recursive: true, force: true }); } catch {}
 const stopRepo2 = fs.mkdtempSync(path.join(os.tmpdir(), "harness-stop-explained-"));
 execFileSync("git", ["init", "-q"], { cwd: stopRepo2 });
 fs.mkdirSync(path.join(stopRepo2, "hooks"), { recursive: true });

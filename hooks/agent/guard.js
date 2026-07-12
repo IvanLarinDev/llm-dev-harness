@@ -30,6 +30,7 @@ const { execSync } = require("child_process");
 const { parse } = require(path.join(__dirname, "_input.js"));
 const { loadConfig, isUiPath, normRel, isProtectedPath, isProtectedShellWrite,
   isLintConfigShellWrite, isLintConfigPath, interpreterProtectedHint } = require(path.join(__dirname, "..", "_lib.js"));
+const { isTrunk } = require(path.join(__dirname, "..", "workflow-mode.js"));
 
 const TTL_MS = 2 * 60 * 60 * 1000;
 const SEEN_MAX = 200;
@@ -289,8 +290,8 @@ function run(ctx, env = process.env) {
         writeState(p, st);
       }
 
-      // 4) early notes about protected branches
-      if (checkEnabled("main-note", env)) {
+      // 4) early notes about protected branches (silent in trunk mode)
+      if (checkEnabled("main-note", env) && !isTrunk(projectDir)) {
         const branch = currentBranch(projectDir);
         if (["main", "master"].includes(branch) && new RegExp(`\\b${GIT}\\s+(commit|merge)\\b`).test(scrubbed))
           notes.push(`guard: git commit/merge on ${branch} will be rejected by pre-commit. Switch to a feature branch; releases use HARNESS_ALLOW_MAIN=1.`);
@@ -365,7 +366,7 @@ function run(ctx, env = process.env) {
           notes.push(`guard: GUI file edit (${rel}). Classify the DESIGN evidence as existing-ui, new-ui, or animation, ` +
             `then create >=${cfg.mockups.min} matching variants plus APPROVED (node hooks/new-mockups.js <feature> --kind ...). ` +
             `Backend-only diffs outside ui.globs skip automatically. The hard gate is design-gate.js in pre-push/CI.`);
-        if (checkEnabled("main-note", env)) {
+        if (checkEnabled("main-note", env) && !isTrunk(projectDir)) {
           const branch = currentBranch(projectDir);
           if (["main", "master"].includes(branch))
             notes.push(`guard: editing files on ${branch}. Create a feature branch first: git checkout -b feat/...`);

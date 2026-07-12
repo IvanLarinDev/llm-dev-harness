@@ -16,11 +16,13 @@
 //     --allow-remote-tag  allow the tag to already exist on origin
 //     --require-tag-in-base require the tag commit to be an ancestor of --base
 //     --require-release-tip require --base to be the exact merge commit for the tagged release PR
+//                           (trunk mode: require the tag to point at the --base tip instead)
 
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { loadReleaseConfig, includesAutoManifest } = require("./release-config.js");
+const { isTrunk } = require("./workflow-mode.js");
 
 const SKIP_DIRS = new Set([".git", "node_modules", "target", "bin", "obj", "dist", "build", ".venv", "venv", "__pycache__", ".next"]);
 const MAX_DEPTH = 6;
@@ -197,7 +199,15 @@ function checkGitState(a, res) {
         fail(res, `cannot verify tag ancestry in ${a.base}: local tag is missing`);
       } else if (gitOk(a.root, ["merge-base", "--is-ancestor", tagRef, a.base])) {
         pass(res, `tag ${a.tag} is included in ${a.base}`);
-        if (a.requireReleaseTip) {
+        if (a.requireReleaseTip && isTrunk(a.root)) {
+          const tagCommit = gitOut(a.root, ["rev-parse", tagRef]);
+          const baseCommit = gitOut(a.root, ["rev-parse", a.base]);
+          if (baseCommit === tagCommit) {
+            pass(res, `${a.base} is the tagged trunk release tip for ${a.tag}`);
+          } else {
+            fail(res, `trunk release tag ${a.tag} must point at the ${a.base} tip`, { tag: tagCommit, base: baseCommit });
+          }
+        } else if (a.requireReleaseTip) {
           const tagCommit = gitOut(a.root, ["rev-parse", tagRef]);
           const baseCommit = gitOut(a.root, ["rev-parse", a.base]);
           const parents = gitOut(a.root, ["show", "-s", "--format=%P", baseCommit]).split(/\s+/).filter(Boolean);

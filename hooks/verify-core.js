@@ -138,15 +138,15 @@ function testGroupsForFiles(files) {
   if (normalized.includes("hooks/test.js")) return [...HARNESS_TEST_GROUPS];
   const groups = new Set(["hygiene"]);
   const any = (...patterns) => normalized.some((file) => patterns.some((pattern) => pattern.test(file)));
-  if (any(/^\.github\//, /^(?:lefthook\.yml|cog\.toml|\.gitleaks\.toml|harness\.config\.json|\.gitattributes)$/)) groups.add("configs");
-  if (any(/^hooks\/agent\//, /^hooks\/(?:_lib|branch-guard|no-coauthor)\.js$/)) groups.add("guard");
+  if (any(/^\.github\//, /^(?:lefthook\.yml|cog\.toml|\.gitleaks\.toml|harness\.config\.json|\.gitattributes)$/, /^hooks\/workflow-mode\.js$/)) groups.add("configs");
+  if (any(/^hooks\/agent\//, /^hooks\/(?:_lib|branch-guard|no-coauthor|workflow-mode)\.js$/)) groups.add("guard");
   if (any(/^hooks\/(?:design-gate|new-mockups)\.js$/, /^design\//)) groups.add("design-gate");
   if (any(/^hooks\/verify(?:-core)?\.js$/)) groups.add("verify");
   if (any(/^hooks\/doctor\.js$/)) groups.add("doctor");
   if (any(/^hooks\/(?:release-.*|github-branch-cleanup|post-merge-cleanup)\.js$/, /^scripts\/papercuts-release\.js$/, /^\.github\/workflows\/release\.yml$/)) groups.add("release");
   if (any(/^hooks\/(?:repo-state-audit|branch-state)\.js$/)) groups.add("topology");
   if (any(/^hooks\/task(?:-state)?\.js$/)) groups.add("task");
-  if (any(/^hooks\/agent\/stop-reminder\.js$/)) groups.add("stop-reminder");
+  if (any(/^hooks\/agent\/stop-reminder\.js$/, /^hooks\/workflow-mode\.js$/)) groups.add("stop-reminder");
   if (any(/^install\.(?:js|cmd|sh)$/, /^templates\//, /^settings\.example\.json$/)) groups.add("installer");
   return HARNESS_TEST_GROUPS.filter((group) => groups.has(group));
 }

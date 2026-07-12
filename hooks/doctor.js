@@ -449,6 +449,10 @@ if (fs.existsSync(cfgPath)) {
           fail(`harness.config.json: branchLifecycle.${field} must be a non-empty string array`);
         }
       }
+      if (lifecycle.mode !== undefined && !["pr", "trunk"].includes(lifecycle.mode))
+        fail(`harness.config.json: branchLifecycle.mode must be "pr" or "trunk", got ${JSON.stringify(lifecycle.mode)}`);
+      else if (lifecycle.mode === "trunk")
+        ok("branch workflow mode: trunk (commits on main allowed; relax the server PR gate via apply-ruleset.js)");
     }
     if (releaseProvider === "cocogitto") {
       const release = cfg.release || {};
