@@ -1,6 +1,14 @@
 # Changelog
 
 - - -
+## [v0.7.1](https://github.com/IvanLarinDev/llm-dev-harness/compare/a7da49ff59c36254a35ee6b30e196d49f5006d08..v0.7.1) - 2026-07-12
+#### Bug Fixes
+- (**harness**) isolate self-tests from hook git context - ([aac487c](https://github.com/IvanLarinDev/llm-dev-harness/commit/aac487cfc6d0c7d65d277720749304a01258afe9)) - agidevway
+- (**harness**) close task and installer false greens - ([2372095](https://github.com/IvanLarinDev/llm-dev-harness/commit/237209516b3b22612a02ed35ab7887ea2c5c7d58)) - agidevway
+- (**harness**) harden task runtime and verification gates - ([125c2b3](https://github.com/IvanLarinDev/llm-dev-harness/commit/125c2b3e4a1bd37fd4fbe6eb2092ad37c42320ec)) - agidevway
+
+- - -
+
 ## [v0.7.0](https://github.com/IvanLarinDev/llm-dev-harness/compare/bac64cfcdca273d657b942f47bbc4284a78276fd..v0.7.0) - 2026-07-11
 #### Features
 - (**harness**) add task health reports - ([562b0a7](https://github.com/IvanLarinDev/llm-dev-harness/commit/562b0a7cddd26c5ce84413b3ac18f5068e6156df)) - agidevway
