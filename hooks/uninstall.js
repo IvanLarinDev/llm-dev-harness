@@ -125,15 +125,36 @@ function cleanGitignore(target, dryRun) {
   return { status: removed ? (dryRun ? "plan" : "cleaned") : "already", removed };
 }
 
+// Git hooks written by lefthook are identified by content, not by trusting the
+// binary: on a machine without lefthook the uninstall must still complete.
+function lefthookHookFiles(target) {
+  const dir = path.join(target, ".git", "hooks");
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const name of names) {
+    const file = path.join(dir, name);
+    try {
+      if (!fs.lstatSync(file).isFile()) continue;
+      if (/lefthook/i.test(fs.readFileSync(file, "utf8"))) out.push(file);
+    } catch {}
+  }
+  return out;
+}
+
 function uninstallLefthook(target, dryRun, keep) {
   if (keep) return { status: "kept" };
+  if (!lefthookHookFiles(target).length) return { status: "already", reason: "no lefthook-managed git hooks found" };
   if (dryRun) return { status: "plan" };
-  const inside = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: target, encoding: "utf8" });
-  if (inside.status !== 0) return { status: "skipped", reason: "target is not a git repository" };
-  const run = spawnSync("lefthook", ["uninstall"], { cwd: target, encoding: "utf8", shell: true });
-  return run.status === 0
-    ? { status: "removed" }
-    : { status: "pending", reason: String(run.stderr || run.stdout || run.error && run.error.message || `exit ${run.status}`).trim() };
+  spawnSync("lefthook", ["uninstall"], { cwd: target, encoding: "utf8", shell: true });
+  const leftover = lefthookHookFiles(target);
+  if (!leftover.length) return { status: "removed" };
+  const failed = [];
+  for (const file of leftover) {
+    try { fs.rmSync(file, { force: true }); } catch (e) { failed.push(`${path.basename(file)}: ${e.message}`); }
+  }
+  if (!failed.length) return { status: "removed", reason: "lefthook binary unavailable; managed hook files removed directly" };
+  return { status: "pending", reason: failed.join("; ") };
 }
 
 function removeManaged(target, rel, expectedHash, removeModified, dryRun) {

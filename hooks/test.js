@@ -2516,6 +2516,20 @@ ok(completedUninstall.ok === true && !fs.existsSync(uninstallGuard) &&
    !fs.existsSync(path.join(utmp, ".harness", "installation.json")) &&
    preservedProjectFiles.every((rel) => fs.existsSync(path.join(utmp, rel))),
   "uninstall: explicit modified-runtime removal completes and still preserves project-owned files");
+const lhtmp = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-lefthook-"));
+fs.mkdirSync(path.join(lhtmp, ".git", "hooks"), { recursive: true });
+fs.writeFileSync(path.join(lhtmp, ".git", "hooks", "pre-commit"), "#!/bin/sh\n# lefthook managed hook\nlefthook run pre-commit\n");
+fs.mkdirSync(path.join(lhtmp, ".harness"), { recursive: true });
+fs.writeFileSync(path.join(lhtmp, ".harness", "installation.json"),
+  JSON.stringify({ schemaVersion: 1, managed: {}, ownership: { projectOwned: [] } }));
+const emptyPathDir = fs.mkdtempSync(path.join(os.tmpdir(), "harness-empty-path-"));
+const lhRun = spawnSync(process.execPath, [path.join(REPO, "hooks", "uninstall.js"), "--target", lhtmp, "--json"],
+  { cwd: lhtmp, encoding: "utf8", env: { ...process.env, PATH: emptyPathDir, Path: emptyPathDir } });
+const lhOut = (() => { try { return JSON.parse(String(lhRun.stdout || "{}")); } catch { return {}; } })();
+ok(lhOut.ok === true && lhOut.lefthook && lhOut.lefthook.status === "removed" &&
+   !fs.existsSync(path.join(lhtmp, ".git", "hooks", "pre-commit")),
+  "uninstall: missing lefthook binary still removes managed git hooks directly");
+try { fs.rmSync(lhtmp, { recursive: true, force: true }); fs.rmSync(emptyPathDir, { recursive: true, force: true }); } catch {}
 
 const unsafeUninstall = fs.mkdtempSync(path.join(os.tmpdir(), "harness-uninstall-unsafe-"));
 fs.mkdirSync(path.join(unsafeUninstall, ".harness"), { recursive: true });
