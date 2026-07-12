@@ -120,6 +120,7 @@ const NEW_MOCKUPS = path.join(__dirname, "new-mockups.js");
 const VERIFY = path.join(__dirname, "verify.js");
 const APPLY_RULESET = path.join(__dirname, "apply-ruleset.js");
 const RELEASE_START = path.join(__dirname, "release-start.js");
+const RELEASE_TRUNK = path.join(__dirname, "release-trunk.js");
 const RELEASE_MANIFEST_BUMP = path.join(__dirname, "release-manifest-bump.js");
 const RELEASE_PREFLIGHT = path.join(__dirname, "release-preflight.js");
 const RELEASE_ARTIFACTS = path.join(__dirname, "release-artifacts.js");
@@ -1423,6 +1424,75 @@ ok(startResult.ok === false && (startResult.results || []).some((result) => /rel
   "release-start skips repositories with release:none instead of assuming Cocogitto");
 removeReleaseStartRepo(startCase);
 
+// ---------- release-trunk ----------
+console.log("\nrelease-trunk:");
+const releaseTrunkMod = require(RELEASE_TRUNK);
+function trunkReleaseRepo() {
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), "harness-trunk-origin-"));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "harness-trunk-work-"));
+  execFileSync("git", ["init", "--bare", "-q"], { cwd: origin });
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: work });
+  relGit(work, ["config", "user.name", "Harness Test"]);
+  relGit(work, ["config", "user.email", "harness@example.test"]);
+  relGit(work, ["remote", "add", "origin", origin]);
+  fs.writeFileSync(path.join(work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+  fs.writeFileSync(path.join(work, "README.md"), "trunk\n");
+  relGit(work, ["add", "."]);
+  relGit(work, ["commit", "-q", "-m", "feat: base"]);
+  relGit(work, ["push", "-q", "-u", "origin", "main"]);
+  return { origin, work };
+}
+function removeTrunkRepo(c) {
+  try { fs.rmSync(c.work, { recursive: true, force: true }); } catch {}
+  try { fs.rmSync(c.origin, { recursive: true, force: true }); } catch {}
+}
+function fakeCogBump(root, tag) {
+  fs.writeFileSync(path.join(root, "CHANGELOG.md"), `# Changelog\n\n## [${tag}]\n`);
+  relGit(root, ["add", "."]);
+  relGit(root, ["commit", "-q", "-m", `chore(version): ${tag}`]);
+  relGit(root, ["tag", "-a", tag, "-m", tag]);
+}
+const trunkDeps = { runCogDryRun: () => "0.1.0", runCogBump: fakeCogBump };
+let trunkCase = trunkReleaseRepo();
+let trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === true && trunkRes.pushed === true &&
+   /v0\.1\.0/.test(relGit(trunkCase.work, ["ls-remote", "--tags", "origin", "refs/tags/v0.1.0"])) &&
+   relGit(trunkCase.origin, ["rev-parse", "refs/heads/main"]) === relGit(trunkCase.work, ["rev-parse", "HEAD"]),
+  "release-trunk: bump and atomic push land main and the tag on origin together");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work, dryRun: true }, trunkDeps);
+ok(trunkRes.ok === true && trunkRes.pushed === false && trunkRes.tag === "v0.1.0" &&
+   relGit(trunkCase.work, ["tag", "-l", "v0.1.0"]) === "",
+  "release-trunk: dry run reports the next version without bumping");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+const trunkPreHead = relGit(trunkCase.work, ["rev-parse", "HEAD"]);
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, {
+  ...trunkDeps,
+  pushAtomic: () => { throw new Error("simulated push outage"); },
+});
+ok(trunkRes.ok === false && trunkRes.rolledBack === true &&
+   relGit(trunkCase.work, ["rev-parse", "HEAD"]) === trunkPreHead &&
+   relGit(trunkCase.work, ["tag", "-l", "v0.1.0"]) === "" &&
+   relGit(trunkCase.work, ["ls-remote", "--tags", "origin", "refs/tags/v0.1.0"]) === "",
+  "release-trunk: failed push rolls back the version commit and the tag");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+fs.writeFileSync(path.join(trunkCase.work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "pr" } }));
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === false && (trunkRes.results || []).some((r) => /trunk release requires branchLifecycle\.mode/.test(r.msg)),
+  "release-trunk: pr mode is refused and pointed at the release PR flow");
+removeTrunkRepo(trunkCase);
+trunkCase = trunkReleaseRepo();
+fs.writeFileSync(path.join(trunkCase.work, "README.md"), "ahead\n");
+relGit(trunkCase.work, ["add", "."]);
+relGit(trunkCase.work, ["commit", "-q", "-m", "feat: unpushed"]);
+trunkRes = releaseTrunkMod.run({ root: trunkCase.work }, trunkDeps);
+ok(trunkRes.ok === false && (trunkRes.results || []).some((r) => /must exactly match origin\/main/.test(r.msg)),
+  "release-trunk: out-of-sync main is refused before any bump");
+removeTrunkRepo(trunkCase);
+
 // ---------- release-preflight ----------
 console.log("\nrelease-preflight:");
 function relGit(root, args) {
@@ -1620,6 +1690,32 @@ rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
 ok(rpre.ok === true && rpre.mode === "release-tip" &&
    (rpre.results || []).some((r) => /exact release merge/.test(r.msg)),
 "release-preflight: exact two-parent release merge -> PASS");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+
+function trunkPreflightRepo() {
+  const c = releaseRepo("0.10.1");
+  fs.writeFileSync(path.join(c.work, "harness.config.json"), JSON.stringify({ branchLifecycle: { mode: "trunk" } }));
+  relGit(c.work, ["add", "harness.config.json"]);
+  relGit(c.work, ["commit", "-q", "-m", "chore: trunk mode"]);
+  relGit(c.work, ["tag", "-d", "v0.10.1"]);
+  relGit(c.work, ["tag", "-a", "v0.10.1", "-m", "v0.10.1"]);
+  relGit(c.work, ["update-ref", "refs/remotes/origin/main", relGit(c.work, ["rev-parse", "HEAD"])]);
+  return c;
+}
+relCase = trunkPreflightRepo();
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === true && (rpre.results || []).some((r) => /tagged trunk release tip/.test(r.msg)),
+  "release-preflight: trunk mode accepts the tag at the origin/main tip");
+fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
+relCase = trunkPreflightRepo();
+{
+  const tree = relGit(relCase.work, ["rev-parse", "HEAD^{tree}"]);
+  const laterMain = relGit(relCase.work, ["commit-tree", tree, "-p", relGit(relCase.work, ["rev-parse", "HEAD"]), "-m", "Commit after trunk release"]);
+  relGit(relCase.work, ["update-ref", "refs/remotes/origin/main", laterMain]);
+}
+rpre = releaseJson(relCase.work, "v0.10.1", ["--require-release-tip"]);
+ok(rpre.ok === false && (rpre.results || []).some((r) => /must point at the origin\/main tip/.test(r.msg)),
+  "release-preflight: trunk mode rejects a tag behind the origin/main tip");
 fs.rmSync(relCase.work, { recursive: true, force: true }); fs.rmSync(relCase.origin, { recursive: true, force: true });
 
 relCase = releaseRepo("0.10.1");
